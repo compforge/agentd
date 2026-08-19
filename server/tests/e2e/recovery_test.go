@@ -258,18 +258,31 @@ func createSQLiteE2ESession(
 	ctx context.Context,
 	client anthropic.Client,
 ) (*anthropic.BetaManagedAgentsAgent, *anthropic.BetaEnvironment, *anthropic.BetaManagedAgentsSession) {
+	return createSQLiteE2EConfiguredSession(
+		t, ctx, client, "sqlite-e2e", anthropic.BetaManagedAgentsModelClaudeSonnet4_6, "",
+	)
+}
+
+func createSQLiteE2EConfiguredSession(
+	t *testing.T,
+	ctx context.Context,
+	client anthropic.Client,
+	name string,
+	modelID anthropic.BetaManagedAgentsModel,
+	system string,
+) (*anthropic.BetaManagedAgentsAgent, *anthropic.BetaEnvironment, *anthropic.BetaManagedAgentsSession) {
 	t.Helper()
 	agent, err := client.Beta.Agents.New(ctx, anthropic.BetaAgentNewParams{
-		Name: "sqlite-e2e", Model: anthropic.BetaManagedAgentsModelConfigParams{
-			ID: anthropic.BetaManagedAgentsModelClaudeSonnet4_6,
-		},
+		Name: name, Model: anthropic.BetaManagedAgentsModelConfigParams{
+			ID: modelID,
+		}, System: param.NewOpt(system),
 	})
 	if err != nil {
 		t.Fatalf("create agent through official SDK: %v", err)
 	}
 	unrestricted := anthropic.NewBetaUnrestrictedNetworkParam()
 	environment, err := client.Beta.Environments.New(ctx, anthropic.BetaEnvironmentNewParams{
-		Name: "sqlite-e2e", Config: anthropic.BetaEnvironmentNewParamsConfigUnion{
+		Name: name, Config: anthropic.BetaEnvironmentNewParamsConfigUnion{
 			OfCloud: &anthropic.BetaCloudConfigParams{
 				Networking: anthropic.BetaCloudConfigParamsNetworkingUnion{OfUnrestricted: &unrestricted},
 			},

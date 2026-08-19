@@ -47,9 +47,19 @@ make test-e2e
 make build
 ```
 
-`make test-e2e` explicitly enables the `tests/e2e` suite. Its default recovery case runs the Claude
-SDK against a real Hertz server and SQLite-backed Control State, Harness State, and Ledger stores,
-then replaces the application mid-turn. It needs no external services.
+`make test-e2e` explicitly enables the `tests/e2e` suite. The local cases run the Claude SDK against
+a real Hertz server and SQLite-backed Control State, Harness State, and Ledger stores. They cover
+process replacement plus successful and interrupted model streams through a deterministic local
+Anthropic API server, so they need no external services. See [`server/tests/e2e`](server/tests/e2e).
+
+An opt-in real-model check uses the same SQLite-backed server path without requiring MySQL or Hostel:
+
+```bash
+export ANTHROPIC_API_KEY='your-key'
+export ANTHROPIC_BASE_URL='https://your-anthropic-compatible-endpoint'
+export AGENTD_TEST_MODEL='your-model-id'
+make test-model-integration
+```
 
 The opt-in live integration check still requires a disposable MySQL database, a running Hostel server,
 and an Anthropic model:
