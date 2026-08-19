@@ -1,0 +1,44 @@
+# agentd
+
+`agentd` is a managed agent server built with [AgentGo](https://github.com/compforge/agentgo),
+[Hostel](https://github.com/qiankunli/hostel), and
+[Agent Ledger](https://github.com/compforge/agent-ledger).
+
+It exposes the core Claude Managed Agents resources—Agent, Environment, Session, and Event—while
+running the agent harness and sandbox on infrastructure you control. The API transport uses Hertz.
+
+## Core capabilities
+
+- reusable, versioned agent definitions;
+- a pluggable Sandbox Engine, with one isolated Hostel Bed for each session in the first adapter;
+- asynchronous session input with persisted event history and SSE output;
+- durable AgentGo transcripts and write-before-execute model/tool records through Agent Ledger;
+- recovery of an AgentGo session after the `agentd` process is replaced.
+
+## Quick start
+
+```bash
+export ANTHROPIC_API_KEY=your-key
+export AGENTD_HOSTEL_URL=http://127.0.0.1:8080
+make run
+```
+
+The first version binds to `127.0.0.1:8081` and is intended for a single agentd process. Multi-replica
+ownership, durable wake-up, and fencing are part of the kernel evolution, not claimed by this version.
+
+The API uses the Claude Managed Agents beta paths and accepts
+`anthropic-beta: managed-agents-2026-04-01`. See
+[`server/docs/managed-agents.md`](server/docs/managed-agents.md) for the supported surface and
+architecture.
+
+The stable product boundary and freeze/resume model are defined in
+[`server/docs/kernel.md`](server/docs/kernel.md).
+
+## Development
+
+```bash
+make fix
+make lint
+make test
+make build
+```
