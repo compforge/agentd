@@ -7,8 +7,8 @@ import (
 
 	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/server/internal/app"
-	"github.com/compforge/agentd/server/internal/harnessstate"
-	"github.com/compforge/agentd/server/internal/ledgerstore"
+	harnessstate "github.com/compforge/agentd/server/internal/harness/state"
+	ledgerstore "github.com/compforge/agentd/server/internal/ledger/store"
 	"github.com/compforge/agentd/server/internal/store"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"

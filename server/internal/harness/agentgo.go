@@ -10,7 +10,7 @@ import (
 	agentledger "github.com/compforge/agent-ledger/go"
 	agentgoadapter "github.com/compforge/agent-ledger/go/adapters/agentgo"
 	"github.com/compforge/agentd/server/internal/app"
-	"github.com/compforge/agentd/server/internal/harnessstate"
+	harnessstate "github.com/compforge/agentd/server/internal/harness/state"
 	"github.com/compforge/agentd/server/internal/sandbox"
 	"github.com/compforge/agentgo"
 	"github.com/compforge/agentgo/llm"

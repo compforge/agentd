@@ -20,8 +20,9 @@ server/
 │   ├── api/                  # Claude 兼容 Hertz HTTP/SSE 协议适配
 │   ├── app/                  # 资源生命周期与 Session Run Controller
 │   ├── harness/              # Harness adapter；AgentGo 是首个实现
-│   ├── harnessstate/         # Harness-specific opaque state 与 GORM Store
-│   ├── ledgerstore/          # Agent Ledger EventStore 的 GORM 实现
+│   │   └── state/            # Harness-specific opaque state 与 GORM Store
+│   ├── ledger/
+│   │   └── store/            # Agent Ledger EventStore 的 GORM 实现
 │   ├── persistence/          # MySQL/GORM Provider 与依赖组装
 │   ├── sandbox/              # Sandbox Engine 契约与 Harness 工具适配
 │   ├── hostel/               # Hostel Sandbox Engine 实现

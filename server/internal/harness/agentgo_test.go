@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compforge/agentd/server/internal/harnessstate"
+	harnessstate "github.com/compforge/agentd/server/internal/harness/state"
 	"github.com/compforge/agentgo"
 )
 

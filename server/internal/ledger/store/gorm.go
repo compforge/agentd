@@ -1,4 +1,4 @@
-package ledgerstore
+package store
 
 import (
 	"context"

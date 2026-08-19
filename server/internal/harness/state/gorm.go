@@ -1,4 +1,4 @@
-package harnessstate
+package state
 
 import (
 	"context"
