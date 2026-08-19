@@ -2,22 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
-	boltstore "github.com/compforge/agent-ledger/go/stores/bolt"
 	"github.com/compforge/agentd/server/internal/api"
 	"github.com/compforge/agentd/server/internal/app"
 	"github.com/compforge/agentd/server/internal/harness"
 	"github.com/compforge/agentd/server/internal/hostel"
-	"github.com/compforge/agentd/server/internal/store"
+	"github.com/compforge/agentd/server/internal/persistence"
 )
 
 func main() {
@@ -33,20 +33,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(config.dataDir, 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-
-	resources, err := store.Open(filepath.Join(config.dataDir, "resources.db"), config.storageTimeout)
+	storage, err := persistence.OpenMySQL(context.Background(), persistence.Config{
+		MySQLDSN:         config.mysqlDSN,
+		OperationTimeout: config.storageTimeout, MaxOpenConns: config.mysqlMaxOpenConns,
+		MaxIdleConns: config.mysqlMaxIdleConns, ConnMaxLifetime: config.mysqlConnMaxLifetime,
+	})
 	if err != nil {
 		return err
 	}
-	defer resources.Close()
-	ledger, err := boltstore.Open(filepath.Join(config.dataDir, "ledger.db"), config.storageTimeout)
-	if err != nil {
-		return err
-	}
-	defer ledger.Close()
+	defer storage.Close()
 
 	sandboxEngine, err := hostel.NewEngine(hostel.EngineConfig{
 		URL: config.hostelURL, Command: config.hostelCommand,
@@ -64,12 +59,12 @@ func run(logger *slog.Logger) error {
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: os.Getenv("ANTHROPIC_API_KEY"), BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
 		RequestTimeout: config.modelRequestTimeout, OperationTimeout: config.ledgerOperationTimeout,
-		ToolTimeout: config.toolTimeout, Ledger: ledger, Sandbox: sandboxEngine,
+		ToolTimeout: config.toolTimeout, Ledger: storage.Ledger, State: storage.HarnessStates, Sandbox: sandboxEngine,
 	})
 	if err != nil {
 		return err
 	}
-	application := app.New(resources, app.NewEventLog(ledger), agentHarness)
+	application := app.New(storage.Resources, app.NewEventLog(storage.Ledger), agentHarness)
 	if err := application.Recover(processCtx); err != nil {
 		return fmt.Errorf("recover sessions: %w", err)
 	}
@@ -87,7 +82,8 @@ func run(logger *slog.Logger) error {
 	api.New(application, logger).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("agentd listening", "address", config.address, "sandbox_engine", sandboxEngine.Name(), "harness", agentHarness.Name())
+		logger.Info("agentd listening", "address", config.address, "storage_provider", "mysql",
+			"sandbox_engine", sandboxEngine.Name(), "harness", agentHarness.Name())
 		serveErr <- httpServer.Run()
 	}()
 
@@ -117,7 +113,10 @@ func run(logger *slog.Logger) error {
 
 type config struct {
 	address                string
-	dataDir                string
+	mysqlDSN               string
+	mysqlMaxOpenConns      int
+	mysqlMaxIdleConns      int
+	mysqlConnMaxLifetime   time.Duration
 	hostelURL              string
 	hostelCommand          string
 	storageTimeout         time.Duration
@@ -133,11 +132,24 @@ type config struct {
 
 func loadConfig() (config, error) {
 	value := config{
-		address:        envOr("AGENTD_ADDRESS", "127.0.0.1:8081"),
-		dataDir:        envOr("AGENTD_DATA_DIR", "./data"),
-		hostelURL:      envOr("AGENTD_HOSTEL_URL", "http://127.0.0.1:8080"),
-		hostelCommand:  os.Getenv("AGENTD_HOSTEL_COMMAND"),
-		storageTimeout: 5 * time.Second,
+		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8081"),
+		mysqlDSN:             os.Getenv("AGENTD_MYSQL_DSN"),
+		mysqlMaxOpenConns:    32,
+		mysqlMaxIdleConns:    8,
+		mysqlConnMaxLifetime: 30 * time.Minute,
+		hostelURL:            envOr("AGENTD_HOSTEL_URL", "http://127.0.0.1:8080"),
+		hostelCommand:        os.Getenv("AGENTD_HOSTEL_COMMAND"),
+		storageTimeout:       5 * time.Second,
+	}
+	var err error
+	if value.mysqlMaxOpenConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_OPEN_CONNS", value.mysqlMaxOpenConns); err != nil {
+		return config{}, err
+	}
+	if value.mysqlMaxIdleConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_IDLE_CONNS", value.mysqlMaxIdleConns); err != nil {
+		return config{}, err
+	}
+	if value.mysqlMaxIdleConns > value.mysqlMaxOpenConns {
+		return config{}, errors.New("AGENTD_MYSQL_MAX_IDLE_CONNS must not exceed AGENTD_MYSQL_MAX_OPEN_CONNS")
 	}
 	durations := []struct {
 		name        string
@@ -152,6 +164,8 @@ func loadConfig() (config, error) {
 		{"AGENTD_HTTP_READ_TIMEOUT", 30 * time.Second, &value.readTimeout},
 		{"AGENTD_HTTP_IDLE_TIMEOUT", 2 * time.Minute, &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", 15 * time.Second, &value.shutdownTimeout},
+		{"AGENTD_STORAGE_OPERATION_TIMEOUT", 5 * time.Second, &value.storageTimeout},
+		{"AGENTD_MYSQL_CONN_MAX_LIFETIME", 30 * time.Minute, &value.mysqlConnMaxLifetime},
 	}
 	for _, item := range durations {
 		parsed, err := durationEnv(item.name, item.fallback)
@@ -159,6 +173,18 @@ func loadConfig() (config, error) {
 			return config{}, err
 		}
 		*item.destination = parsed
+	}
+	return value, nil
+}
+
+func positiveIntEnv(name string, fallback int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
 	}
 	return value, nil
 }

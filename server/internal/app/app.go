@@ -128,13 +128,20 @@ func (a *App) CreateSession(ctx context.Context, agentID string, version int64, 
 		EnvironmentID: environmentID,
 		Title:         title,
 		Metadata:      metadata,
-		Status:        "idle",
+		Control: ControlState{
+			Status: "idle", Harness: a.harness.Name(), HarnessVersion: a.harness.Version(),
+		},
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
 	if session.Metadata == nil {
 		session.Metadata = map[string]string{}
 	}
+	resumeRef, err := a.harness.PrepareSession(ctx, session)
+	if err != nil {
+		return Session{}, fmt.Errorf("prepare session harness state: %w", err)
+	}
+	session.Control.ResumeRef = resumeRef
 	if err := a.repository.PutSession(ctx, session); err != nil {
 		return Session{}, fmt.Errorf("create session: %w", err)
 	}
@@ -167,8 +174,7 @@ func (a *App) SendEvents(ctx context.Context, sessionID string, incoming []Incom
 				return nil, err
 			}
 			accepted = append(accepted, event)
-			session.Status = "running"
-			session.UpdatedAt = time.Now().UTC()
+			transition(&session, "running")
 			if err := a.repository.PutSession(ctx, session); err != nil {
 				return nil, err
 			}
@@ -230,17 +236,15 @@ func (a *App) Recover(ctx context.Context) error {
 			return err
 		}
 		if len(pending) == 0 {
-			if session.Status == "running" || session.Status == "rescheduling" {
-				session.Status = "idle"
-				session.UpdatedAt = time.Now().UTC()
+			if session.Control.Status == "running" || session.Control.Status == "rescheduling" {
+				transition(&session, "idle")
 				if err := a.repository.PutSession(ctx, session); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		session.Status = "rescheduling"
-		session.UpdatedAt = time.Now().UTC()
+		transition(&session, "rescheduling")
 		if err := a.repository.PutSession(ctx, session); err != nil {
 			return err
 		}
@@ -315,8 +319,7 @@ func (a *App) process(sessionID string, input ManagedEvent) {
 	if err != nil {
 		return
 	}
-	session.Status = "running"
-	session.UpdatedAt = time.Now().UTC()
+	transition(&session, "running")
 	_ = a.repository.PutSession(ctx, session)
 	_ = a.events.Append(ctx, sessionID, NewManagedEvent("session.status_running", nil))
 
@@ -334,9 +337,14 @@ func (a *App) process(sessionID string, input ManagedEvent) {
 		stopReason = map[string]any{"type": "retries_exhausted"}
 	}
 	_ = a.events.Append(ctx, sessionID, NewManagedEvent("session.status_idle", map[string]any{"stop_reason": stopReason}))
-	session.Status = "idle"
-	session.UpdatedAt = time.Now().UTC()
+	transition(&session, "idle")
 	_ = a.repository.PutSession(ctx, session)
+}
+
+func transition(session *Session, status string) {
+	session.Control.Status = status
+	session.Control.Revision++
+	session.UpdatedAt = time.Now().UTC()
 }
 
 func textContent(event ManagedEvent) string {

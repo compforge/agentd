@@ -27,7 +27,11 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session.Status = "running"
+	if session.Control.Status != "idle" || session.Control.Harness != "recording" ||
+		session.Control.HarnessVersion != "test" || session.Control.ResumeRef != "recording/"+session.ID {
+		t.Fatalf("control state = %#v", session.Control)
+	}
+	session.Control.Status = "running"
 	if err := repository.PutSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +72,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		if pendingErr != nil {
 			t.Fatal(pendingErr)
 		}
-		if current.Status == "idle" && len(pending) == 0 {
+		if current.Control.Status == "idle" && len(pending) == 0 {
 			recovered.mu.Lock()
 			activeWorkers := len(recovered.workers)
 			recovered.mu.Unlock()
@@ -77,7 +81,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("recovery did not settle: status=%s pending=%d", current.Status, len(pending))
+			t.Fatalf("recovery did not settle: status=%s pending=%d", current.Control.Status, len(pending))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -88,6 +92,12 @@ type recordingHarness struct {
 }
 
 func (recordingHarness) Name() string { return "recording" }
+
+func (recordingHarness) Version() string { return "test" }
+
+func (recordingHarness) PrepareSession(_ context.Context, session Session) (string, error) {
+	return "recording/" + session.ID, nil
+}
 
 func (h recordingHarness) Run(_ context.Context, _ Session, input string, emit func(ManagedEvent) error) error {
 	if h.inputs != nil {
