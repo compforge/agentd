@@ -27,6 +27,7 @@ server/
 │   ├── sandbox/              # Sandbox Engine 契约与 Harness 工具适配
 │   ├── hostel/               # Hostel Sandbox Engine 实现
 │   └── store/                # Control State Repository 的 GORM 实现
+├── tests/e2e/                 # 显式 e2e build tag；SQLite 恢复契约与 live 组件联调
 └── docs/
     ├── kernel.md             # 稳定定位、核心模型、API 与组件主流程
     └── state-ledger.md       # 持久化、恢复、审计与轨迹边界

@@ -229,6 +229,11 @@ func (a *App) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 	return a.events.Subscribe(sessionID)
 }
 
+// Recover resumes durable inputs left by a replaced agentd process.
+//
+// +spec=`A persisted user input survives process replacement and is completed exactly once before the session accepts later input`
+// +case:id=recover_committed_input,desc=`replace agentd after the harness commits an input but before it emits output`,input=`send one user message, stop the first process, recover, then send a second message`,expect=`one output per input; session returns to idle; harness revision advances once per input`,forbid=`duplicate user input, duplicate harness state, or duplicate agent output`
+// +link=server/docs/state-ledger.md
 func (a *App) Recover(ctx context.Context) error {
 	sessions, err := a.repository.ListSessions(ctx)
 	if err != nil {

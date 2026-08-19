@@ -43,11 +43,16 @@ boundaries are defined in [`server/docs/state-ledger.md`](server/docs/state-ledg
 make fix
 make lint
 make test
+make test-e2e
 make build
 ```
 
-The opt-in end-to-end check requires a disposable MySQL database, a running Hostel server, and an
-Anthropic model:
+`make test-e2e` explicitly enables the `tests/e2e` suite. Its default recovery case runs the Claude
+SDK against a real Hertz server and SQLite-backed Control State, Harness State, and Ledger stores,
+then replaces the application mid-turn. It needs no external services.
+
+The opt-in live integration check still requires a disposable MySQL database, a running Hostel server,
+and an Anthropic model:
 
 ```bash
 export AGENTD_TEST_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd_test'
