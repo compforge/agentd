@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -129,10 +130,10 @@ func (a *App) CreateSession(ctx context.Context, agentID string, version int64, 
 		Title:         title,
 		Metadata:      metadata,
 		Control: ControlState{
-			Status: "idle", Harness: a.harness.Name(), HarnessVersion: a.harness.Version(),
+			Status: "idle", Harness: a.harness.Name(), HarnessVersion: a.harness.Version(), ResumeRevision: -1,
 		},
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if session.Metadata == nil {
 		session.Metadata = map[string]string{}
@@ -163,6 +164,9 @@ func (a *App) SendEvents(ctx context.Context, sessionID string, incoming []Incom
 	}
 	if err := validateIncoming(incoming); err != nil {
 		return nil, err
+	}
+	if session.Control.Status == "terminated" {
+		return nil, fmt.Errorf("%w: session %s is terminated", ErrConflict, sessionID)
 	}
 	accepted := make([]ManagedEvent, 0, len(incoming))
 	for _, item := range incoming {
@@ -231,6 +235,9 @@ func (a *App) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, session := range sessions {
+		if session.Control.Status == "terminated" {
+			continue
+		}
 		pending, err := a.events.UnprocessedUserMessages(ctx, session.ID)
 		if err != nil {
 			return err
@@ -293,7 +300,9 @@ func (a *App) runWorker(sessionID string, worker *workerState) {
 			return
 		}
 		if len(pending) > 0 {
-			a.process(sessionID, pending[0])
+			if !a.process(sessionID, pending[0]) {
+				return
+			}
 			continue
 		}
 
@@ -313,32 +322,80 @@ func (a *App) runWorker(sessionID string, worker *workerState) {
 	}
 }
 
-func (a *App) process(sessionID string, input ManagedEvent) {
+func (a *App) process(sessionID string, input ManagedEvent) bool {
 	ctx := a.ctx
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
-		return
+		return false
 	}
 	transition(&session, "running")
-	_ = a.repository.PutSession(ctx, session)
-	_ = a.events.Append(ctx, sessionID, NewManagedEvent("session.status_running", nil))
-
-	runErr := a.harness.Run(ctx, session, textContent(input), func(event ManagedEvent) error {
-		return a.events.Append(ctx, sessionID, event)
-	})
+	if err := a.repository.PutSession(ctx, session); err != nil {
+		return false
+	}
 	inputID, _ := input["id"].(string)
-	_ = a.events.MarkProcessed(ctx, sessionID, inputID)
+	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_running", nil)); err != nil {
+		return false
+	}
+
+	var outputErr error
+	var outputMu sync.Mutex
+	result, runErr := a.harness.Run(ctx, session, TurnInput{ID: inputID, Text: textContent(input)}, func(event ManagedEvent) error {
+		err := a.events.Append(ctx, sessionID, event)
+		outputMu.Lock()
+		if outputErr == nil {
+			outputErr = err
+		}
+		outputMu.Unlock()
+		return err
+	})
+	outputMu.Lock()
+	persistErr := outputErr
+	outputMu.Unlock()
+	if persistErr != nil {
+		transition(&session, "rescheduling")
+		_ = a.repository.PutSession(ctx, session)
+		return false
+	}
+	session.Control.ResumeRevision = result.ResumeRevision
+	if errors.Is(runErr, ErrUnsafeRecovery) {
+		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
+			"error": map[string]any{"type": "unsafe_recovery", "message": runErr.Error()},
+		})); err != nil {
+			return false
+		}
+		transition(&session, "terminated")
+		if err := a.repository.PutSession(ctx, session); err != nil {
+			return false
+		}
+		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_terminated", nil)); err != nil {
+			return false
+		}
+		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
+			return false
+		}
+		return true
+	}
 
 	stopReason := map[string]any{"type": "end_turn"}
 	if runErr != nil {
-		_ = a.events.Append(ctx, sessionID, NewManagedEvent("session.error", map[string]any{
+		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "runtime_error", "message": runErr.Error()},
-		}))
+		})); err != nil {
+			return false
+		}
 		stopReason = map[string]any{"type": "retries_exhausted"}
 	}
-	_ = a.events.Append(ctx, sessionID, NewManagedEvent("session.status_idle", map[string]any{"stop_reason": stopReason}))
+	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_idle", map[string]any{"stop_reason": stopReason})); err != nil {
+		return false
+	}
+	if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
+		return false
+	}
 	transition(&session, "idle")
-	_ = a.repository.PutSession(ctx, session)
+	if err := a.repository.PutSession(ctx, session); err != nil {
+		return false
+	}
+	return true
 }
 
 func transition(session *Session, status string) {

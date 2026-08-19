@@ -179,10 +179,16 @@ func (fakeHarness) PrepareSession(_ context.Context, session app.Session) (strin
 	return "fake/" + session.ID, nil
 }
 
-func (fakeHarness) Run(_ context.Context, _ app.Session, input string, emit func(app.ManagedEvent) error) error {
-	return emit(app.NewManagedEvent("agent.message", map[string]any{
-		"content": []map[string]any{{"type": "text", "text": "echo: " + input}},
+func (fakeHarness) Run(
+	_ context.Context,
+	_ app.Session,
+	input app.TurnInput,
+	emit func(app.ManagedEvent) error,
+) (app.TurnResult, error) {
+	err := emit(app.NewTurnEvent(input.ID, "agent.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "echo: " + input.Text}},
 	}))
+	return app.TurnResult{}, err
 }
 
 func (fakeHarness) Interrupt(string) {}

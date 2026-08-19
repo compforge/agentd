@@ -1,4 +1,4 @@
-.PHONY: fix lint test build run
+.PHONY: fix lint test test-integration build run
 
 fix:
 	cd server && gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -8,6 +8,9 @@ lint:
 
 test:
 	cd server && go test ./...
+
+test-integration:
+	cd server && AGENTD_REQUIRE_INTEGRATION=1 go test ./internal/integration -run TestManagedAgentMySQLHostelRoundTripAndRestart -count=1 -v
 
 build:
 	cd server && go build ./cmd/agentd

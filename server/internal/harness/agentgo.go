@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -59,9 +60,31 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session app.Session)
 	return r.Name() + "/" + session.ID, nil
 }
 
-func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input string, emit func(app.ManagedEvent) error) error {
+func (r *AgentGoRunner) Run(
+	ctx context.Context,
+	session app.Session,
+	input app.TurnInput,
+	emit func(app.ManagedEvent) error,
+) (app.TurnResult, error) {
+	if input.ID == "" {
+		return app.TurnResult{}, fmt.Errorf("run AgentGo session: input ID is required")
+	}
+	messages, revision, err := r.loadMessages(ctx, session.Control.ResumeRef)
+	if err != nil {
+		return app.TurnResult{ResumeRevision: revision}, fmt.Errorf("restore AgentGo session: %w", err)
+	}
+	if err := projectAssistantMessages(session.Control.ResumeRef, messages, input.ID, emit); err != nil {
+		return app.TurnResult{ResumeRevision: revision}, fmt.Errorf("project restored AgentGo messages: %w", err)
+	}
+	action, err := r.resumeAction(ctx, session.ID, messages, input.ID)
+	if err != nil {
+		return app.TurnResult{ResumeRevision: revision}, err
+	}
+	if action == resumeCompleted {
+		return app.TurnResult{ResumeRevision: revision}, nil
+	}
 	if r.config.APIKey == "" {
-		return fmt.Errorf("run AgentGo session: ANTHROPIC_API_KEY is not configured")
+		return app.TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: ANTHROPIC_API_KEY is not configured")
 	}
 	runID := "run_" + agentledger.NewID()
 	actor := agentledger.Actor{Type: "agent", ID: session.Agent.ID, Framework: "agentgo"}
@@ -69,7 +92,10 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 		Store: r.config.Ledger, SessionID: session.ID, RunID: runID, Actor: actor,
 	})
 	if _, err := recorder.StartRun(ctx, map[string]any{"agent_version": session.Agent.Version}); err != nil {
-		return fmt.Errorf("record AgentGo run start: %w", err)
+		return app.TurnResult{ResumeRevision: revision}, fmt.Errorf("record AgentGo run start: %w", err)
+	}
+	finish := func(runErr error) (app.TurnResult, error) {
+		return app.TurnResult{ResumeRevision: revision}, r.finishRun(ctx, session.ID, runID, actor, runErr)
 	}
 
 	adapter, err := agentgoadapter.New(ctx, agentgoadapter.Config{
@@ -81,11 +107,7 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 		OperationTimeout: r.config.OperationTimeout,
 	})
 	if err != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("create AgentGo ledger adapter: %w", err))
-	}
-	messages, revision, err := r.loadMessages(ctx, session.Control.ResumeRef)
-	if err != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("restore AgentGo session: %w", err))
+		return finish(fmt.Errorf("create AgentGo ledger adapter: %w", err))
 	}
 	modelOptions := []llm.ModelOption{
 		llm.WithAPIKey(r.config.APIKey),
@@ -96,7 +118,7 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 	}
 	model, err := llm.NewModel("anthropic", session.Agent.ModelID, modelOptions...)
 	if err != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("create AgentGo model: %w", err))
+		return finish(fmt.Errorf("create AgentGo model: %w", err))
 	}
 
 	options := []agentgo.AgentOption{
@@ -113,20 +135,26 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 	options = append(options, agentgo.WithMessageCommitter(r.messageCommitter(session.Control.ResumeRef, &revision)))
 	agent := agentgo.NewAgent(options...)
 	if err := agent.SetMessages(messages); err != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("restore AgentGo session: %w", err))
+		return finish(fmt.Errorf("restore AgentGo session: %w", err))
 	}
 
 	var emitErr error
+	var emitMu sync.Mutex
 	agent.Subscribe(func(event agentgo.Event) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
 		if emitErr != nil || event.Type != agentgo.EventMessageEnd || event.Message == nil {
 			return
 		}
 		if event.Message.GetRole() != agentgo.RoleAssistant {
 			return
 		}
-		emitErr = emit(app.NewManagedEvent("agent.message", map[string]any{
-			"content": []map[string]any{{"type": "text", "text": event.Message.TextContent()}},
-		}))
+		managed, err := managedAssistantEvent(session.Control.ResumeRef, event.Message)
+		if err != nil {
+			emitErr = err
+			return
+		}
+		emitErr = emit(managed)
 	})
 	r.mu.Lock()
 	r.active[session.ID] = agent
@@ -137,20 +165,71 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 		r.mu.Unlock()
 	}()
 
-	if err := agent.Prompt(ctx, input); err != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("prompt AgentGo session: %w", err))
+	if action == resumePrompt {
+		message := agentgo.UserMsg(input.Text)
+		message.Metadata = map[string]any{agentdInputID: input.ID}
+		err = agent.PromptMessages(ctx, message)
+	} else {
+		err = agent.Continue(ctx)
+	}
+	if err != nil {
+		return finish(fmt.Errorf("start AgentGo session: %w", err))
 	}
 	agent.WaitForIdle()
-	if emitErr != nil {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("persist managed agent event: %w", emitErr))
+	emitMu.Lock()
+	persistErr := emitErr
+	emitMu.Unlock()
+	if persistErr != nil {
+		return finish(fmt.Errorf("persist managed agent event: %w", persistErr))
 	}
 	if stateErr := agent.State().Error; stateErr != "" {
-		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("AgentGo state: %s", stateErr))
+		return finish(fmt.Errorf("AgentGo state: %s", stateErr))
 	}
-	return r.finishRun(ctx, session.ID, runID, actor, nil)
+	return finish(nil)
 }
 
 const agentGoMessageFormat = "application/vnd.compforge.agentgo.message+json;version=1"
+const agentdInputID = "agentd.input_id"
+
+type resumeAction int
+
+const (
+	resumePrompt resumeAction = iota
+	resumeContinue
+	resumeCompleted
+)
+
+func (r *AgentGoRunner) resumeAction(
+	ctx context.Context,
+	sessionID string,
+	messages []agentgo.AgentMessage,
+	inputID string,
+) (resumeAction, error) {
+	if inputIndex(messages, inputID) < 0 {
+		return resumePrompt, nil
+	}
+	unresolved, err := unresolvedToolAttempts(ctx, r.config.Ledger, sessionID)
+	if err != nil {
+		return resumePrompt, fmt.Errorf("inspect AgentGo recovery attempts: %w", err)
+	}
+	if len(unresolved) > 0 {
+		return resumePrompt, fmt.Errorf("%w: %d tool attempt(s) have no durable outcome", app.ErrUnsafeRecovery, len(unresolved))
+	}
+	if len(messages) == 0 {
+		return resumePrompt, fmt.Errorf("%w: committed input is missing from AgentGo state", app.ErrUnsafeRecovery)
+	}
+	last := messages[len(messages)-1]
+	if last.GetRole() == agentgo.RoleAssistant {
+		if last.HasToolCalls() {
+			return resumePrompt, fmt.Errorf("%w: AgentGo stopped after committing tool calls without durable results", app.ErrUnsafeRecovery)
+		}
+		return resumeCompleted, nil
+	}
+	if last.GetRole() == agentgo.RoleUser || last.GetRole() == agentgo.RoleTool {
+		return resumeContinue, nil
+	}
+	return resumePrompt, fmt.Errorf("%w: AgentGo cannot continue from role %q", app.ErrUnsafeRecovery, last.GetRole())
+}
 
 func (r *AgentGoRunner) loadMessages(ctx context.Context, resumeRef string) ([]agentgo.AgentMessage, int64, error) {
 	records, err := r.config.State.Load(ctx, resumeRef)
@@ -202,6 +281,90 @@ func encodeAgentGoMessage(message agentgo.AgentMessage) (json.RawMessage, error)
 	default:
 		return nil, fmt.Errorf("unsupported custom AgentGo message %T", message)
 	}
+}
+
+func inputIndex(messages []agentgo.AgentMessage, inputID string) int {
+	for index := len(messages) - 1; index >= 0; index-- {
+		item := messages[index]
+		var metadata map[string]any
+		switch message := item.(type) {
+		case agentgo.Message:
+			metadata = message.Metadata
+		case *agentgo.Message:
+			metadata = message.Metadata
+		}
+		if storedID, _ := metadata[agentdInputID].(string); storedID == inputID {
+			return index
+		}
+	}
+	return -1
+}
+
+func unresolvedToolAttempts(
+	ctx context.Context,
+	store agentledger.EventStore,
+	sessionID string,
+) ([]string, error) {
+	pending := make(map[string]struct{})
+	for event, err := range store.ScanSession(ctx, sessionID, "") {
+		if err != nil {
+			return nil, err
+		}
+		switch event.EventType {
+		case "tool.requested":
+			if event.AttemptID != "" {
+				pending[event.AttemptID] = struct{}{}
+			}
+		case "tool.completed", "tool.failed":
+			delete(pending, event.AttemptID)
+		}
+	}
+	result := make([]string, 0, len(pending))
+	for attemptID := range pending {
+		result = append(result, attemptID)
+	}
+	return result, nil
+}
+
+func projectAssistantMessages(
+	resumeRef string,
+	messages []agentgo.AgentMessage,
+	inputID string,
+	emit func(app.ManagedEvent) error,
+) error {
+	index := inputIndex(messages, inputID)
+	if index < 0 {
+		return nil
+	}
+	for _, message := range messages[index+1:] {
+		if message.GetRole() != agentgo.RoleAssistant {
+			continue
+		}
+		managed, err := managedAssistantEvent(resumeRef, message)
+		if err != nil {
+			return err
+		}
+		if err := emit(managed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func managedAssistantEvent(resumeRef string, message agentgo.AgentMessage) (app.ManagedEvent, error) {
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return nil, fmt.Errorf("encode assistant event identity: %w", err)
+	}
+	digest := sha256.Sum256(append([]byte(resumeRef+"\x00"), encoded...))
+	event := app.NewManagedEvent("agent.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": message.TextContent()}},
+	})
+	event["id"] = fmt.Sprintf("event_%x", digest[:12])
+	if timestamp := message.GetTimestamp(); !timestamp.IsZero() {
+		event["processed_at"] = timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	return event, nil
 }
 
 func (r *AgentGoRunner) Interrupt(sessionID string) {

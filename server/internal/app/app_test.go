@@ -2,12 +2,74 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
 )
+
+func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
+	events := NewEventLog(agentledger.NewMemoryEventStore())
+	event := NewTurnEvent("input-1", "agent.message", map[string]any{"content": "done"})
+	if err := events.Append(context.Background(), "session-1", event); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Append(context.Background(), "session-1", event); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := events.List(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("stored events = %d, want 1", len(stored))
+	}
+}
+
+func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
+	ctx := context.Background()
+	repository := newMemoryRepository()
+	events := NewEventLog(agentledger.NewMemoryEventStore())
+	application := New(repository, events, unsafeHarness{})
+	agent, err := application.CreateAgent(ctx, Agent{Name: "test", ModelID: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := application.CreateEnvironment(ctx, Environment{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := application.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "resume"}},
+	})
+	input["processed_at"] = nil
+	if err := events.Append(ctx, session.ID, input); err != nil {
+		t.Fatal(err)
+	}
+	if !application.process(session.ID, input) {
+		t.Fatal("unsafe recovery did not reach a durable terminal state")
+	}
+	current, err := repository.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Control.Status != "terminated" || current.Control.ResumeRevision != 3 {
+		t.Fatalf("control state = %#v", current.Control)
+	}
+	pending, err := events.UnprocessedUserMessages(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending inputs = %d, want 0", len(pending))
+	}
+}
 
 func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	t.Parallel()
@@ -28,7 +90,8 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if session.Control.Status != "idle" || session.Control.Harness != "recording" ||
-		session.Control.HarnessVersion != "test" || session.Control.ResumeRef != "recording/"+session.ID {
+		session.Control.HarnessVersion != "test" || session.Control.ResumeRef != "recording/"+session.ID ||
+		session.Control.ResumeRevision != -1 {
 		t.Fatalf("control state = %#v", session.Control)
 	}
 	session.Control.Status = "running"
@@ -43,7 +106,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	harness := recordingHarness{inputs: make(chan string, 1)}
+	harness := recordingHarness{inputs: make(chan TurnInput, 1)}
 	recovered := New(repository, events, harness)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -55,8 +118,8 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	}
 	select {
 	case value := <-harness.inputs:
-		if value != "resume me" {
-			t.Fatalf("harness input = %q", value)
+		if value.ID != input["id"] || value.Text != "resume me" {
+			t.Fatalf("harness input = %#v", value)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for recovered message")
@@ -72,7 +135,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		if pendingErr != nil {
 			t.Fatal(pendingErr)
 		}
-		if current.Control.Status == "idle" && len(pending) == 0 {
+		if current.Control.Status == "idle" && current.Control.ResumeRevision == 7 && len(pending) == 0 {
 			recovered.mu.Lock()
 			activeWorkers := len(recovered.workers)
 			recovered.mu.Unlock()
@@ -81,14 +144,19 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("recovery did not settle: status=%s pending=%d", current.Control.Status, len(pending))
+			t.Fatalf(
+				"recovery did not settle: status=%s resume_revision=%d pending=%d",
+				current.Control.Status,
+				current.Control.ResumeRevision,
+				len(pending),
+			)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 type recordingHarness struct {
-	inputs chan string
+	inputs chan TurnInput
 }
 
 func (recordingHarness) Name() string { return "recording" }
@@ -99,16 +167,42 @@ func (recordingHarness) PrepareSession(_ context.Context, session Session) (stri
 	return "recording/" + session.ID, nil
 }
 
-func (h recordingHarness) Run(_ context.Context, _ Session, input string, emit func(ManagedEvent) error) error {
+func (h recordingHarness) Run(
+	_ context.Context,
+	_ Session,
+	input TurnInput,
+	emit func(ManagedEvent) error,
+) (TurnResult, error) {
 	if h.inputs != nil {
 		h.inputs <- input
 	}
-	return emit(NewManagedEvent("agent.message", map[string]any{
+	err := emit(NewTurnEvent(input.ID, "agent.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "done"}},
 	}))
+	return TurnResult{ResumeRevision: 7}, err
 }
 
 func (recordingHarness) Interrupt(string) {}
+
+type unsafeHarness struct{}
+
+func (unsafeHarness) Name() string    { return "unsafe" }
+func (unsafeHarness) Version() string { return "test" }
+
+func (unsafeHarness) PrepareSession(_ context.Context, session Session) (string, error) {
+	return "unsafe/" + session.ID, nil
+}
+
+func (unsafeHarness) Run(
+	context.Context,
+	Session,
+	TurnInput,
+	func(ManagedEvent) error,
+) (TurnResult, error) {
+	return TurnResult{ResumeRevision: 3}, fmt.Errorf("%w: pending tool call", ErrUnsafeRecovery)
+}
+
+func (unsafeHarness) Interrupt(string) {}
 
 type memoryRepository struct {
 	mu           sync.Mutex
