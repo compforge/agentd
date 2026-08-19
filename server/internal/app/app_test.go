@@ -52,8 +52,15 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	if err := events.Append(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}
-	if !application.process(session.ID, input) {
-		t.Fatal("unsafe recovery did not reach a durable terminal state")
+	queued := NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "do not run"}},
+	})
+	queued["processed_at"] = nil
+	if err := events.Append(ctx, session.ID, queued); err != nil {
+		t.Fatal(err)
+	}
+	if application.process(session.ID, input) {
+		t.Fatal("unsafe recovery allowed the worker to continue")
 	}
 	current, err := repository.GetSession(ctx, session.ID)
 	if err != nil {
@@ -66,8 +73,8 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 0 {
-		t.Fatalf("pending inputs = %d, want 0", len(pending))
+	if len(pending) != 1 || pending[0]["id"] != queued["id"] {
+		t.Fatalf("pending inputs = %#v, want only queued input", pending)
 	}
 }
 

@@ -373,7 +373,9 @@ func (a *App) process(sessionID string, input ManagedEvent) bool {
 		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
 			return false
 		}
-		return true
+		// Termination applies to the whole session. Leave later inputs pending for
+		// manual reconciliation instead of letting this worker revive the session.
+		return false
 	}
 
 	stopReason := map[string]any{"type": "end_turn"}
