@@ -437,7 +437,7 @@ func sessionResponse(value app.Session) map[string]any {
 	delete(agent, "archived_at")
 	return map[string]any{
 		"id": value.ID, "type": "session", "agent": agent, "environment_id": value.EnvironmentID,
-		"title": value.Title, "metadata": value.Metadata, "status": value.Status,
+		"title": value.Title, "metadata": value.Metadata, "status": value.Control.Status,
 		"created_at": value.CreatedAt, "updated_at": value.UpdatedAt, "archived_at": nil,
 		"budget": nil, "outcome_evaluations": []any{}, "resources": []any{}, "vault_ids": []any{},
 		"deployment_id": nil,

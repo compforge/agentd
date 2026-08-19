@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	agentledger "github.com/compforge/agent-ledger/go"
 	agentgoadapter "github.com/compforge/agent-ledger/go/adapters/agentgo"
 	"github.com/compforge/agentd/server/internal/app"
+	"github.com/compforge/agentd/server/internal/harnessstate"
 	"github.com/compforge/agentd/server/internal/sandbox"
 	"github.com/compforge/agentgo"
 	"github.com/compforge/agentgo/llm"
@@ -21,6 +23,7 @@ type AgentGoRunnerConfig struct {
 	OperationTimeout time.Duration
 	ToolTimeout      time.Duration
 	Ledger           agentledger.EventStore
+	State            harnessstate.Store
 	Sandbox          sandbox.Engine
 }
 
@@ -35,14 +38,25 @@ func NewAgentGoRunner(config AgentGoRunnerConfig) (*AgentGoRunner, error) {
 	if config.RequestTimeout <= 0 || config.OperationTimeout <= 0 || config.ToolTimeout <= 0 {
 		return nil, fmt.Errorf("create AgentGo runner: request, operation, and tool timeouts must be positive")
 	}
-	if config.Ledger == nil || config.Sandbox == nil {
-		return nil, fmt.Errorf("create AgentGo runner: ledger and sandbox engine are required")
+	if config.Ledger == nil || config.State == nil || config.Sandbox == nil {
+		return nil, fmt.Errorf("create AgentGo runner: ledger, harness state, and sandbox engine are required")
 	}
 	return &AgentGoRunner{config: config, active: make(map[string]*agentgo.Agent)}, nil
 }
 
 func (r *AgentGoRunner) Name() string {
 	return "agentgo"
+}
+
+func (r *AgentGoRunner) Version() string {
+	return "0.0.1"
+}
+
+func (r *AgentGoRunner) PrepareSession(ctx context.Context, session app.Session) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return r.Name() + "/" + session.ID, nil
 }
 
 func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input string, emit func(app.ManagedEvent) error) error {
@@ -69,6 +83,10 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 	if err != nil {
 		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("create AgentGo ledger adapter: %w", err))
 	}
+	messages, revision, err := r.loadMessages(ctx, session.Control.ResumeRef)
+	if err != nil {
+		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("restore AgentGo session: %w", err))
+	}
 	modelOptions := []llm.ModelOption{
 		llm.WithAPIKey(r.config.APIKey),
 		llm.WithRequestTimeout(r.config.RequestTimeout),
@@ -89,11 +107,12 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 	if agentUsesToolset(session.Agent) {
 		options = append(options, agentgo.WithTools(sandbox.NewAgentGoToolset(r.config.Sandbox, session.ID, r.config.ToolTimeout)...))
 	}
-	// Ledger options install the final message committer and middleware so no
-	// competing host hook can accidentally weaken write-before-execute.
+	// The ledger adapter still owns strict model/tool audit hooks. The final
+	// committer is intentionally replaced so recovery state has its own store.
 	options = append(options, adapter.Options()...)
+	options = append(options, agentgo.WithMessageCommitter(r.messageCommitter(session.Control.ResumeRef, &revision)))
 	agent := agentgo.NewAgent(options...)
-	if err := adapter.Restore(ctx, agent); err != nil {
+	if err := agent.SetMessages(messages); err != nil {
 		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("restore AgentGo session: %w", err))
 	}
 
@@ -129,6 +148,60 @@ func (r *AgentGoRunner) Run(ctx context.Context, session app.Session, input stri
 		return r.finishRun(ctx, session.ID, runID, actor, fmt.Errorf("AgentGo state: %s", stateErr))
 	}
 	return r.finishRun(ctx, session.ID, runID, actor, nil)
+}
+
+const agentGoMessageFormat = "application/vnd.compforge.agentgo.message+json;version=1"
+
+func (r *AgentGoRunner) loadMessages(ctx context.Context, resumeRef string) ([]agentgo.AgentMessage, int64, error) {
+	records, err := r.config.State.Load(ctx, resumeRef)
+	if err != nil {
+		return nil, -1, err
+	}
+	messages := make([]agentgo.AgentMessage, 0, len(records))
+	revision := int64(-1)
+	for _, record := range records {
+		if record.Format != agentGoMessageFormat {
+			return nil, revision, fmt.Errorf("unsupported AgentGo state format %q", record.Format)
+		}
+		var message agentgo.Message
+		if err := json.Unmarshal(record.Data, &message); err != nil {
+			return nil, revision, fmt.Errorf("decode AgentGo state revision %d: %w", record.Revision, err)
+		}
+		messages = append(messages, message)
+		revision = record.Revision
+	}
+	return messages, revision, nil
+}
+
+func (r *AgentGoRunner) messageCommitter(resumeRef string, revision *int64) func(agentgo.AgentMessage) error {
+	var mu sync.Mutex
+	return func(message agentgo.AgentMessage) error {
+		data, err := encodeAgentGoMessage(message)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), r.config.OperationTimeout)
+		defer cancel()
+		record, err := r.config.State.Append(ctx, resumeRef, *revision, agentGoMessageFormat, data)
+		if err != nil {
+			return fmt.Errorf("persist AgentGo message: %w", err)
+		}
+		*revision = record.Revision
+		return nil
+	}
+}
+
+func encodeAgentGoMessage(message agentgo.AgentMessage) (json.RawMessage, error) {
+	switch value := message.(type) {
+	case agentgo.Message:
+		return json.Marshal(value)
+	case *agentgo.Message:
+		return json.Marshal(value)
+	default:
+		return nil, fmt.Errorf("unsupported custom AgentGo message %T", message)
+	}
 }
 
 func (r *AgentGoRunner) Interrupt(sessionID string) {

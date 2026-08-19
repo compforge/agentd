@@ -41,9 +41,17 @@ type Session struct {
 	EnvironmentID string            `json:"environment_id"`
 	Title         string            `json:"title"`
 	Metadata      map[string]string `json:"metadata"`
-	Status        string            `json:"status"`
+	Control       ControlState      `json:"control"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
+}
+
+type ControlState struct {
+	Status         string `json:"status"`
+	Revision       int64  `json:"revision"`
+	Harness        string `json:"harness"`
+	HarnessVersion string `json:"harness_version"`
+	ResumeRef      string `json:"resume_ref"`
 }
 
 type IncomingEvent struct {
@@ -69,6 +77,8 @@ type Repository interface {
 // another agent loop without leaking framework types into the control plane.
 type Harness interface {
 	Name() string
+	Version() string
+	PrepareSession(context.Context, Session) (string, error)
 	Run(context.Context, Session, string, func(ManagedEvent) error) error
 	Interrupt(string)
 }

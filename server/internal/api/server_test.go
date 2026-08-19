@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,11 +22,7 @@ import (
 func TestClaudeManagedAgentsSDKContract(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	resources, err := store.Open(filepath.Join(t.TempDir(), "resources.db"), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = resources.Close() })
+	resources := store.NewMemory()
 	application := app.New(resources, app.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{})
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -177,6 +172,12 @@ func TestClaudeManagedAgentsSDKContract(t *testing.T) {
 type fakeHarness struct{}
 
 func (fakeHarness) Name() string { return "fake" }
+
+func (fakeHarness) Version() string { return "test" }
+
+func (fakeHarness) PrepareSession(_ context.Context, session app.Session) (string, error) {
+	return "fake/" + session.ID, nil
+}
 
 func (fakeHarness) Run(_ context.Context, _ app.Session, input string, emit func(app.ManagedEvent) error) error {
 	return emit(app.NewManagedEvent("agent.message", map[string]any{

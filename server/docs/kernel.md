@@ -35,8 +35,8 @@ Claude-compatible API
   业务编排提供，不进入 agentd 内核。
 - **Sandbox Engine** 提供隔离的文件、进程和资源生命周期。Hostel 是首个实现，也可以接入
   其它本地或远端引擎。
-- **Agent Ledger** 记录不可变的执行事实和副作用边界。它帮助恢复、审计和追踪，但不替
-  agentd 做调度决策。
+- **Agent Ledger** 记录不可变的执行事实和副作用边界。它帮助恢复判断、审计和追踪，但不保存
+  Harness State，也不替 agentd 做调度决策。
 
 agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程模型。
 
@@ -51,61 +51,39 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 Session 是产品身份，Run 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
 计算资源。
 
-## 冻结与恢复
+## 服务主流程
 
-```text
-Event durable
-    │
-    ▼
-  wake ──► acquire ownership ──► restore ──► run
-                                            │
-                 waiting / idle / interrupted
-                                            │
-                                            ▼
-                    checkpoint ──► release resources
-```
+1. 应用创建可版本化的 Agent 和 Environment，再创建锁定两者具体版本的 Session；
+2. 用户 Event 持久化后才确认接收，Session Controller 决定是否唤醒对应 Session；
+3. Controller 取得执行所有权，通过 Harness Adapter 创建或恢复短命 runtime；
+4. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
+5. Harness 输出投影为持久化 Event，Session 完成当前输入后等待下一次唤醒；
+6. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收。
 
-当 Agent 询问用户而用户没有及时回复时，Session 应进入等待态：
+Session Controller 拥有期望状态和执行时机，Harness Adapter 拥有模型循环和原生会话语义，
+Sandbox Engine 拥有隔离资源生命周期。三类组件都可以替换，Session 身份不绑定任何一个运行中实例。
 
-1. 先持久化已完成的 Agent 上下文、控制位置和副作用边界；
-2. 停止当前 Harness runtime，释放执行所有权；
-3. 让 Sandbox Engine 按能力保留、休眠、快照或释放沙箱；
-4. 用户回复先作为 Event 持久化，再唤醒 Session；
-5. 任意健康的 agentd 实例取得所有权，恢复 Harness 和 Sandbox 后继续执行。
+## Claude API 兼容边界
 
-空闲和等待中的 Session 不应长期占用 Agent goroutine 或 Worker。沙箱能释放到什么程度由
-Sandbox Engine 的能力决定，但不能改变 Session 身份和恢复语义。
+agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 核心资源，以及路径、
+主要 JSON 形状、错误 envelope、Session 状态和 `{domain}.{action}` Event 命名。兼容性由官方 SDK
+针对 agentd 的契约测试验证。
 
-## 状态与账本原则
+Agent 支持 model、system prompt 和 toolset；Environment 的 cloud 配置由当前 Sandbox Engine
+实现。MCP、Skills、Vault、Memory Store、Resource mount、Outcome、Multi-agent、Deployment 和
+Webhook 不属于当前服务边界。无法提供语义保证的能力返回明确的 `unsupported_feature`，不接收后
+静默降级。
 
-为避免把“能看到发生了什么”和“能从哪里安全继续”混为一谈，至少区分：
+兼容核心资源和行为可以复用现有客户端与 SDK；agentd 不复制尚未具备运行语义的完整产品面。
 
-- **Session / Run 控制状态**：当前状态、固定版本、待处理 Event、恢复位置、资源绑定和
-  执行所有权，供 agentd 调度与恢复。
-- **Harness 状态**：消息、上下文和 Harness 原生恢复材料，供对应 Harness adapter 重建
-  runtime。
-- **Ledger 事实**：Run、Step、模型与工具 Attempt、恢复动作和外部副作用回执，供审计并
-  支撑安全判断。
+## 持久化、恢复与审计
 
-具体存储可以复用同一个 Event Store，但三类语义不能互相替代。Trace 和日志属于观测证据，
-不能作为恢复的权威状态；外部副作用的最终真相仍来自外部系统的权威回执或对账结果。
+Control State、Harness State 和 Ledger 分别拥有调度状态、Harness 原生恢复材料和规范化执行事实。
+它们的权威来源、冻结恢复顺序、失败窗口、审计和轨迹边界统一定义在 `state-ledger.md`，Kernel 不重复
+展开。
 
-## 不变量
+## 扩展边界
 
-1. 用户输入未持久化，不确认接收，也不开始执行。
-2. Session 身份不依赖某个 agentd 进程、Harness runtime 或 Sandbox instance。
-3. 恢复前必须固定 Agent、Harness 和执行定义的版本，不能用新代码静默解释旧状态。
-4. 工具副作用先记录稳定身份再派发；结果不明确时先对账，不能自动重放。
-5. 等待态必须先形成可恢复边界，再释放所有权和资源。
-6. 多实例接管时，旧执行者不能继续提交状态或重复产生副作用。
-
-## 演进方式
-
-第一版先验证单进程链路：Claude 兼容 API、AgentGo、Hostel 和 Agent Ledger 能共同完成一次
-可持久化的 Session。后续围绕三个边界逐步演进，而不扩大内核：
-
-- Sandbox Engine 的能力、生命周期和远端协议；
-- Session、Checkpoint、Harness 状态与 Ledger 的持久化分工；
-- Harness adapter 契约以及 AgentGo 之外的实现；
-- 多副本所需的 durable wake、lease 和 fencing。
-
+agentd 通过稳定能力契约接入其它 Harness 和本地或远端 Sandbox Engine。多实例运行在同一模型上增加
+durable wake、lease 与 fencing，不改变 Session、Run 和 Event 的产品语义，也不把具体业务工作流
+引入内核。
