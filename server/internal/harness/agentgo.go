@@ -60,6 +60,12 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session app.Session)
 	return r.Name() + "/" + session.ID, nil
 }
 
+// Run executes one AgentGo turn and projects only durable assistant messages.
+//
+// +spec=`Model calls use the session's model and system prompt; only complete assistant messages become managed events, while every model attempt remains auditable`
+// +case:id=model_question_answer,desc=`answer through an Anthropic-compatible streaming model`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
+// +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
+// +link=server/docs/state-ledger.md
 func (r *AgentGoRunner) Run(
 	ctx context.Context,
 	session app.Session,
