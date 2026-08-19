@@ -39,7 +39,8 @@ server/
 2. 用户 Event 先持久化再确认接收；模型和工具调用必须通过 Agent Ledger AgentGo
    Adapter 的 write-before-execute 边界。
 3. 进程恢复由 Control State 中的 ResumeRef 定位 Harness State，并结合 Ledger 未决 Attempt
-   判断是否安全继续；有副作用的 Tool Attempt 不自动重放。
+   判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
+   转为 `terminated` 等待人工对账。
 4. AgentGo 运行在 agentd 进程，Hostel 作为可替换的独立进程运行；两者不共享
    调用栈或本地文件路径。
 5. 所有外部 HTTP、模型和存储调用显式配置超时；子进程退出和服务关闭必须收敛

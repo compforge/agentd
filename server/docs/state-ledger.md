@@ -106,6 +106,15 @@ Control State 尚未更新就崩溃，新 State 只是未引用版本，可以�
 
 Harness State 负责还原上下文，Ledger 负责证明崩溃边界；只有两者都满足条件，恢复才是安全的。
 
+AgentGo Adapter 把来源 input ID 写入原生 user message。恢复同一 input 时：尚未提交 user message 才
+执行 `Prompt`；已提交且停在 user/tool result 后则从现有上下文继续；已存在最终 assistant message
+则只补齐幂等的 API Event 投影。若 Ledger 存在无终态 Tool Attempt，或状态停在无法证明结果的
+tool-call 边界，Session 进入 `terminated`，等待人工对账，不自动重放工具。
+
+`idle` 是当前 Claude API 下的冻结等待态：Harness State 和对应 revision 已持久化，AgentGo runtime
+随本轮执行结束释放；新输入到达后才重建 runtime。Sandbox 是否保留、休眠或释放仍由 Sandbox Engine
+能力决定。
+
 ## 存储与一致性
 
 agentd 通过三个稳定接口使用持久化：Repository、Harness State Store 和 Agent Ledger
@@ -148,3 +157,4 @@ Eval、Optimizer 和能力发布系统是 Ledger 的下游消费者：它们选�
 3. Ledger 协议不依赖 Harness State schema，Trajectory 也不能要求解析 native state。
 4. 等待态必须引用已持久化且版本兼容的 Harness State，之后才能释放执行资源。
 5. 未决且可能产生副作用的 Tool Attempt 必须先对账，不能因 Harness State 已恢复就自动重放。
+6. 同一用户 input 的 Harness message 和 API Event 使用稳定身份，恢复不得重复注入 Prompt 或重复投影。

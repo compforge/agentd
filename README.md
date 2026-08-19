@@ -45,3 +45,14 @@ make lint
 make test
 make build
 ```
+
+The opt-in end-to-end check requires a disposable MySQL database, a running Hostel server, and an
+Anthropic model:
+
+```bash
+export AGENTD_TEST_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd_test'
+export AGENTD_TEST_HOSTEL_URL='http://127.0.0.1:8080'
+export AGENTD_TEST_MODEL='claude-sonnet-4-6'
+export ANTHROPIC_API_KEY='your-key'
+make test-integration
+```

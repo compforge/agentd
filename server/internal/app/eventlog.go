@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -39,6 +40,19 @@ func (l *EventLog) Append(ctx context.Context, sessionID string, event ManagedEv
 			return fmt.Errorf("load managed event stream: %w", loadErr)
 		}
 		expected = stored.StreamVersion
+		if eventID, _ := cloned["id"].(string); eventID != "" {
+			raw, ok := stored.Payload["event"]
+			if !ok {
+				continue
+			}
+			existing, mapErr := mapEvent(raw)
+			if mapErr != nil {
+				return mapErr
+			}
+			if existingID, _ := existing["id"].(string); existingID == eventID {
+				return nil
+			}
+		}
 	}
 	record := agentledger.NewEvent("managed.api_event", sessionID, "managed-control", actorFor(cloned))
 	record.Payload = map[string]any{"event": map[string]any(cloned)}
@@ -139,6 +153,16 @@ func NewManagedEvent(eventType string, fields map[string]any) ManagedEvent {
 	for key, value := range fields {
 		event[key] = value
 	}
+	return event
+}
+
+// NewTurnEvent gives replayable control events a stable identity. EventLog
+// suppresses an already persisted ID, so recovery can safely repeat projection
+// before it marks the source input processed.
+func NewTurnEvent(inputID, eventType string, fields map[string]any) ManagedEvent {
+	event := NewManagedEvent(eventType, fields)
+	digest := sha256.Sum256([]byte(inputID + "\x00" + eventType))
+	event["id"] = fmt.Sprintf("event_%x", digest[:12])
 	return event
 }
 

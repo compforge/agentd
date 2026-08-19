@@ -7,9 +7,10 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("resource not found")
-	ErrConflict    = errors.New("resource conflict")
-	ErrUnsupported = errors.New("unsupported feature")
+	ErrNotFound       = errors.New("resource not found")
+	ErrConflict       = errors.New("resource conflict")
+	ErrUnsupported    = errors.New("unsupported feature")
+	ErrUnsafeRecovery = errors.New("automatic recovery is unsafe")
 )
 
 type Agent struct {
@@ -52,6 +53,16 @@ type ControlState struct {
 	Harness        string `json:"harness"`
 	HarnessVersion string `json:"harness_version"`
 	ResumeRef      string `json:"resume_ref"`
+	ResumeRevision int64  `json:"resume_revision"`
+}
+
+type TurnInput struct {
+	ID   string
+	Text string
+}
+
+type TurnResult struct {
+	ResumeRevision int64
 }
 
 type IncomingEvent struct {
@@ -79,6 +90,6 @@ type Harness interface {
 	Name() string
 	Version() string
 	PrepareSession(context.Context, Session) (string, error)
-	Run(context.Context, Session, string, func(ManagedEvent) error) error
+	Run(context.Context, Session, TurnInput, func(ManagedEvent) error) (TurnResult, error)
 	Interrupt(string)
 }
