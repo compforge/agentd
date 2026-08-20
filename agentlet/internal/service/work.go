@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 	"github.com/compforge/agentd/internal/executionapi"
 )
 
@@ -33,10 +34,6 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 	existing, err := a.repository.GetSession(ctx, spec.Session.ID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return Session{}, err
-	}
-	if err == nil && existing.Control.AssignmentID != "" &&
-		existing.Control.AssignmentID != spec.AssignmentID && a.workerActive(spec.Session.ID) {
-		return Session{}, fmt.Errorf("%w: Session %q is active under another Assignment", ErrConflict, spec.Session.ID)
 	}
 
 	agent := Agent{
@@ -77,6 +74,16 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 		}
 		session.Control.ResumeRef = resumeRef
 	}
+	resident, _, err := a.works.Ensure(WorkSpec{
+		AssignmentID: spec.AssignmentID,
+		Session:      executionSession(session),
+	})
+	if err != nil {
+		return Session{}, translateWorkError(session.ID, err)
+	}
+	resume := resident.Snapshot().Spec.Session
+	session.Control.ResumeRef = resume.ResumeRef
+	session.Control.ResumeRevision = resume.ResumeRevision
 	if err := a.repository.PutAgent(ctx, agent); err != nil {
 		return Session{}, fmt.Errorf("cache Work Agent %q: %w", agent.ID, err)
 	}
@@ -97,7 +104,12 @@ func (a *Service) ValidateAssignment(ctx context.Context, sessionID, workerID, a
 	if session.Control.AssignmentID == "" && workerID == "" && assignmentID == "" {
 		return nil
 	}
-	if session.Control.AssignmentID != assignmentID || session.Control.WorkerID != workerID {
+	work, err := a.works.Snapshot(sessionID)
+	if err != nil {
+		return translateWorkError(sessionID, err)
+	}
+	if work.Spec.AssignmentID != assignmentID || session.Control.AssignmentID != assignmentID ||
+		session.Control.WorkerID != workerID {
 		return fmt.Errorf("%w: Session %q Assignment fence does not match", ErrConflict, sessionID)
 	}
 	return nil
@@ -108,9 +120,21 @@ func (a *Service) ExecutionState(ctx context.Context, sessionID string) (executi
 	if err != nil {
 		return executionapi.SessionState{}, err
 	}
-	return executionapi.SessionState{
+	state := executionapi.SessionState{
 		AssignmentID: session.Control.AssignmentID,
 		Status:       session.Control.Status, ResumeRef: session.Control.ResumeRef,
 		ResumeRevision: session.Control.ResumeRevision,
-	}, nil
+	}
+	work, err := a.works.Snapshot(sessionID)
+	if err == nil && work.Spec.AssignmentID == session.Control.AssignmentID &&
+		work.Spec.Session.ResumeRevision > state.ResumeRevision {
+		state.ResumeRef = work.Spec.Session.ResumeRef
+		state.ResumeRevision = work.Spec.Session.ResumeRevision
+	}
+	if err != nil {
+		if !errors.Is(err, sessionwork.ErrNotFound) || session.Control.AssignmentID != "" {
+			return executionapi.SessionState{}, translateWorkError(sessionID, err)
+		}
+	}
+	return state, nil
 }

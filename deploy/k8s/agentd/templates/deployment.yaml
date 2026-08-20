@@ -33,8 +33,9 @@ spec:
         - name: agentd
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if or .Values.agentd.database.dsn .Values.agentd.extraEnv }}
           env:
+            - name: AGENTD_WORKER_CAPACITY
+              value: {{ .Values.worker.capacity | quote }}
             {{- if .Values.agentd.database.dsn }}
             - name: AGENTD_MYSQL_DSN
               value: {{ .Values.agentd.database.dsn | quote }}
@@ -42,7 +43,6 @@ spec:
             {{- with .Values.agentd.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
           ports:
             - name: http
               containerPort: 8020

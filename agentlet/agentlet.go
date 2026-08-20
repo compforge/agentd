@@ -67,6 +67,7 @@ func Run(logger *slog.Logger) error {
 		agentHarness,
 		service.WithLogger(logger),
 		service.WithReconcileInterval(config.reconcileInterval),
+		service.WithWorkCapacity(config.workCapacity),
 	)
 	if err := executionService.Start(processCtx); err != nil {
 		return err
@@ -86,7 +87,8 @@ func Run(logger *slog.Logger) error {
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("agentlet listening", "address", config.address, "storage_provider", storage.Provider,
-			"sandbox_engine", sandboxEngine.Name(), "harness", agentHarness.Name())
+			"sandbox_engine", sandboxEngine.Name(), "harness", agentHarness.Name(),
+			"work_capacity", config.workCapacity)
 		serveErr <- httpServer.Run()
 	}()
 
@@ -117,6 +119,7 @@ func Run(logger *slog.Logger) error {
 type config struct {
 	address                string
 	workerID               string
+	workCapacity           int
 	mysqlDSN               string
 	sqlitePath             string
 	mysqlMaxOpenConns      int
@@ -139,6 +142,7 @@ func loadConfig() (config, error) {
 	value := config{
 		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8019"),
 		workerID:             os.Getenv("AGENTD_WORKER_ID"),
+		workCapacity:         1,
 		mysqlDSN:             os.Getenv("AGENTD_MYSQL_DSN"),
 		sqlitePath:           envOr("AGENTD_SQLITE_PATH", "agentlet.db"),
 		mysqlMaxOpenConns:    32,
@@ -156,6 +160,9 @@ func loadConfig() (config, error) {
 	}
 	if value.mysqlMaxIdleConns > value.mysqlMaxOpenConns {
 		return config{}, errors.New("AGENTD_MYSQL_MAX_IDLE_CONNS must not exceed AGENTD_MYSQL_MAX_OPEN_CONNS")
+	}
+	if value.workCapacity, err = positiveIntEnv("AGENTD_WORKER_CAPACITY", value.workCapacity); err != nil {
+		return config{}, err
 	}
 	durations := []struct {
 		name        string

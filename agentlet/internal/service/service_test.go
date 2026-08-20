@@ -83,6 +83,28 @@ func TestApplyWorkSpecCachesSnapshotAndEnforcesAssignmentFence(t *testing.T) {
 		repeated.Control.ResumeRevision != 7 {
 		t.Fatalf("idempotent WorkSpec rewound local state = %#v", repeated.Control)
 	}
+	overCapacity := spec
+	overCapacity.AssignmentID = "assignment-2"
+	overCapacity.Session.ID = "session-2"
+	if _, err := application.ApplyWorkSpec(ctx, overCapacity); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("ApplyWorkSpec(over capacity) error = %v, want ErrCapacity", err)
+	}
+
+	replacement := spec
+	replacement.AssignmentID = "assignment-2"
+	replacement.Session.Status = repeated.Control.Status
+	replacement.Session.ResumeRef = repeated.Control.ResumeRef
+	replacement.Session.ResumeRevision = repeated.Control.ResumeRevision
+	replaced, err := application.ApplyWorkSpec(ctx, replacement)
+	if err != nil {
+		t.Fatalf("replace inactive Assignment: %v", err)
+	}
+	if replaced.Control.AssignmentID != "assignment-2" {
+		t.Fatalf("replacement Control = %#v", replaced.Control)
+	}
+	if err := application.ValidateAssignment(ctx, spec.Session.ID, spec.WorkerID, spec.AssignmentID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("old Assignment validation error = %v, want ErrConflict", err)
+	}
 }
 
 func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
@@ -116,8 +138,21 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	if err := events.Append(ctx, session.ID, queued); err != nil {
 		t.Fatal(err)
 	}
-	keepRunning, err := application.process(session.ID, input)
+	resident, _, err := application.works.Ensure(WorkSpec{
+		AssignmentID: session.Control.AssignmentID,
+		Session:      executionSession(session),
+	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, start, err := application.works.Wake(session.ID, session.Control.AssignmentID); err != nil || !start {
+		t.Fatalf("wake Work = start %t, error %v", start, err)
+	}
+	keepRunning, err := application.process(session.ID, session.Control.AssignmentID, resident, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resident.Stop(session.Control.AssignmentID); err != nil {
 		t.Fatal(err)
 	}
 	if keepRunning {
@@ -296,9 +331,12 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		}
 		if current.Control.Status == "idle" && current.Control.ResumeRef == "checkpoint-7" &&
 			current.Control.ResumeRevision == 7 && len(pending) == 0 {
-			recovered.mu.Lock()
-			activeWorkers := len(recovered.workers)
-			recovered.mu.Unlock()
+			activeWorkers := 0
+			for _, snapshot := range recovered.works.Snapshots() {
+				if snapshot.Active {
+					activeWorkers++
+				}
+			}
 			if activeWorkers == 0 {
 				break
 			}

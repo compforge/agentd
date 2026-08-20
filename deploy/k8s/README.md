@@ -167,6 +167,7 @@ agentlet:
     dsn: "" # 空值时 Agentlet 使用本地 SQLite，Worker 删除后数据丢失
 
 worker:
+  capacity: 1 # 同时约束控制面 placement 和单个 Agentlet 的 Work reservation
   agentlet:
     image:
       repository: ghcr.io/compforge/agentlet
@@ -175,13 +176,15 @@ worker:
       repository: ghcr.io/compforge/hostel
 ```
 
-例如覆盖默认 Worker 容量时，只添加需要改变的环境变量：
+Worker 容量由 `worker.capacity` 统一下发给 agentd 和 Agentlet，避免控制面已分配但执行节点拒绝的
+容量漂移。其它控制面参数仍通过 `agentd.extraEnv` 覆盖：
 
 ```yaml
+worker:
+  capacity: 4
+
 agentd:
   extraEnv:
-    - name: AGENTD_WORKER_CAPACITY
-      value: "4"
     - name: AGENTD_WORKER_MIN_IDLE
       value: "1"
 ```
