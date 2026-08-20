@@ -16,12 +16,14 @@ Session 调度执行位置；Agentlet 只暴露内部执行 API，负责管理�
 
 ## 核心能力
 
-- 可复用、可版本化的 Agent 定义；
-- 可插拔的 Sandbox Engine，每个 Session 使用独立 Sandbox；
-- 支持持久化事件历史和 SSE 输出的异步 Session 输入；
-- 通过 Agent Ledger 保存 Harness State，并在模型或工具执行前写入记录；
-- Agentlet 进程被替换后恢复 AgentGo Session；
-- Worker 观测和基于容量的 Session Assignment。
+- 让长程任务跨越单个进程和模型上下文窗口。执行进入等待、停止或迁移后，Session 及其历史仍然
+  存在，可以继续工作。
+- 异步接收新任务，并以事件流持续返回进展和结果；客户端连接不必和执行进程保持相同生命周期。
+- 按需提供执行资源，在可用 Worker 之间安排 Session，并在空闲时释放计算资源而不丢失 Session
+  身份。
+- 在与控制面及其凭据隔离的环境中运行模型生成的代码。
+- 保存输入、输出、工具动作、Checkpoint 和失败记录，用于恢复、审计和轨迹分析。
+- 通过稳定接口替换 Agent Harness 或 Sandbox 实现，以适应模型能力和基础设施的持续变化。
 
 ## 架构
 
@@ -73,36 +75,3 @@ State 见 [`agentd/docs/agentd.md`](agentd/docs/agentd.md)。Agentlet 执行、C
 边界见 [`agentd/docs/harness.md`](agentd/docs/harness.md)。Sandbox 能力和隔离边界见
 [`agentd/docs/sandbox-engine.md`](agentd/docs/sandbox-engine.md)。目标 Helm 拓扑和 Worker
 弹性模型见 [`deploy/k8s/README.md`](deploy/k8s/README.md)。
-
-## 开发
-
-```bash
-make fix
-make lint
-make test
-make test-e2e
-make build
-```
-
-`make test-e2e` 会显式启用 `tests/e2e` 测试套件。本地用例通过 Claude SDK 访问真实 Hertz
-服务，并使用 SQLite 存储 Control State、Harness State 和 Ledger。用例通过确定性的本地
-Anthropic API Server 覆盖进程替换、模型流成功和模型流中断，不依赖外部服务。详见
-[`agentlet/tests/e2e`](agentlet/tests/e2e)。
-
-可选的真实模型检查复用同一条 SQLite 服务链路，不要求 MySQL 或外部 Sandbox Engine：
-
-```bash
-export ANTHROPIC_API_KEY='your-key'
-export ANTHROPIC_BASE_URL='https://your-anthropic-compatible-endpoint'
-export AGENTD_TEST_MODEL='your-model-id'
-make test-model-integration
-```
-
-可选的在线集成检查需要一个可丢弃的 MySQL 数据库和正在运行的 Sandbox Engine。它使用确定性
-的本地 Anthropic API stub，因此不需要模型凭据：
-
-```bash
-export AGENTD_TEST_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd_test'
-export AGENTD_TEST_SANDBOX_ENDPOINT='http://127.0.0.1:8080'
-make test-integration
-```
