@@ -1,4 +1,4 @@
-// Package gc reconciles Worker runtime resources and retained database records.
+// Package gc reconciles Worker Pods and retained database records.
 package gc
 
 import (

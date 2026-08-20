@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
 	"github.com/compforge/agentd/agentd/internal/connector"
+	controlgc "github.com/compforge/agentd/agentd/internal/gc"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	control "github.com/compforge/agentd/agentd/internal/service"
 	drivermysql "github.com/go-sql-driver/mysql"
@@ -31,6 +32,14 @@ func Run(logger *slog.Logger) error {
 	}
 	defer closeDatabase()
 	repository, err := gormrepo.NewGORM(database)
+	if err != nil {
+		return err
+	}
+	recordGC, err := controlgc.NewRecordGC(repository, controlgc.RecordConfig{
+		Interval: config.workerRecordGCInterval, RequestTimeout: config.workerRecordGCTimeout,
+		Retention: config.workerRecordRetention, BatchSize: config.workerRecordGCBatchSize,
+		Logger: logger,
+	})
 	if err != nil {
 		return err
 	}
@@ -86,6 +95,7 @@ func Run(logger *slog.Logger) error {
 	if workerControllers != nil {
 		workerControllers.Run(processCtx)
 	}
+	go recordGC.Run(processCtx)
 	select {
 	case err := <-serveErr:
 		if err == nil {

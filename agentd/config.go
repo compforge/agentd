@@ -34,6 +34,10 @@ type config struct {
 	workerControllerLeaseTTL     time.Duration
 	workerGCInterval             time.Duration
 	workerGCDeleteBatchSize      int
+	workerRecordGCInterval       time.Duration
+	workerRecordGCTimeout        time.Duration
+	workerRecordRetention        time.Duration
+	workerRecordGCBatchSize      int
 	observerInterval             time.Duration
 	observerTimeout              time.Duration
 	connectorRequestTimeout      time.Duration
@@ -76,6 +80,10 @@ func loadConfig() (config, error) {
 		workerControllerLeaseTTL:     30 * time.Second,
 		workerGCInterval:             time.Minute,
 		workerGCDeleteBatchSize:      10,
+		workerRecordGCInterval:       time.Hour,
+		workerRecordGCTimeout:        20 * time.Second,
+		workerRecordRetention:        7 * 24 * time.Hour,
+		workerRecordGCBatchSize:      10,
 		observerInterval:             5 * time.Second,
 		observerTimeout:              5 * time.Second,
 		connectorRequestTimeout:      30 * time.Second,
@@ -123,6 +131,11 @@ func loadConfig() (config, error) {
 	); err != nil {
 		return config{}, err
 	}
+	if value.workerRecordGCBatchSize, err = positiveIntEnv(
+		"AGENTD_WORKER_RECORD_GC_BATCH_SIZE", value.workerRecordGCBatchSize,
+	); err != nil {
+		return config{}, err
+	}
 	if value.connectorMaxIdleConns, err = positiveIntEnv(
 		"AGENTD_CONNECTOR_MAX_IDLE_CONNS", value.connectorMaxIdleConns,
 	); err != nil {
@@ -147,6 +160,9 @@ func loadConfig() (config, error) {
 		{"AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", &value.workerControllerTimeout},
 		{"AGENTD_WORKER_CONTROLLER_LEASE_TTL", &value.workerControllerLeaseTTL},
 		{"AGENTD_WORKER_GC_INTERVAL", &value.workerGCInterval},
+		{"AGENTD_WORKER_RECORD_GC_INTERVAL", &value.workerRecordGCInterval},
+		{"AGENTD_WORKER_RECORD_GC_REQUEST_TIMEOUT", &value.workerRecordGCTimeout},
+		{"AGENTD_WORKER_RECORD_RETENTION", &value.workerRecordRetention},
 		{"AGENTD_CONNECTOR_REQUEST_TIMEOUT", &value.connectorRequestTimeout},
 		{"AGENTD_CONNECTOR_DIAL_TIMEOUT", &value.connectorDialTimeout},
 		{"AGENTD_CONNECTOR_RESPONSE_HEADER_TIMEOUT", &value.connectorHeaderTimeout},
