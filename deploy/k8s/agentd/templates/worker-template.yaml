@@ -36,6 +36,8 @@ data:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['agentd.compforge.dev/worker-id']
+            - name: AGENTD_WORKER_CAPACITY
+              value: {{ .Values.worker.capacity | quote }}
             {{- if .Values.agentlet.database.dsn }}
             - name: AGENTD_MYSQL_DSN
               value: {{ .Values.agentlet.database.dsn | quote }}

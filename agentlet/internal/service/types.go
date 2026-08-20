@@ -12,6 +12,7 @@ import (
 var (
 	ErrNotFound       = errors.New("resource not found")
 	ErrConflict       = errors.New("resource conflict")
+	ErrCapacity       = sessionwork.ErrCapacity
 	ErrUnsupported    = errors.New("unsupported feature")
 	ErrUnsafeRecovery = harness.ErrUnsafeRecovery
 )

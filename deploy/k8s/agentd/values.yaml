@@ -42,6 +42,7 @@ agentd:
   affinity: {}
 
 worker:
+  capacity: 1
   agentlet:
     image:
       repository: ghcr.io/compforge/agentlet

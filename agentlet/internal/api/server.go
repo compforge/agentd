@@ -386,6 +386,8 @@ func (s *Server) writeError(_ context.Context, request *hertzapp.RequestContext,
 	switch {
 	case errors.Is(err, service.ErrNotFound):
 		status, errorType = consts.StatusNotFound, "not_found_error"
+	case errors.Is(err, service.ErrCapacity):
+		status, errorType = consts.StatusServiceUnavailable, "overloaded_error"
 	case errors.Is(err, service.ErrUnsupported):
 		status, errorType = consts.StatusBadRequest, "unsupported_feature"
 	case errors.Is(err, service.ErrConflict):

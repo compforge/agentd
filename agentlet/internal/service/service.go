@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 )
 
 type Service struct {
@@ -17,19 +19,16 @@ type Service struct {
 	events     *EventLog
 	harness    Harness
 	logger     *slog.Logger
+	works      *sessionwork.Manager
 	ctx        context.Context
 	cancel     context.CancelFunc
 
 	mu                sync.Mutex
-	workers           map[string]*workerState
 	workerSet         sync.WaitGroup
+	workCapacity      int
 	reconcileInterval time.Duration
 	started           bool
 	closing           bool
-}
-
-type workerState struct {
-	wake bool
 }
 
 type Option func(*Service)
@@ -48,15 +47,24 @@ func WithReconcileInterval(interval time.Duration) Option {
 	}
 }
 
+func WithWorkCapacity(capacity int) Option {
+	return func(executionService *Service) {
+		if capacity > 0 {
+			executionService.workCapacity = capacity
+		}
+	}
+}
+
 func New(repository Repository, events *EventLog, harness Harness, options ...Option) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	executionService := &Service{
 		repository: repository, events: events, harness: harness, ctx: ctx, cancel: cancel,
-		logger: slog.Default(), workers: make(map[string]*workerState),
+		logger: slog.Default(), workCapacity: 1,
 	}
 	for _, option := range options {
 		option(executionService)
 	}
+	executionService.works = sessionwork.NewManager(executionService.workCapacity)
 	return executionService
 }
 
@@ -102,11 +110,13 @@ func (a *Service) reconcileLoop() {
 func (a *Service) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closing = true
-	for sessionID := range a.workers {
-		a.harness.Interrupt(sessionID)
+	for _, work := range a.works.Snapshots() {
+		if work.Active {
+			a.harness.Interrupt(work.Spec.Session.ID)
+		}
 	}
-	a.mu.Unlock()
 	a.cancel()
+	a.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		a.workerSet.Wait()
@@ -231,6 +241,14 @@ func (a *Service) SendEvents(ctx context.Context, sessionID string, incoming []I
 	if session.Control.Status == "terminated" {
 		return nil, fmt.Errorf("%w: session %s is terminated", ErrConflict, sessionID)
 	}
+	for _, item := range incoming {
+		if item.Type == "user.message" {
+			if err := a.ensureWork(session); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	accepted := make([]ManagedEvent, 0, len(incoming))
 	for _, item := range incoming {
 		switch item.Type {
@@ -245,7 +263,9 @@ func (a *Service) SendEvents(ctx context.Context, sessionID string, incoming []I
 			if err := a.repository.PutSession(ctx, session); err != nil {
 				return nil, err
 			}
-			a.enqueue(sessionID)
+			if err := a.enqueue(session); err != nil {
+				return nil, err
+			}
 		case "user.interrupt":
 			event := NewManagedEvent(item.Type, nil)
 			if err := a.events.Append(ctx, sessionID, event); err != nil {
@@ -307,7 +327,11 @@ func (a *Service) Recover(ctx context.Context) error {
 		if session.Control.Status == "terminated" {
 			continue
 		}
-		if a.workerActive(session.ID) {
+		active, err := a.workActive(session.ID)
+		if err != nil {
+			return err
+		}
+		if active {
 			continue
 		}
 		pending, err := a.events.UnprocessedUserMessages(ctx, session.ID)
@@ -333,43 +357,63 @@ func (a *Service) Recover(ctx context.Context) error {
 		if err := a.events.Append(ctx, session.ID, NewTurnEvent(inputID, "session.status_rescheduled", nil)); err != nil {
 			return fmt.Errorf("record rescheduled session %q: %w", session.ID, err)
 		}
-		a.enqueue(session.ID)
+		if err := a.ensureWork(session); err != nil {
+			return fmt.Errorf("reserve recovered Session %q Work: %w", session.ID, err)
+		}
+		if err := a.enqueue(session); err != nil {
+			return fmt.Errorf("enqueue recovered Session %q: %w", session.ID, err)
+		}
 	}
 	return nil
 }
 
-func (a *Service) workerActive(sessionID string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	_, active := a.workers[sessionID]
-	return active
+func (a *Service) workActive(sessionID string) (bool, error) {
+	snapshot, err := a.works.Snapshot(sessionID)
+	if errors.Is(err, sessionwork.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Session %q Work: %w", sessionID, err)
+	}
+	return snapshot.Active, nil
 }
 
-func (a *Service) enqueue(sessionID string) {
+func (a *Service) ensureWork(session Session) error {
+	_, _, err := a.works.Ensure(sessionwork.Spec{
+		AssignmentID: session.Control.AssignmentID,
+		Session:      executionSession(session),
+	})
+	return translateWorkError(session.ID, err)
+}
+
+func (a *Service) enqueue(session Session) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closing {
-		return
+		return fmt.Errorf("%w: Agentlet is shutting down", ErrConflict)
 	}
-	worker := a.workers[sessionID]
-	if worker == nil {
-		worker = &workerState{}
-		a.workers[sessionID] = worker
-		a.workerSet.Add(1)
-		go a.runWorker(sessionID, worker)
-		return
+	resident, start, err := a.works.Wake(session.ID, session.Control.AssignmentID)
+	if err != nil {
+		return translateWorkError(session.ID, err)
 	}
-	worker.wake = true
+	if !start {
+		return nil
+	}
+	a.workerSet.Add(1)
+	go a.runWorker(session.ID, session.Control.AssignmentID, resident)
+	return nil
 }
 
-func (a *Service) runWorker(sessionID string, worker *workerState) {
+func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwork.Work) {
+	finished := false
+	defer a.workerSet.Done()
 	defer func() {
-		a.mu.Lock()
-		if a.workers[sessionID] == worker {
-			delete(a.workers, sessionID)
+		if finished {
+			return
 		}
-		a.mu.Unlock()
-		a.workerSet.Done()
+		if err := resident.Stop(assignmentID); err != nil {
+			a.logger.Warn("stop Session Work", "session_id", sessionID, "error", err)
+		}
 	}()
 	for {
 		if a.ctx.Err() != nil {
@@ -381,7 +425,7 @@ func (a *Service) runWorker(sessionID string, worker *workerState) {
 			return
 		}
 		if len(pending) > 0 {
-			keepRunning, err := a.process(sessionID, pending[0])
+			keepRunning, err := a.process(sessionID, assignmentID, resident, pending[0])
 			if err != nil {
 				a.handleWorkerFailure(sessionID, err)
 				return
@@ -391,20 +435,27 @@ func (a *Service) runWorker(sessionID string, worker *workerState) {
 			}
 			continue
 		}
-
-		a.mu.Lock()
-		if a.workers[sessionID] != worker {
-			a.mu.Unlock()
-			return
-		}
-		if worker.wake {
-			worker.wake = false
-			a.mu.Unlock()
+		if resident.FinishPass() {
 			continue
 		}
-		delete(a.workers, sessionID)
-		a.mu.Unlock()
+		finished = true
 		return
+	}
+}
+
+func translateWorkError(sessionID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, sessionwork.ErrCapacity):
+		return fmt.Errorf("%w: Session %q: %v", ErrCapacity, sessionID, err)
+	case errors.Is(err, sessionwork.ErrNotFound):
+		return fmt.Errorf("%w: Session %q Work", ErrNotFound, sessionID)
+	case errors.Is(err, sessionwork.ErrAssignmentConflict), errors.Is(err, sessionwork.ErrActive):
+		return fmt.Errorf("%w: Session %q: %v", ErrConflict, sessionID, err)
+	default:
+		return fmt.Errorf("manage Session %q Work: %w", sessionID, err)
 	}
 }
 
@@ -433,11 +484,19 @@ func (a *Service) markRescheduling(ctx context.Context, sessionID string) error 
 	return nil
 }
 
-func (a *Service) process(sessionID string, input ManagedEvent) (bool, error) {
+func (a *Service) process(
+	sessionID string,
+	assignmentID string,
+	resident *sessionwork.Work,
+	input ManagedEvent,
+) (bool, error) {
 	ctx := a.ctx
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf("load session: %w", err)
+	}
+	if session.Control.AssignmentID != assignmentID {
+		return false, fmt.Errorf("%w: Session %q Assignment changed", ErrConflict, sessionID)
 	}
 	transition(&session, "running")
 	if err := a.repository.PutSession(ctx, session); err != nil {
@@ -465,10 +524,16 @@ func (a *Service) process(sessionID string, input ManagedEvent) (bool, error) {
 	if persistErr != nil {
 		return false, fmt.Errorf("persist harness output: %w", persistErr)
 	}
+	resumeRef := session.Control.ResumeRef
 	if result.ResumeRef != "" {
-		session.Control.ResumeRef = result.ResumeRef
+		resumeRef = result.ResumeRef
 	}
-	session.Control.ResumeRevision = result.ResumeRevision
+	if err := resident.UpdateResume(assignmentID, resumeRef, result.ResumeRevision); err != nil {
+		return false, translateWorkError(sessionID, err)
+	}
+	resume := resident.Snapshot().Spec.Session
+	session.Control.ResumeRef = resume.ResumeRef
+	session.Control.ResumeRevision = resume.ResumeRevision
 	if errors.Is(runErr, ErrUnsafeRecovery) {
 		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "unsafe_recovery", "message": runErr.Error()},

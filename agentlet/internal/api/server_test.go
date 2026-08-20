@@ -27,7 +27,10 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	resources := service.NewMemoryRepository()
-	executionService := service.New(resources, service.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{})
+	executionService := service.New(
+		resources, service.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{},
+		service.WithWorkCapacity(2),
+	)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

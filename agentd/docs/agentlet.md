@@ -39,6 +39,7 @@ Connector 在转发 Event 前先幂等安装当前 Assignment 的完整 `WorkSpe
 
 ```text
 validate Assignment
+  → reserve Work capacity
   → persist input boundary
   → restore or create Harness runtime
   → reconcile unresolved Ledger attempts
@@ -106,6 +107,11 @@ Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不�
 
 ## 进程与容量
 
+- Work Manager 是 Agentlet 内 Assignment fence、容量 reservation 和 active/pending 执行状态的唯一
+  owner。容量在接受 `WorkSpec` 时按 Assignment 预留，而不是等 Harness goroutine 启动后才计算；这样
+  Agentlet 的本地 admission 与控制面的 Session binding 使用同一口径。
+- 同一 Assignment 的重复唤醒合并为后续执行 pass。新的 Assignment 只能替换 inactive Work，不能让
+  迟到请求覆盖正在执行的 runtime。
 - 一个 Agentlet 可以在容量边界内执行多个 Work；容量归 Assignment 计数，不由 Agentlet
   heartbeat 上报。
 - Kubernetes 负责容器重启和 Pod 替换；不设计 Agentlet 原地恢复同一个 Worker identity。
