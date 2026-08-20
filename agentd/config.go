@@ -29,6 +29,11 @@ type config struct {
 	workerIdleTTL                time.Duration
 	workerCreateBatchSize        int
 	workerPodTemplateFile        string
+	workerLifecyclerInterval     time.Duration
+	workerControllerTimeout      time.Duration
+	workerControllerLeaseTTL     time.Duration
+	workerGCInterval             time.Duration
+	workerGCDeleteBatchSize      int
 	observerInterval             time.Duration
 	observerTimeout              time.Duration
 	connectorRequestTimeout      time.Duration
@@ -66,6 +71,11 @@ func loadConfig() (config, error) {
 		workerIdleTTL:                10 * time.Minute,
 		workerCreateBatchSize:        2,
 		workerPodTemplateFile:        envOr("AGENTD_WORKER_POD_TEMPLATE_FILE", "/etc/agentd/worker-template/pod-template.yaml"),
+		workerLifecyclerInterval:     5 * time.Second,
+		workerControllerTimeout:      20 * time.Second,
+		workerControllerLeaseTTL:     30 * time.Second,
+		workerGCInterval:             time.Minute,
+		workerGCDeleteBatchSize:      10,
 		observerInterval:             5 * time.Second,
 		observerTimeout:              5 * time.Second,
 		connectorRequestTimeout:      30 * time.Second,
@@ -108,6 +118,11 @@ func loadConfig() (config, error) {
 	); err != nil {
 		return config{}, err
 	}
+	if value.workerGCDeleteBatchSize, err = positiveIntEnv(
+		"AGENTD_WORKER_GC_DELETE_BATCH_SIZE", value.workerGCDeleteBatchSize,
+	); err != nil {
+		return config{}, err
+	}
 	if value.connectorMaxIdleConns, err = positiveIntEnv(
 		"AGENTD_CONNECTOR_MAX_IDLE_CONNS", value.connectorMaxIdleConns,
 	); err != nil {
@@ -128,6 +143,10 @@ func loadConfig() (config, error) {
 		{"AGENTD_WORKER_OBSERVER_INTERVAL", &value.observerInterval},
 		{"AGENTD_WORKER_OBSERVER_REQUEST_TIMEOUT", &value.observerTimeout},
 		{"AGENTD_WORKER_IDLE_TTL", &value.workerIdleTTL},
+		{"AGENTD_WORKER_LIFECYCLER_INTERVAL", &value.workerLifecyclerInterval},
+		{"AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", &value.workerControllerTimeout},
+		{"AGENTD_WORKER_CONTROLLER_LEASE_TTL", &value.workerControllerLeaseTTL},
+		{"AGENTD_WORKER_GC_INTERVAL", &value.workerGCInterval},
 		{"AGENTD_CONNECTOR_REQUEST_TIMEOUT", &value.connectorRequestTimeout},
 		{"AGENTD_CONNECTOR_DIAL_TIMEOUT", &value.connectorDialTimeout},
 		{"AGENTD_CONNECTOR_RESPONSE_HEADER_TIMEOUT", &value.connectorHeaderTimeout},
@@ -148,6 +167,9 @@ func loadConfig() (config, error) {
 	case "kubernetes":
 		if value.observationTimeout <= value.observerInterval {
 			return config{}, errors.New("AGENTD_WORKER_OBSERVATION_TIMEOUT must exceed AGENTD_WORKER_OBSERVER_INTERVAL")
+		}
+		if value.workerControllerLeaseTTL <= value.workerControllerTimeout {
+			return config{}, errors.New("AGENTD_WORKER_CONTROLLER_LEASE_TTL must exceed AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT")
 		}
 	default:
 		return config{}, fmt.Errorf("unsupported AGENTD_WORKER_SOURCE %q", value.workerSource)

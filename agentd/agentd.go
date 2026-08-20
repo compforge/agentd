@@ -12,8 +12,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
 	"github.com/compforge/agentd/agentd/internal/connector"
-	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
-	"github.com/compforge/agentd/agentd/internal/observer"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	control "github.com/compforge/agentd/agentd/internal/service"
 	drivermysql "github.com/go-sql-driver/mysql"
@@ -36,13 +34,22 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	controlService, err := control.New(repository, config.observationTimeout)
+	workerControllers, err := buildWorkerControllers(config, database, repository, logger)
 	if err != nil {
 		return err
 	}
-	workerObserver, err := buildWorkerObserver(config, controlService, logger)
+	var demandNotifier control.DemandNotifier
+	if workerControllers != nil {
+		demandNotifier = workerControllers.lifecycler
+	}
+	controlService, err := control.New(repository, config.observationTimeout, demandNotifier)
 	if err != nil {
 		return err
+	}
+	if workerControllers != nil {
+		if err := workerControllers.attachObserver(config, controlService, logger); err != nil {
+			return err
+		}
 	}
 	agentletConnector, err := connector.New(connector.Config{
 		RequestTimeout:        config.connectorRequestTimeout,
@@ -71,14 +78,14 @@ func Run(logger *slog.Logger) error {
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if workerObserver != nil {
-		go workerObserver.Run(processCtx)
-	}
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("agentd listening", "address", config.address)
 		serveErr <- httpServer.Run()
 	}()
+	if workerControllers != nil {
+		workerControllers.Run(processCtx)
+	}
 	select {
 	case err := <-serveErr:
 		if err == nil {
@@ -93,26 +100,6 @@ func Run(logger *slog.Logger) error {
 		}
 		return nil
 	}
-}
-
-func buildWorkerObserver(config config, controlService *control.Service, logger *slog.Logger) (*observer.Observer, error) {
-	if config.workerSource == "" {
-		return nil, nil
-	}
-	kubernetesClient, err := controlk8s.NewInCluster(controlk8s.Config{
-		Namespace: config.workerNamespace, LabelSelector: config.workerSelector,
-		RequestTimeout: config.observerTimeout, QPS: 5, Burst: 10,
-	})
-	if err != nil {
-		return nil, err
-	}
-	source, err := observer.NewKubernetesSource(kubernetesClient, config.workerPort, config.workerCapacity)
-	if err != nil {
-		return nil, err
-	}
-	return observer.New(source, controlService, observer.Config{
-		Interval: config.observerInterval, RequestTimeout: config.observerTimeout, Logger: logger,
-	})
 }
 
 func openMySQL(config config) (*gorm.DB, func() error, error) {
