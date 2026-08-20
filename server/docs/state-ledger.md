@@ -36,6 +36,8 @@ Control State 是 agentd 调度的权威状态。控制动作可以作为事实�
 
 Harness State 由 Harness 解释，可能是消息序列、上下文压缩结果、会话树、checkpoint、远端
 Harness session ID，或其它原生恢复材料。agentd 不定义统一 State schema，也不读取其内容。
+Harness 的执行边界和 Adapter 契约见 [harness.md](harness.md)，本节只定义状态的数据所有权与
+一致性要求。
 
 agentd 只定义生命周期所需的能力契约：
 

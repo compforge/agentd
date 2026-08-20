@@ -29,6 +29,7 @@ server/
 │   └── store/                # Control State Repository 的 GORM 实现
 ├── tests/e2e/                 # 显式 e2e build tag；SQLite 恢复契约与 live 组件联调
 └── docs/
+    ├── harness.md            # Harness 执行边界、适配契约与 AgentGo 实现
     ├── kernel.md             # 稳定定位、核心模型、API 与组件主流程
     ├── sandbox-engine.md     # Sandbox Engine 能力、生命周期与隔离边界
     └── state-ledger.md       # 持久化、恢复、审计与轨迹边界
@@ -51,6 +52,7 @@ server/
 ## References
 
 - `docs/kernel.md` — agentd 稳定定位、核心模型、API 边界与组件主流程
+- `docs/harness.md` — Harness 执行边界、适配契约、恢复语义与 AgentGo 实现
 - `docs/sandbox-engine.md` — Sandbox Engine 能力契约、资源生命周期与隔离要求
 - `docs/state-ledger.md` — 持久化、恢复、审计和轨迹的数据所有权与一致性边界
 - `https://platform.claude.com/docs/en/managed-agents/overview` — 上游 API 概念与行为基线
