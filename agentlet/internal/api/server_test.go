@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -18,6 +20,7 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/api"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/service"
+	"github.com/compforge/agentd/internal/executionapi"
 )
 
 func TestAgentdInternalExecutionAPI(t *testing.T) {
@@ -43,7 +46,9 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(executionService, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(server.Engine)
+	api.New(
+		executionService, slog.New(slog.NewTextHandler(io.Discard, nil)), api.WithWorkerID("worker-1"),
+	).Register(server.Engine)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Run() }()
 	t.Cleanup(func() {
@@ -176,6 +181,62 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 		t.Fatalf("close event stream: %v", err)
 	}
 	cancelStream()
+
+	workSpec := executionapi.WorkSpec{
+		AssignmentID: "assignment-1", WorkerID: "worker-1",
+		Session: executionapi.SessionSnapshot{
+			ID: "assigned-session", EnvironmentID: "assigned-environment", Status: "idle",
+			Harness: "fake", HarnessVersion: "test", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		},
+		Agent: executionapi.AgentSnapshot{
+			ID: "assigned-agent", Name: "assigned", ModelID: "test-model", Version: 1,
+		},
+		Environment: executionapi.EnvironmentSnapshot{
+			ID: "assigned-environment", Config: map[string]any{"type": "cloud"},
+		},
+	}
+	body, err := json.Marshal(workSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workRequest, err := http.NewRequest(
+		http.MethodPut,
+		"http://"+listener.Addr().String()+"/internal/v1/sessions/assigned-session",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workRequest.Header.Set("Content-Type", "application/json")
+	workRequest.Header.Set(executionapi.AssignmentHeader, "assignment-1")
+	workRequest.Header.Set(executionapi.WorkerHeader, "worker-1")
+	workResponse, err := http.DefaultClient.Do(workRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workResponse.Body.Close()
+	if workResponse.StatusCode != http.StatusOK {
+		t.Fatalf("install assigned Work status = %d", workResponse.StatusCode)
+	}
+
+	stateRequest, err := http.NewRequest(
+		http.MethodGet,
+		"http://"+listener.Addr().String()+"/internal/v1/sessions/assigned-session/state",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRequest.Header.Set(executionapi.AssignmentHeader, "stale-assignment")
+	stateRequest.Header.Set(executionapi.WorkerHeader, "worker-1")
+	stateResponse, err := http.DefaultClient.Do(stateRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateResponse.Body.Close()
+	if stateResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("stale Assignment status = %d, want 400", stateResponse.StatusCode)
+	}
 }
 
 type fakeHarness struct{}

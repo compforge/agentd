@@ -11,6 +11,7 @@ import (
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	"github.com/compforge/agentd/agentd/internal/service"
+	"github.com/compforge/agentd/internal/executionapi"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -132,6 +133,98 @@ func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
 	}
 	if session.Status != model.SessionStatusIdle || session.WorkerID != "" || session.AssignmentID != "" {
 		t.Fatalf("released session = %+v", session)
+	}
+}
+
+func TestPrepareExecutionBuildsAssignedWorkSnapshot(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := repository.PutAgent(ctx, model.Agent{
+		ID: "agent-1", Name: "test", ModelID: "model-1", Version: 3,
+		System: "be concise", Tools: []map[string]any{{"type": "agent_toolset_20260401"}},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutEnvironment(ctx, model.Environment{
+		ID: "env-1", Name: "test", Config: map[string]any{"type": "cloud"},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-1", AgentID: "agent-1", AgentVersion: 3, EnvironmentID: "env-1",
+		Metadata: map[string]string{"suite": "contract"}, Status: model.SessionStatusIdle,
+		Harness: "agentgo", HarnessVersion: "v1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observeReadyWorker(t, application, "worker-1", 1, now)
+
+	target, err := application.PrepareExecution(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Endpoint != "http://worker-1" || target.Work.AssignmentID == "" ||
+		target.Work.WorkerID != "worker-1" {
+		t.Fatalf("execution target = %#v", target)
+	}
+	if target.Work.Session.ID != "session-1" || target.Work.Session.Status != "rescheduling" ||
+		target.Work.Agent.ID != "agent-1" || target.Work.Agent.Version != 3 ||
+		target.Work.Environment.ID != "env-1" {
+		t.Fatalf("work snapshot = %#v", target.Work)
+	}
+}
+
+func TestObserveExecutionStateUsesAssignmentFenceAndMonotonicResumeRevision(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-1", Status: model.SessionStatusRescheduling,
+		AssignmentID: "assignment-1", WorkerID: "worker-1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	observed, err := application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
+		AssignmentID: "assignment-1", Status: "running", ResumeRef: "checkpoint-0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Status != model.SessionStatusRunning || observed.ResumeRef != "checkpoint-0" ||
+		observed.ResumeRevision != 0 || observed.Revision != 1 {
+		t.Fatalf("initial observed state = %#v", observed)
+	}
+
+	observed, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
+		AssignmentID: "assignment-1", Status: "idle", ResumeRef: "checkpoint-7", ResumeRevision: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Status != model.SessionStatusIdle || observed.ResumeRef != "checkpoint-7" ||
+		observed.ResumeRevision != 7 || observed.Revision != 2 {
+		t.Fatalf("advanced observed state = %#v", observed)
+	}
+
+	observed, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
+		AssignmentID: "assignment-1", Status: "idle", ResumeRef: "checkpoint-3", ResumeRevision: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.ResumeRef != "checkpoint-7" || observed.ResumeRevision != 7 || observed.Revision != 2 {
+		t.Fatalf("resume state rewound = %#v", observed)
+	}
+
+	_, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
+		AssignmentID: "stale-assignment", Status: "idle", ResumeRevision: 8,
+	})
+	if !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("stale Assignment error = %v, want ErrConflict", err)
 	}
 }
 

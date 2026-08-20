@@ -15,15 +15,27 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
 	"github.com/cloudwego/hertz/pkg/route"
 	"github.com/compforge/agentd/agentlet/internal/service"
+	"github.com/compforge/agentd/internal/executionapi"
 )
 
 type Server struct {
-	service *service.Service
-	logger  *slog.Logger
+	service  *service.Service
+	logger   *slog.Logger
+	workerID string
 }
 
-func New(executionService *service.Service, logger *slog.Logger) *Server {
-	return &Server{service: executionService, logger: logger}
+type Option func(*Server)
+
+func WithWorkerID(workerID string) Option {
+	return func(server *Server) { server.workerID = workerID }
+}
+
+func New(executionService *service.Service, logger *slog.Logger, options ...Option) *Server {
+	server := &Server{service: executionService, logger: logger}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 func (s *Server) Register(engine *route.Engine) {
@@ -38,10 +50,48 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.GET("/internal/v1/environments/:environment_id", s.getEnvironment)
 	engine.POST("/internal/v1/sessions", s.createSession)
 	engine.GET("/internal/v1/sessions", s.listSessions)
+	engine.PUT("/internal/v1/sessions/:session_id", s.applyWorkSpec)
 	engine.GET("/internal/v1/sessions/:session_id", s.getSession)
+	engine.GET("/internal/v1/sessions/:session_id/state", s.getExecutionState)
 	engine.POST("/internal/v1/sessions/:session_id/events", s.sendEvents)
 	engine.GET("/internal/v1/sessions/:session_id/events", s.listEvents)
 	engine.GET("/internal/v1/sessions/:session_id/events/stream", s.streamEvents)
+}
+
+func (s *Server) applyWorkSpec(ctx context.Context, request *hertzapp.RequestContext) {
+	var spec executionapi.WorkSpec
+	if !decodeBody(request, &spec) {
+		return
+	}
+	sessionID := request.Param("session_id")
+	if spec.Session.ID != sessionID || spec.AssignmentID != string(request.GetHeader(executionapi.AssignmentHeader)) ||
+		spec.WorkerID != string(request.GetHeader(executionapi.WorkerHeader)) {
+		s.writeError(ctx, request, fmt.Errorf("%w: WorkSpec path or Assignment headers do not match", service.ErrConflict))
+		return
+	}
+	if s.workerID != "" && spec.WorkerID != s.workerID {
+		s.writeError(ctx, request, fmt.Errorf(
+			"%w: Work targets Worker %q, Agentlet is %q", service.ErrConflict, spec.WorkerID, s.workerID,
+		))
+		return
+	}
+	if _, err := s.service.ApplyWorkSpec(ctx, spec); err != nil {
+		s.writeError(ctx, request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) getExecutionState(ctx context.Context, request *hertzapp.RequestContext) {
+	if !s.requireAssignment(ctx, request) {
+		return
+	}
+	state, err := s.service.ExecutionState(ctx, request.Param("session_id"))
+	if err != nil {
+		s.writeError(ctx, request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, state)
 }
 
 func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) {
@@ -207,6 +257,9 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 }
 
 func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
+	if !s.requireAssignment(ctx, request) {
+		return
+	}
 	value, err := s.service.GetSession(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
@@ -229,6 +282,9 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 }
 
 func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContext) {
+	if !s.requireAssignment(ctx, request) {
+		return
+	}
 	var input struct {
 		Events []json.RawMessage `json:"events"`
 	}
@@ -249,6 +305,9 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
+	if !s.requireAssignment(ctx, request) {
+		return
+	}
 	events, err := s.service.ListEvents(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
@@ -258,6 +317,9 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
+	if !s.requireAssignment(ctx, request) {
+		return
+	}
 	if len(request.QueryArgs().PeekAll("event_deltas[]")) > 0 || len(request.QueryArgs().PeekAll("event_deltas")) > 0 {
 		s.writeError(ctx, request, fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported))
 		return
@@ -302,6 +364,20 @@ func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestCont
 			}
 		}
 	}
+}
+
+func (s *Server) requireAssignment(ctx context.Context, request *hertzapp.RequestContext) bool {
+	err := s.service.ValidateAssignment(
+		ctx,
+		request.Param("session_id"),
+		string(request.GetHeader(executionapi.WorkerHeader)),
+		string(request.GetHeader(executionapi.AssignmentHeader)),
+	)
+	if err != nil {
+		s.writeError(ctx, request, err)
+		return false
+	}
+	return true
 }
 
 func (s *Server) writeError(_ context.Context, request *hertzapp.RequestContext, err error) {

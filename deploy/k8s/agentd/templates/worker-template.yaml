@@ -32,6 +32,10 @@ data:
           env:
             - name: AGENTD_ADDRESS
               value: 0.0.0.0:8019
+            - name: AGENTD_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['agentd.compforge.dev/worker-id']
             {{- if .Values.agentlet.database.dsn }}
             - name: AGENTD_MYSQL_DSN
               value: {{ .Values.agentlet.database.dsn | quote }}

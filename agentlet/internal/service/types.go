@@ -57,6 +57,8 @@ type ControlState struct {
 	HarnessVersion string `json:"harness_version"`
 	ResumeRef      string `json:"resume_ref"`
 	ResumeRevision int64  `json:"resume_revision"`
+	AssignmentID   string `json:"assignment_id,omitempty"`
+	WorkerID       string `json:"worker_id,omitempty"`
 }
 
 type WorkSpec = sessionwork.Spec
