@@ -14,8 +14,9 @@ import (
 )
 
 type Service struct {
-	repository repo.Repository
-	scheduler  *scheduler.Scheduler
+	repository         repo.Repository
+	scheduler          *scheduler.Scheduler
+	observationTimeout time.Duration
 }
 
 func New(repository repo.Repository, observationTimeout time.Duration) (*Service, error) {
@@ -25,7 +26,10 @@ func New(repository repo.Repository, observationTimeout time.Duration) (*Service
 	if observationTimeout <= 0 {
 		return nil, fmt.Errorf("create control plane: observation timeout must be positive")
 	}
-	return &Service{repository: repository, scheduler: scheduler.New(observationTimeout)}, nil
+	return &Service{
+		repository: repository, scheduler: scheduler.New(observationTimeout),
+		observationTimeout: observationTimeout,
+	}, nil
 }
 
 func (a *Service) ObserveWorker(ctx context.Context, worker model.Worker) (model.Worker, error) {

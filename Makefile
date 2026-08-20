@@ -1,7 +1,7 @@
 .PHONY: fix lint test test-e2e test-model-integration test-integration build run run-agentd run-agentlet
 
 fix:
-	gofmt -w $$(find agentd agentlet cmd -name '*.go' -not -path '*/vendor/*')
+	gofmt -w $$(find agentd agentlet cmd internal -name '*.go' -not -path '*/vendor/*')
 
 lint:
 	go vet ./...

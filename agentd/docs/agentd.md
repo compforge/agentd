@@ -187,10 +187,11 @@ DB Record GC 只处理已经 `retired`、Observer 已确认 Pod 不存在且超�
 ## Connector
 
 Connector 是 Agentlet 数据面的唯一入口：按 Session 读取 Assignment，从当前 Worker observation
-解析 endpoint，把公开请求转换为 Agentlet 内部执行 API，并保持普通响应或 SSE stream。
+解析 endpoint，把执行所需的 Agent、Environment 和 Session Control State 组成 `WorkSpec` 快照，再把
+公开请求转换为 Agentlet 内部执行 API，并保持普通响应或 SSE stream。
 
 ```text
-Session ID → Assignment → Worker → fresh endpoint → Agentlet internal API
+Session ID → Assignment → Worker → fresh endpoint → ensure WorkSpec → Agentlet internal API
 ```
 
 endpoint 是一次解析结果，不是持久化 identity。Connector 不选择 Worker、不修改 Assignment、
@@ -221,5 +222,7 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 Helm 部署形态、Worker 双容器模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
-当前代码已实现 Observer、Scheduler 和 Assignment；Lifecycler、Kubernetes Provisioner 与 Connector
-是接下来的实现边界。文档中的 phase 与弹性流程描述目标契约，不代表尚未接通的运行能力。
+当前运行路径可以把公开 Managed Agents Event API 分配并转发到已经被 Observer 发现的 Ready Worker，
+同时把 Agentlet 的 ResumePoint 按 Assignment fence 条件写回 Control State。Lifecycler 和 Kubernetes
+Provisioner 尚未接入 agentd 进程，因此容量自动供给、Assignment 释放和跨 Worker 恢复仍不是已接通
+能力；文档中的 phase 与弹性流程描述其稳定契约。

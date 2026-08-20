@@ -161,6 +161,7 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
+	value = s.syncSession(ctx, value)
 	agent, err := s.service.GetAgent(ctx, value.AgentID)
 	if err != nil {
 		s.writeError(request, err)
@@ -193,6 +194,10 @@ func (s *Server) writeError(request *hertzapp.RequestContext, err error) {
 	switch {
 	case errors.Is(err, repo.ErrNotFound):
 		status, errorType = consts.StatusNotFound, "not_found_error"
+	case errors.Is(err, service.ErrNoCapacity), errors.Is(err, service.ErrUnavailable):
+		status, errorType = consts.StatusServiceUnavailable, "overloaded_error"
+	case errors.Is(err, service.ErrNoAssignment):
+		status, errorType = consts.StatusConflict, "invalid_request_error"
 	case errors.Is(err, service.ErrUnsupported):
 		status, errorType = consts.StatusBadRequest, "unsupported_feature"
 	case errors.Is(err, service.ErrInvalid), errors.Is(err, service.ErrConflict):

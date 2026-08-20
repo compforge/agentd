@@ -11,6 +11,7 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
+	"github.com/compforge/agentd/agentd/internal/connector"
 	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
 	"github.com/compforge/agentd/agentd/internal/observer"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
@@ -43,16 +44,30 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	agentletConnector, err := connector.New(connector.Config{
+		RequestTimeout:        config.connectorRequestTimeout,
+		DialTimeout:           config.connectorDialTimeout,
+		ResponseHeaderTimeout: config.connectorHeaderTimeout,
+		IdleConnTimeout:       config.connectorIdleConnTimeout,
+		MaxIdleConns:          config.connectorMaxIdleConns,
+		MaxIdleConnsPerHost:   config.connectorMaxIdleConnsPerHost,
+	})
+	if err != nil {
+		return err
+	}
+	defer agentletConnector.CloseIdleConnections()
 
 	httpServer := hertzserver.Default(
 		hertzserver.WithHostPorts(config.address),
 		hertzserver.WithTransport(standard.NewTransporter),
 		hertzserver.WithReadTimeout(config.readTimeout),
-		hertzserver.WithWriteTimeout(config.writeTimeout),
+		// SSE responses inherit their lifetime from the client context.
+		hertzserver.WithWriteTimeout(0),
 		hertzserver.WithIdleTimeout(config.idleTimeout),
 		hertzserver.WithMaxRequestBodySize(1<<20),
+		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(controlService, logger).Register(httpServer.Engine)
+	api.New(controlService, agentletConnector, logger).Register(httpServer.Engine)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

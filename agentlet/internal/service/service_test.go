@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentlet/internal/harness"
+	"github.com/compforge/agentd/internal/executionapi"
 )
 
 func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
@@ -29,6 +31,57 @@ func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
 	}
 	if len(stored) != 1 {
 		t.Fatalf("stored events = %d, want 1", len(stored))
+	}
+}
+
+func TestApplyWorkSpecCachesSnapshotAndEnforcesAssignmentFence(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	application := New(repository, NewEventLog(agentledger.NewMemoryEventStore()), recordingHarness{})
+	now := time.Now().UTC()
+	spec := executionapi.WorkSpec{
+		AssignmentID: "assignment-1",
+		WorkerID:     "worker-1",
+		Session: executionapi.SessionSnapshot{
+			ID: "session-1", EnvironmentID: "env-1", Status: "rescheduling",
+			Harness: "recording", HarnessVersion: "test", CreatedAt: now, UpdatedAt: now,
+		},
+		Agent: executionapi.AgentSnapshot{
+			ID: "agent-1", Name: "test", ModelID: "model-1", Version: 1,
+		},
+		Environment: executionapi.EnvironmentSnapshot{
+			ID: "env-1", Config: map[string]any{"type": "cloud"},
+		},
+	}
+
+	session, err := application.ApplyWorkSpec(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Control.AssignmentID != "assignment-1" || session.Control.WorkerID != "worker-1" ||
+		session.Control.ResumeRef != "recording/session-1" {
+		t.Fatalf("cached Session = %#v", session)
+	}
+	if err := application.ValidateAssignment(ctx, "session-1", "worker-1", "assignment-1"); err != nil {
+		t.Fatalf("validate current Assignment: %v", err)
+	}
+	if err := application.ValidateAssignment(ctx, "session-1", "worker-1", "stale"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("validate stale Assignment error = %v, want ErrConflict", err)
+	}
+
+	session.Control.Status = "idle"
+	session.Control.ResumeRef = "checkpoint-7"
+	session.Control.ResumeRevision = 7
+	if err := repository.PutSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := application.ApplyWorkSpec(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.Control.Status != "idle" || repeated.Control.ResumeRef != "checkpoint-7" ||
+		repeated.Control.ResumeRevision != 7 {
+		t.Fatalf("idempotent WorkSpec rewound local state = %#v", repeated.Control)
 	}
 }
 

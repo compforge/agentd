@@ -7,16 +7,18 @@ import (
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
+	"github.com/compforge/agentd/agentd/internal/connector"
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 type Server struct {
-	service *service.Service
-	logger  *slog.Logger
+	service   *service.Service
+	connector *connector.Client
+	logger    *slog.Logger
 }
 
-func New(controlService *service.Service, logger *slog.Logger) *Server {
-	return &Server{service: controlService, logger: logger}
+func New(controlService *service.Service, agentletConnector *connector.Client, logger *slog.Logger) *Server {
+	return &Server{service: controlService, connector: agentletConnector, logger: logger}
 }
 
 func (s *Server) Register(engine *route.Engine) {
@@ -32,4 +34,7 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.POST("/v1/sessions", s.createSession)
 	engine.GET("/v1/sessions", s.listSessions)
 	engine.GET("/v1/sessions/:session_id", s.getSession)
+	engine.POST("/v1/sessions/:session_id/events", s.sendEvents)
+	engine.GET("/v1/sessions/:session_id/events", s.listEvents)
+	engine.GET("/v1/sessions/:session_id/events/stream", s.streamEvents)
 }

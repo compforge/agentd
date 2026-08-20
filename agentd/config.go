@@ -12,29 +12,34 @@ import (
 const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 type config struct {
-	address               string
-	mysqlDSN              string
-	sqlitePath            string
-	maxOpenConns          int
-	maxIdleConns          int
-	connMaxLifetime       time.Duration
-	storageTimeout        time.Duration
-	observationTimeout    time.Duration
-	workerSource          string
-	workerNamespace       string
-	workerSelector        string
-	workerPort            int
-	workerCapacity        int
-	workerMinIdle         int
-	workerIdleTTL         time.Duration
-	workerCreateBatchSize int
-	workerPodTemplateFile string
-	observerInterval      time.Duration
-	observerTimeout       time.Duration
-	readTimeout           time.Duration
-	writeTimeout          time.Duration
-	idleTimeout           time.Duration
-	shutdownTimeout       time.Duration
+	address                      string
+	mysqlDSN                     string
+	sqlitePath                   string
+	maxOpenConns                 int
+	maxIdleConns                 int
+	connMaxLifetime              time.Duration
+	storageTimeout               time.Duration
+	observationTimeout           time.Duration
+	workerSource                 string
+	workerNamespace              string
+	workerSelector               string
+	workerPort                   int
+	workerCapacity               int
+	workerMinIdle                int
+	workerIdleTTL                time.Duration
+	workerCreateBatchSize        int
+	workerPodTemplateFile        string
+	observerInterval             time.Duration
+	observerTimeout              time.Duration
+	connectorRequestTimeout      time.Duration
+	connectorDialTimeout         time.Duration
+	connectorHeaderTimeout       time.Duration
+	connectorIdleConnTimeout     time.Duration
+	connectorMaxIdleConns        int
+	connectorMaxIdleConnsPerHost int
+	readTimeout                  time.Duration
+	idleTimeout                  time.Duration
+	shutdownTimeout              time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -44,29 +49,34 @@ func loadConfig() (config, error) {
 		workerSource = "kubernetes"
 	}
 	value := config{
-		address:               envOr("AGENTD_CONTROL_ADDRESS", "0.0.0.0:8020"),
-		mysqlDSN:              os.Getenv("AGENTD_MYSQL_DSN"),
-		sqlitePath:            envOr("AGENTD_SQLITE_PATH", "agentd.db"),
-		maxOpenConns:          32,
-		maxIdleConns:          8,
-		connMaxLifetime:       30 * time.Minute,
-		storageTimeout:        5 * time.Second,
-		observationTimeout:    15 * time.Second,
-		workerSource:          envOr("AGENTD_WORKER_SOURCE", workerSource),
-		workerNamespace:       envOr("AGENTD_WORKER_NAMESPACE", envOr("POD_NAMESPACE", inClusterNamespace)),
-		workerSelector:        envOr("AGENTD_WORKER_LABEL_SELECTOR", "app.kubernetes.io/name=agentlet"),
-		workerPort:            8019,
-		workerCapacity:        1,
-		workerMinIdle:         0,
-		workerIdleTTL:         10 * time.Minute,
-		workerCreateBatchSize: 2,
-		workerPodTemplateFile: envOr("AGENTD_WORKER_POD_TEMPLATE_FILE", "/etc/agentd/worker-template/pod-template.yaml"),
-		observerInterval:      5 * time.Second,
-		observerTimeout:       5 * time.Second,
-		readTimeout:           30 * time.Second,
-		writeTimeout:          30 * time.Second,
-		idleTimeout:           2 * time.Minute,
-		shutdownTimeout:       15 * time.Second,
+		address:                      envOr("AGENTD_CONTROL_ADDRESS", "0.0.0.0:8020"),
+		mysqlDSN:                     os.Getenv("AGENTD_MYSQL_DSN"),
+		sqlitePath:                   envOr("AGENTD_SQLITE_PATH", "agentd.db"),
+		maxOpenConns:                 32,
+		maxIdleConns:                 8,
+		connMaxLifetime:              30 * time.Minute,
+		storageTimeout:               5 * time.Second,
+		observationTimeout:           15 * time.Second,
+		workerSource:                 envOr("AGENTD_WORKER_SOURCE", workerSource),
+		workerNamespace:              envOr("AGENTD_WORKER_NAMESPACE", envOr("POD_NAMESPACE", inClusterNamespace)),
+		workerSelector:               envOr("AGENTD_WORKER_LABEL_SELECTOR", "app.kubernetes.io/name=agentlet"),
+		workerPort:                   8019,
+		workerCapacity:               1,
+		workerMinIdle:                0,
+		workerIdleTTL:                10 * time.Minute,
+		workerCreateBatchSize:        2,
+		workerPodTemplateFile:        envOr("AGENTD_WORKER_POD_TEMPLATE_FILE", "/etc/agentd/worker-template/pod-template.yaml"),
+		observerInterval:             5 * time.Second,
+		observerTimeout:              5 * time.Second,
+		connectorRequestTimeout:      30 * time.Second,
+		connectorDialTimeout:         5 * time.Second,
+		connectorHeaderTimeout:       10 * time.Second,
+		connectorIdleConnTimeout:     90 * time.Second,
+		connectorMaxIdleConns:        100,
+		connectorMaxIdleConnsPerHost: 32,
+		readTimeout:                  30 * time.Second,
+		idleTimeout:                  2 * time.Minute,
+		shutdownTimeout:              15 * time.Second,
 	}
 	if value.workerNamespace == "" {
 		value.workerNamespace = "default"
@@ -98,6 +108,16 @@ func loadConfig() (config, error) {
 	); err != nil {
 		return config{}, err
 	}
+	if value.connectorMaxIdleConns, err = positiveIntEnv(
+		"AGENTD_CONNECTOR_MAX_IDLE_CONNS", value.connectorMaxIdleConns,
+	); err != nil {
+		return config{}, err
+	}
+	if value.connectorMaxIdleConnsPerHost, err = positiveIntEnv(
+		"AGENTD_CONNECTOR_MAX_IDLE_CONNS_PER_HOST", value.connectorMaxIdleConnsPerHost,
+	); err != nil {
+		return config{}, err
+	}
 	durations := []struct {
 		name  string
 		value *time.Duration
@@ -108,8 +128,11 @@ func loadConfig() (config, error) {
 		{"AGENTD_WORKER_OBSERVER_INTERVAL", &value.observerInterval},
 		{"AGENTD_WORKER_OBSERVER_REQUEST_TIMEOUT", &value.observerTimeout},
 		{"AGENTD_WORKER_IDLE_TTL", &value.workerIdleTTL},
+		{"AGENTD_CONNECTOR_REQUEST_TIMEOUT", &value.connectorRequestTimeout},
+		{"AGENTD_CONNECTOR_DIAL_TIMEOUT", &value.connectorDialTimeout},
+		{"AGENTD_CONNECTOR_RESPONSE_HEADER_TIMEOUT", &value.connectorHeaderTimeout},
+		{"AGENTD_CONNECTOR_IDLE_CONN_TIMEOUT", &value.connectorIdleConnTimeout},
 		{"AGENTD_HTTP_READ_TIMEOUT", &value.readTimeout},
-		{"AGENTD_HTTP_WRITE_TIMEOUT", &value.writeTimeout},
 		{"AGENTD_HTTP_IDLE_TIMEOUT", &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", &value.shutdownTimeout},
 	}

@@ -82,7 +82,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(executionService, logger).Register(httpServer.Engine)
+	api.New(executionService, logger, api.WithWorkerID(config.workerID)).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("agentlet listening", "address", config.address, "storage_provider", storage.Provider,
@@ -116,6 +116,7 @@ func Run(logger *slog.Logger) error {
 
 type config struct {
 	address                string
+	workerID               string
 	mysqlDSN               string
 	sqlitePath             string
 	mysqlMaxOpenConns      int
@@ -137,6 +138,7 @@ type config struct {
 func loadConfig() (config, error) {
 	value := config{
 		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8019"),
+		workerID:             os.Getenv("AGENTD_WORKER_ID"),
 		mysqlDSN:             os.Getenv("AGENTD_MYSQL_DSN"),
 		sqlitePath:           envOr("AGENTD_SQLITE_PATH", "agentlet.db"),
 		mysqlMaxOpenConns:    32,
