@@ -137,6 +137,11 @@ Agent Ledger 仓库可以继续提供 Bolt 等独立 EventStore 实现，但它�
 event ID 与已覆盖 cursor 识别不完整窗口，并以恢复时对账收敛。Trace 和日志只用于诊断，不能充当
 任何一个数据面的权威存储。
 
+单实例 agentd 持续对账已持久化但尚未处理的用户输入。Worker 因短暂存储错误退出时，输入仍保留在
+Ledger，Control State 进入 `rescheduling`；周期性 reconciler 在确认该 Session 没有活跃 Worker 后
+重新拉起执行。控制事件和输出使用稳定 Event ID，因此重复对账不会产生重复投影。这个机制解决单进程
+内部的遗漏唤醒和瞬时失败，不提供多实例执行所有权。
+
 当前实现面向单 agentd 进程：Harness State 追加已使用 revision 做乐观并发检查，Control State
 记录 revision，但多实例所需的数据库条件更新、lease 和 fencing 尚未实现。
 

@@ -61,13 +61,11 @@ export AGENTD_TEST_MODEL='your-model-id'
 make test-model-integration
 ```
 
-The opt-in live integration check still requires a disposable MySQL database, a running Hostel server,
-and an Anthropic model:
+The opt-in live integration check requires a disposable MySQL database and a running Hostel server.
+It uses a deterministic local Anthropic API stub, so no model credentials are required:
 
 ```bash
 export AGENTD_TEST_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd_test'
 export AGENTD_TEST_HOSTEL_URL='http://127.0.0.1:8080'
-export AGENTD_TEST_MODEL='claude-sonnet-4-6'
-export ANTHROPIC_API_KEY='your-key'
 make test-integration
 ```

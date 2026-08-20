@@ -64,9 +64,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	application := app.New(storage.Resources, app.NewEventLog(storage.Ledger), agentHarness)
-	if err := application.Recover(processCtx); err != nil {
-		return fmt.Errorf("recover sessions: %w", err)
+	application := app.New(
+		storage.Resources,
+		app.NewEventLog(storage.Ledger),
+		agentHarness,
+		app.WithLogger(logger),
+		app.WithReconcileInterval(config.reconcileInterval),
+	)
+	if err := application.Start(processCtx); err != nil {
+		return err
 	}
 
 	httpServer := hertzserver.Default(
@@ -128,6 +134,7 @@ type config struct {
 	readTimeout            time.Duration
 	idleTimeout            time.Duration
 	shutdownTimeout        time.Duration
+	reconcileInterval      time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -164,6 +171,7 @@ func loadConfig() (config, error) {
 		{"AGENTD_HTTP_READ_TIMEOUT", 30 * time.Second, &value.readTimeout},
 		{"AGENTD_HTTP_IDLE_TIMEOUT", 2 * time.Minute, &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", 15 * time.Second, &value.shutdownTimeout},
+		{"AGENTD_RECONCILE_INTERVAL", 5 * time.Second, &value.reconcileInterval},
 		{"AGENTD_STORAGE_OPERATION_TIMEOUT", 5 * time.Second, &value.storageTimeout},
 		{"AGENTD_MYSQL_CONN_MAX_LIFETIME", 30 * time.Minute, &value.mysqlConnMaxLifetime},
 	}

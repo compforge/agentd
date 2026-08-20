@@ -145,9 +145,11 @@ func (c *Client) Run(ctx context.Context, bedID string, command sandbox.Command)
 			continue
 		}
 		var event struct {
-			Type   string `json:"type"`
-			Text   string `json:"text"`
-			Result *struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			ExitCode *int   `json:"exit_code"`
+			Error    string `json:"error"`
+			Result   *struct {
 				Process struct {
 					Kind     string `json:"kind"`
 					ExitCode *int   `json:"exit_code"`
@@ -172,6 +174,12 @@ func (c *Client) Run(ctx context.Context, bedID string, command sandbox.Command)
 					result.Error = event.Result.Process.Error
 				}
 			}
+		case "execution_complete":
+			if event.ExitCode != nil {
+				result.ExitCode = *event.ExitCode
+				result.Cause = "exited"
+			}
+			result.Error = event.Error
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -380,12 +388,13 @@ func bedReady(response *http.Response) (bool, error) {
 		Readiness struct {
 			Ready bool `json:"ready"`
 		} `json:"readiness"`
-		Ready bool `json:"ready"`
+		Ready bool   `json:"ready"`
+		State string `json:"state"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return false, fmt.Errorf("decode hostel bed: %w", err)
 	}
-	return payload.Ready || payload.Readiness.Ready, nil
+	return payload.Ready || payload.Readiness.Ready || payload.State == "active", nil
 }
 
 func responseError(operation string, response *http.Response) error {
