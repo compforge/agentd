@@ -331,13 +331,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		}
 		if current.Control.Status == "idle" && current.Control.ResumeRef == "checkpoint-7" &&
 			current.Control.ResumeRevision == 7 && len(pending) == 0 {
-			activeWorkers := 0
-			for _, snapshot := range recovered.works.Snapshots() {
-				if snapshot.Active {
-					activeWorkers++
-				}
-			}
-			if activeWorkers == 0 {
+			if len(recovered.works.Snapshots()) == 0 {
 				break
 			}
 		}
@@ -350,6 +344,13 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 			)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	state, err := recovered.ExecutionState(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("read settled Session after Work eviction: %v", err)
+	}
+	if state.Status != "idle" || state.ResumeRef != "checkpoint-7" || state.ResumeRevision != 7 {
+		t.Fatalf("settled execution state = %#v", state)
 	}
 }
 

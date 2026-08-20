@@ -6,7 +6,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/compforge/agentd/agentd/internal/k8s"
+	"github.com/compforge/agentd/agentd/internal/worker/k8s"
 )
 
 type WorkerSnapshot struct {

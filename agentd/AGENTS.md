@@ -26,12 +26,19 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
 │   │   ├── api/               # Control Plane HTTP 适配
-│   │   ├── service/           # 控制面事务与 Session placement 编排
 │   │   ├── model/             # Worker、Session 与 Assignment 领域模型
 │   │   ├── repo/              # Repository 契约及 GORM 实现、表映射与 resource lock
-│   │   ├── k8s/               # Kubernetes Client 与 PodSnapshot substrate
-│   │   ├── observer/          # 周期拉取 Worker Pod 事实并持久化 observation
-│   │   ├── scheduler/         # 无 I/O 的 Session → Worker placement 策略
+│   │   ├── service/           # 跨 Session/Worker 的控制面事务与状态投影
+│   │   ├── session/
+│   │   │   ├── connector/     # 已分配 Session 的 Agentlet 数据面
+│   │   │   ├── observer/      # 只读 Agentlet 状态并持久化 Session observation
+│   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
+│   │   └── worker/
+│   │       ├── controllers.go # Worker 控制环组合与启动
+│   │       ├── observer/      # 周期拉取 Worker Pod 事实并持久化 observation
+│   │       ├── lifecycle/     # Worker 供给和 lifecycle phase 收敛
+│   │       ├── gc/            # Pod 与终态记录的独立回收
+│   │       └── k8s/           # Kubernetes Client 与 PodSnapshot substrate
 │   └── docs/
 │       ├── kernel.md          # 稳定定位、核心模型、API 与组件主流程
 │       ├── agentd.md          # Control Plane、Worker 弹性、调度、转发与 Control State
@@ -61,9 +68,9 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Adapter 的 write-before-execute 边界。
 3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、容量和当前绑定
    Session 数调度；Agentlet 不主动注册或发心跳。
-4. Worker Observer 是运行事实的唯一写入者，Scheduler 只做无 I/O 的 placement，Lifecycler 管理
-   Worker 供给，Connector 只转发已分配流量；Kubernetes 管理已创建 Pod 的健壮性，SRE 管理 workload
-   模板和集群容量。
+4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
+   Control State 中的 observation、Assignment 和容量做无 I/O placement，不访问 Kubernetes 或
+   Agentlet。Lifecycler 管理 Worker 供给，Connector 只转发已分配流量。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。

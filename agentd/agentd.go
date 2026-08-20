@@ -11,10 +11,12 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
-	"github.com/compforge/agentd/agentd/internal/connector"
-	controlgc "github.com/compforge/agentd/agentd/internal/gc"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	control "github.com/compforge/agentd/agentd/internal/service"
+	"github.com/compforge/agentd/agentd/internal/session/connector"
+	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	"github.com/compforge/agentd/agentd/internal/worker"
+	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	gormsqlite "gorm.io/driver/sqlite"
@@ -43,20 +45,28 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	workerControllers, err := buildWorkerControllers(config, database, repository, logger)
+	workerControllers, err := worker.New(worker.Config{
+		Source: config.workerSource, Namespace: config.workerNamespace, Selector: config.workerSelector,
+		Port: config.workerPort, Capacity: config.workerCapacity, MinIdle: config.workerMinIdle,
+		IdleTTL: config.workerIdleTTL, CreateBatchSize: config.workerCreateBatchSize,
+		PodTemplateFile: config.workerPodTemplateFile, LifecyclerInterval: config.workerLifecyclerInterval,
+		ControllerTimeout: config.workerControllerTimeout, ControllerLeaseTTL: config.workerControllerLeaseTTL,
+		GCInterval: config.workerGCInterval, GCDeleteBatchSize: config.workerGCDeleteBatchSize,
+		ObserverInterval: config.observerInterval, ObserverTimeout: config.observerTimeout,
+	}, database, repository, logger)
 	if err != nil {
 		return err
 	}
 	var demandNotifier control.DemandNotifier
 	if workerControllers != nil {
-		demandNotifier = workerControllers.lifecycler
+		demandNotifier = workerControllers
 	}
 	controlService, err := control.New(repository, config.observationTimeout, demandNotifier)
 	if err != nil {
 		return err
 	}
 	if workerControllers != nil {
-		if err := workerControllers.attachObserver(config, controlService, logger); err != nil {
+		if err := workerControllers.AttachObserver(controlService); err != nil {
 			return err
 		}
 	}
@@ -72,6 +82,17 @@ func Run(logger *slog.Logger) error {
 		return err
 	}
 	defer agentletConnector.CloseIdleConnections()
+	sessionSource, err := sessionobserver.NewAgentletSource(controlService, agentletConnector)
+	if err != nil {
+		return err
+	}
+	sessionObserver, err := sessionobserver.New(sessionSource, controlService, sessionobserver.Config{
+		Interval: config.sessionObserverInterval, RequestTimeout: config.sessionObserverTimeout,
+		Concurrency: config.sessionObserverConcurrency, Logger: logger,
+	})
+	if err != nil {
+		return err
+	}
 
 	httpServer := hertzserver.Default(
 		hertzserver.WithHostPorts(config.address),
@@ -95,6 +116,7 @@ func Run(logger *slog.Logger) error {
 	if workerControllers != nil {
 		workerControllers.Run(processCtx)
 	}
+	go sessionObserver.Run(processCtx)
 	go recordGC.Run(processCtx)
 	select {
 	case err := <-serveErr:

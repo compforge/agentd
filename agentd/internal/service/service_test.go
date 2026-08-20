@@ -11,7 +11,6 @@ import (
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	"github.com/compforge/agentd/agentd/internal/service"
-	"github.com/compforge/agentd/internal/executionapi"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -203,7 +202,7 @@ func TestPrepareExecutionBuildsAssignedWorkSnapshot(t *testing.T) {
 	}
 }
 
-func TestObserveExecutionStateUsesAssignmentFenceAndMonotonicResumeRevision(t *testing.T) {
+func TestObserveSessionUsesAssignmentFenceAndMonotonicResumeRevision(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -214,8 +213,9 @@ func TestObserveExecutionStateUsesAssignmentFenceAndMonotonicResumeRevision(t *t
 		t.Fatal(err)
 	}
 
-	observed, err := application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
-		AssignmentID: "assignment-1", Status: "running", ResumeRef: "checkpoint-0",
+	observed, err := application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(time.Second), AssignmentID: "assignment-1", Exists: true,
+		Status: model.SessionStatusRunning, ResumeRef: "checkpoint-0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -225,19 +225,32 @@ func TestObserveExecutionStateUsesAssignmentFenceAndMonotonicResumeRevision(t *t
 		t.Fatalf("initial observed state = %#v", observed)
 	}
 
-	observed, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
-		AssignmentID: "assignment-1", Status: "idle", ResumeRef: "checkpoint-7", ResumeRevision: 7,
+	observed, err = application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(2 * time.Second), AssignmentID: "assignment-1", Exists: true,
+		Status: model.SessionStatusRunning, ResumeRef: "checkpoint-7", ResumeRevision: 7,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.Status != model.SessionStatusIdle || observed.ResumeRef != "checkpoint-7" ||
+	if observed.Status != model.SessionStatusRunning || observed.ResumeRef != "checkpoint-7" ||
 		observed.ResumeRevision != 7 || observed.Revision != 2 {
 		t.Fatalf("advanced observed state = %#v", observed)
 	}
 
-	observed, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
-		AssignmentID: "assignment-1", Status: "idle", ResumeRef: "checkpoint-3", ResumeRevision: 3,
+	observed, err = application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(1500 * time.Millisecond), AssignmentID: "assignment-1", Exists: true,
+		Status: model.SessionStatusRunning, ResumeRef: "checkpoint-9", ResumeRevision: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.ResumeRef != "checkpoint-7" || observed.ResumeRevision != 7 || observed.Revision != 2 {
+		t.Fatalf("older observation replaced current facts = %#v", observed)
+	}
+
+	observed, err = application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(3 * time.Second), AssignmentID: "assignment-1", Exists: true,
+		Status: model.SessionStatusRunning, ResumeRef: "checkpoint-3", ResumeRevision: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -246,11 +259,69 @@ func TestObserveExecutionStateUsesAssignmentFenceAndMonotonicResumeRevision(t *t
 		t.Fatalf("resume state rewound = %#v", observed)
 	}
 
-	_, err = application.ObserveExecutionState(ctx, "session-1", executionapi.SessionState{
-		AssignmentID: "stale-assignment", Status: "idle", ResumeRevision: 8,
+	observed, err = application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(4 * time.Second), AssignmentID: "assignment-1", Exists: true,
+		Status: model.SessionStatusIdle, ResumeRef: "checkpoint-7", ResumeRevision: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Status != model.SessionStatusIdle || observed.AssignmentID != "" || observed.WorkerID != "" ||
+		observed.Revision != 3 {
+		t.Fatalf("released observed state = %#v", observed)
+	}
+
+	_, err = application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(5 * time.Second), AssignmentID: "stale-assignment", Exists: true,
+		Status: model.SessionStatusIdle, ResumeRevision: 8,
 	})
 	if !errors.Is(err, service.ErrConflict) {
 		t.Fatalf("stale Assignment error = %v, want ErrConflict", err)
+	}
+}
+
+func TestIdleSessionReleasesWorkerOnlyAfterLastActiveAssignment(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := repository.PutWorker(ctx, model.Worker{
+		ID: "worker-1", Name: "worker-1", Capacity: 2, Phase: model.WorkerPhaseActive,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"session-1", "session-2"} {
+		if err := repository.PutSession(ctx, model.Session{
+			ID: id, Status: model.SessionStatusRunning, AssignmentID: "assignment-" + id,
+			WorkerID: "worker-1", AssignedAt: &now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observeIdle := func(id string, offset time.Duration) {
+		t.Helper()
+		if _, err := application.ObserveSession(ctx, id, model.SessionObserverStatus{
+			ObservedAt: now.Add(offset), AssignmentID: "assignment-" + id,
+			Exists: true, Status: model.SessionStatusIdle,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observeIdle("session-1", time.Second)
+	worker, err := repository.GetWorker(ctx, "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker.IdleSince != nil {
+		t.Fatalf("Worker became idle while one Session remained assigned: %#v", worker)
+	}
+	observeIdle("session-2", 2*time.Second)
+	worker, err = repository.GetWorker(ctx, "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker.IdleSince == nil {
+		t.Fatalf("Worker did not become idle after its last Session released: %#v", worker)
 	}
 }
 

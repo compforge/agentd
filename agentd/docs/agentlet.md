@@ -112,6 +112,8 @@ Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不�
   Agentlet 的本地 admission 与控制面的 Session binding 使用同一口径。
 - 同一 Assignment 的重复唤醒合并为后续执行 pass。新的 Assignment 只能替换 inactive Work，不能让
   迟到请求覆盖正在执行的 runtime。
+- 一次执行 settle 后，Agentlet 释放进程内 Work reservation；Session、Event 和 ResumeRef 仍在持久层，
+  因而状态观察不需要重新创建 Work，也不会让已完成的 Assignment 继续占用本地容量。
 - 一个 Agentlet 可以在容量边界内执行多个 Work；容量归 Assignment 计数，不由 Agentlet
   heartbeat 上报。
 - Kubernetes 负责容器重启和 Pod 替换；不设计 Agentlet 原地恢复同一个 Worker identity。

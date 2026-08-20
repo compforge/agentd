@@ -431,6 +431,11 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 				return
 			}
 			if !keepRunning {
+				if err := resident.Stop(assignmentID); err != nil {
+					a.logger.Warn("stop terminal Session Work", "session_id", sessionID, "error", err)
+				}
+				a.evictInactiveWork(sessionID, assignmentID)
+				finished = true
 				return
 			}
 			continue
@@ -439,8 +444,20 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 			continue
 		}
 		finished = true
+		a.evictInactiveWork(sessionID, assignmentID)
 		return
 	}
+}
+
+func (a *Service) evictInactiveWork(sessionID, assignmentID string) {
+	err := a.works.Delete(sessionID, assignmentID)
+	// A concurrent wake or replacement owns the resident Work now; leaving it
+	// in place is the correct outcome, not a cleanup failure.
+	if err == nil || errors.Is(err, sessionwork.ErrNotFound) ||
+		errors.Is(err, sessionwork.ErrActive) || errors.Is(err, sessionwork.ErrAssignmentConflict) {
+		return
+	}
+	a.logger.Warn("release inactive Session Work", "session_id", sessionID, "error", err)
 }
 
 func translateWorkError(sessionID string, err error) error {

@@ -161,7 +161,6 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	value = s.syncSession(ctx, value)
 	agent, err := s.service.GetAgent(ctx, value.AgentID)
 	if err != nil {
 		s.writeError(request, err)

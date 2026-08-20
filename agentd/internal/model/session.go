@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type SessionStatus string
 
@@ -27,11 +30,24 @@ type Session struct {
 	HarnessVersion string
 	ResumeRef      string
 	ResumeRevision int64
+	ObserverStatus json.RawMessage
 	AssignmentID   string
 	WorkerID       string
 	AssignedAt     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// SessionObserverStatus is the latest Agentlet fact for one Assignment. The
+// AssignmentID is part of the observation so a delayed response cannot be
+// mistaken for the state of a replacement Work.
+type SessionObserverStatus struct {
+	ObservedAt     time.Time     `json:"observed_at"`
+	AssignmentID   string        `json:"assignment_id"`
+	Exists         bool          `json:"exists"`
+	Status         SessionStatus `json:"status,omitempty"`
+	ResumeRef      string        `json:"resume_ref,omitempty"`
+	ResumeRevision int64         `json:"resume_revision"`
 }
 
 // Assignment is the current execution ownership of one managed Session. It is
