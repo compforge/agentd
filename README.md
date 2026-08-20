@@ -1,5 +1,10 @@
 # agentd
 
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 `agentd` is a managed agent server built with [AgentGo](https://github.com/compforge/agentgo) and
 [Agent Ledger](https://github.com/compforge/agent-ledger), with a pluggable Sandbox Engine.
 
@@ -11,12 +16,31 @@ API and manages assigned harness runtimes.
 
 ## Core capabilities
 
-- reusable, versioned agent definitions;
-- a pluggable Sandbox Engine, with one isolated sandbox for each session;
-- asynchronous session input with persisted event history and SSE output;
-- durable Harness State plus write-before-execute model/tool records through Agent Ledger;
-- recovery of an AgentGo session after the Agentlet process is replaced;
-- Worker observation and capacity-aware Session Assignment.
+- Keep long-running work alive beyond a single process or model context window. A session and its
+  history remain available when execution waits, stops, or moves elsewhere.
+- Accept work asynchronously and stream progress and results as events, without tying the client's
+  connection to the lifetime of an execution process.
+- Provision execution capacity when it is needed, place sessions across available workers, and
+  release idle compute without losing the session's identity.
+- Run model-generated code in an isolated environment, separated from the control plane and its
+  credentials.
+- Preserve inputs, outputs, tool actions, checkpoints, and failures for recovery, audit, and
+  trajectory analysis.
+- Replace the agent harness or sandbox implementation behind stable interfaces as models and
+  infrastructure evolve.
+
+## Architecture
+
+![agentd managed agent architecture](agentd/docs/architecture.svg)
+
+`agentd` owns the public API, durable managed-agent identity, and control state. It schedules each
+Session onto an elastic Worker and routes execution through the Connector. A Worker is Agentlet's
+workload form; on Kubernetes it is a Pod containing Agentlet and a Sandbox Engine sidecar.
+
+Agentlet drives the selected Harness—AgentGo is the first implementation—while the Sandbox Engine
+provides isolated tool execution. Checkpoints and append-only execution facts are persisted through
+Agent Ledger, so a Session can release its Worker and later resume on another one without making
+the control plane understand Harness-native state.
 
 ## Quick start
 
@@ -59,37 +83,3 @@ defined in [`agentd/docs/harness.md`](agentd/docs/harness.md). Sandbox capabilit
 boundaries are defined in [`agentd/docs/sandbox-engine.md`](agentd/docs/sandbox-engine.md).
 The target Helm topology and Worker elasticity model are described in
 [`deploy/k8s/README.md`](deploy/k8s/README.md).
-
-## Development
-
-```bash
-make fix
-make lint
-make test
-make test-e2e
-make build
-```
-
-`make test-e2e` explicitly enables the `tests/e2e` suite. The local cases run the Claude SDK against
-a real Hertz server and SQLite-backed Control State, Harness State, and Ledger stores. They cover
-process replacement plus successful and interrupted model streams through a deterministic local
-Anthropic API server, so they need no external services. See
-[`agentlet/tests/e2e`](agentlet/tests/e2e).
-
-An opt-in real-model check uses the same SQLite-backed server path without requiring MySQL or an external Sandbox Engine:
-
-```bash
-export ANTHROPIC_API_KEY='your-key'
-export ANTHROPIC_BASE_URL='https://your-anthropic-compatible-endpoint'
-export AGENTD_TEST_MODEL='your-model-id'
-make test-model-integration
-```
-
-The opt-in live integration check requires a disposable MySQL database and a running Sandbox Engine.
-It uses a deterministic local Anthropic API stub, so no model credentials are required:
-
-```bash
-export AGENTD_TEST_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd_test'
-export AGENTD_TEST_SANDBOX_ENDPOINT='http://127.0.0.1:8080'
-make test-integration
-```
