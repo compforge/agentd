@@ -14,10 +14,10 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentlet/internal/api"
-	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/persistence"
 	"github.com/compforge/agentd/agentlet/internal/sandbox"
+	"github.com/compforge/agentd/agentlet/internal/service"
 )
 
 // Run starts the Agentlet execution service and blocks until it stops.
@@ -61,14 +61,14 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	application := app.New(
-		storage.Resources,
-		app.NewEventLog(storage.Ledger),
+	executionService := service.New(
+		service.NewMemoryRepository(),
+		service.NewEventLog(storage.Ledger),
 		agentHarness,
-		app.WithLogger(logger),
-		app.WithReconcileInterval(config.reconcileInterval),
+		service.WithLogger(logger),
+		service.WithReconcileInterval(config.reconcileInterval),
 	)
-	if err := application.Start(processCtx); err != nil {
+	if err := executionService.Start(processCtx); err != nil {
 		return err
 	}
 
@@ -82,7 +82,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(application, logger).Register(httpServer.Engine)
+	api.New(executionService, logger).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("agentlet listening", "address", config.address, "storage_provider", storage.Provider,
@@ -94,7 +94,7 @@ func Run(logger *slog.Logger) error {
 	case err := <-serveErr:
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), config.shutdownTimeout)
 		defer cancel()
-		if shutdownErr := application.Shutdown(shutdownCtx); shutdownErr != nil {
+		if shutdownErr := executionService.Shutdown(shutdownCtx); shutdownErr != nil {
 			logger.Error("session workers did not stop cleanly", "error", shutdownErr)
 		}
 		if err == nil {
@@ -107,7 +107,7 @@ func Run(logger *slog.Logger) error {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shut down HTTP server: %w", err)
 		}
-		if err := application.Shutdown(shutdownCtx); err != nil {
+		if err := executionService.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
 		return nil
@@ -136,7 +136,7 @@ type config struct {
 
 func loadConfig() (config, error) {
 	value := config{
-		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8081"),
+		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8019"),
 		mysqlDSN:             os.Getenv("AGENTD_MYSQL_DSN"),
 		sqlitePath:           envOr("AGENTD_SQLITE_PATH", "agentlet.db"),
 		mysqlMaxOpenConns:    32,

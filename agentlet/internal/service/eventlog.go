@@ -1,4 +1,4 @@
-package app
+package service
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	agentledger "github.com/compforge/agent-ledger/go"
-	"github.com/compforge/agentd/agentlet/internal/execution"
+	"github.com/compforge/agentd/agentlet/internal/harness"
 )
 
 const (
@@ -159,7 +159,7 @@ func (l *EventLog) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 }
 
 func NewManagedEvent(eventType string, fields map[string]any) ManagedEvent {
-	return execution.NewManagedEvent(eventType, fields)
+	return harness.NewManagedEvent(eventType, fields)
 }
 
 // NewTurnEvent gives replayable control events a stable identity. EventLog

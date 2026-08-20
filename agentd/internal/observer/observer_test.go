@@ -37,7 +37,7 @@ func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 		"uid-old": {ID: "uid-old", Name: "old", Capacity: 2},
 	}}
 	controller, err := New(fakeSource{workers: []WorkerSnapshot{{
-		ID: "uid-new", Name: "new", Endpoint: "http://10.0.0.1:8081", Ready: true, Capacity: 4,
+		ID: "uid-new", Name: "new", Endpoint: "http://10.0.0.1:8019", Ready: true, Capacity: 4,
 	}}}, sink, Config{Interval: time.Second, RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)

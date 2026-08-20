@@ -23,9 +23,8 @@ import (
 	agentledger "github.com/compforge/agent-ledger/go"
 	ledgergorm "github.com/compforge/agent-ledger/go/stores/gorm"
 	"github.com/compforge/agentd/agentlet/internal/api"
-	"github.com/compforge/agentd/agentlet/internal/app"
-	"github.com/compforge/agentd/agentlet/internal/execution"
-	"github.com/compforge/agentd/agentlet/internal/store"
+	"github.com/compforge/agentd/agentlet/internal/harness"
+	"github.com/compforge/agentd/agentlet/internal/service"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -33,10 +32,11 @@ import (
 
 func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "agentd-e2e.db")
-	firstBackend := openSQLiteE2EBackend(t, databasePath)
+	resources := service.NewMemoryRepository()
+	firstBackend := openSQLiteE2EBackend(t, databasePath, resources)
 	blockingHarness := newSQLiteRecoveryHarness(firstBackend.checkpoints, true)
-	firstApp := app.New(firstBackend.resources, app.NewEventLog(firstBackend.ledger), blockingHarness)
-	firstServer, firstClient := startSQLiteE2EServer(t, firstApp)
+	firstService := service.New(firstBackend.resources, service.NewEventLog(firstBackend.ledger), blockingHarness)
+	firstServer, firstClient := startSQLiteE2EServer(t, firstService)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -50,14 +50,16 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	firstServer.stop(t)
 	firstBackend.close(t)
 
-	restartedBackend := openSQLiteE2EBackend(t, databasePath)
+	// Agentd owns these resource snapshots and supplies them again when assigning
+	// a Session. This test keeps that upstream state while replacing the Agentlet.
+	restartedBackend := openSQLiteE2EBackend(t, databasePath, resources)
 	t.Cleanup(func() { restartedBackend.close(t) })
 	restartedHarness := newSQLiteRecoveryHarness(restartedBackend.checkpoints, false)
-	restartedApp := app.New(restartedBackend.resources, app.NewEventLog(restartedBackend.ledger), restartedHarness)
-	if err := restartedApp.Recover(ctx); err != nil {
-		t.Fatalf("recover application: %v", err)
+	restartedService := service.New(restartedBackend.resources, service.NewEventLog(restartedBackend.ledger), restartedHarness)
+	if err := restartedService.Recover(ctx); err != nil {
+		t.Fatalf("recover service: %v", err)
 	}
-	_, restartedClient := startSQLiteE2EServer(t, restartedApp)
+	_, restartedClient := startSQLiteE2EServer(t, restartedService)
 
 	waitForSQLiteE2EIdle(t, ctx, restartedClient, session.ID)
 	assertSQLiteE2EEvents(t, ctx, restartedClient, session.ID, 1, 1)
@@ -76,7 +78,7 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 }
 
 type sqliteE2EBackend struct {
-	resources     app.Repository
+	resources     service.Repository
 	ledger        agentledger.EventStore
 	checkpoints   agentledger.CheckpointStore
 	closeOnce     sync.Once
@@ -84,7 +86,7 @@ type sqliteE2EBackend struct {
 	closeDatabase func() error
 }
 
-func openSQLiteE2EBackend(t *testing.T, path string) *sqliteE2EBackend {
+func openSQLiteE2EBackend(t *testing.T, path string, resources service.Repository) *sqliteE2EBackend {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open("file:"+path+"?_busy_timeout=5000"), &gorm.Config{
 		DisableForeignKeyConstraintWhenMigrating: true,
@@ -105,11 +107,6 @@ func openSQLiteE2EBackend(t *testing.T, path string) *sqliteE2EBackend {
 	if err := sqlDatabase.PingContext(pingCtx); err != nil {
 		_ = sqlDatabase.Close()
 		t.Fatalf("ping SQLite E2E database: %v", err)
-	}
-	resources, err := store.NewGORM(database)
-	if err != nil {
-		_ = sqlDatabase.Close()
-		t.Fatal(err)
 	}
 	ledger, err := ledgergorm.New(database, 2*time.Second)
 	if err != nil {
@@ -135,14 +132,14 @@ func (b *sqliteE2EBackend) close(t *testing.T) {
 }
 
 type sqliteE2EServer struct {
-	application *app.App
-	server      *hertzserver.Hertz
-	serveErr    chan error
-	stopOnce    sync.Once
-	stopErr     error
+	service  *service.Service
+	server   *hertzserver.Hertz
+	serveErr chan error
+	stopOnce sync.Once
+	stopErr  error
 }
 
-func startSQLiteE2EServer(t *testing.T, application *app.App) (*sqliteE2EServer, anthropic.Client) {
+func startSQLiteE2EServer(t *testing.T, executionService *service.Service) (*sqliteE2EServer, anthropic.Client) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -158,13 +155,13 @@ func startSQLiteE2EServer(t *testing.T, application *app.App) (*sqliteE2EServer,
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(application, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(server.Engine)
-	running := &sqliteE2EServer{application: application, server: server, serveErr: make(chan error, 1)}
+	api.New(executionService, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(server.Engine)
+	running := &sqliteE2EServer{service: executionService, server: server, serveErr: make(chan error, 1)}
 	go func() { running.serveErr <- server.Run() }()
 	t.Cleanup(func() { running.stop(t) })
 	client := anthropic.NewClient(
 		option.WithAPIKey("test"),
-		option.WithBaseURL("http://"+listener.Addr().String()),
+		option.WithBaseURL("http://"+listener.Addr().String()+"/internal"),
 	)
 	return running, client
 }
@@ -174,10 +171,10 @@ func (s *sqliteE2EServer) stop(t *testing.T) {
 	s.stopOnce.Do(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		appErr := s.application.Shutdown(shutdownCtx)
+		serviceErr := s.service.Shutdown(shutdownCtx)
 		serverErr := s.server.Shutdown(shutdownCtx)
 		<-s.serveErr
-		s.stopErr = errors.Join(appErr, serverErr)
+		s.stopErr = errors.Join(serviceErr, serverErr)
 	})
 	if s.stopErr != nil {
 		t.Fatalf("stop SQLite E2E server: %v", s.stopErr)
@@ -208,20 +205,20 @@ func (*sqliteRecoveryHarness) Name() string { return "sqlite-recovery" }
 
 func (*sqliteRecoveryHarness) Version() string { return "test" }
 
-func (*sqliteRecoveryHarness) PrepareSession(_ context.Context, session execution.Session) (string, error) {
+func (*sqliteRecoveryHarness) PrepareSession(_ context.Context, session harness.Session) (string, error) {
 	return "sqlite-recovery/" + session.ID, nil
 }
 
 func (h *sqliteRecoveryHarness) Run(
 	ctx context.Context,
-	session execution.Session,
-	input execution.TurnInput,
-	emit func(execution.ManagedEvent) error,
-) (execution.TurnResult, error) {
+	session harness.Session,
+	input harness.TurnInput,
+	emit func(harness.ManagedEvent) error,
+) (harness.TurnResult, error) {
 	key := "sqlite-recovery/" + session.ID
 	checkpoint, exists, err := h.loadCheckpoint(ctx, session.ResumeRef, key, session.ResumeRevision)
 	if err != nil {
-		return execution.TurnResult{}, fmt.Errorf("load SQLite E2E harness state: %w", err)
+		return harness.TurnResult{}, fmt.Errorf("load SQLite E2E harness state: %w", err)
 	}
 	revision := int64(0)
 	checkpointID := session.ResumeRef
@@ -231,10 +228,10 @@ func (h *sqliteRecoveryHarness) Run(
 		checkpointID = checkpoint.ID
 		data, err := json.Marshal(checkpoint.State["inputs"])
 		if err != nil {
-			return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
+			return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
 		}
 		if err := json.Unmarshal(data, &inputs); err != nil {
-			return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, fmt.Errorf("decode SQLite E2E harness state: %w", err)
+			return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, fmt.Errorf("decode SQLite E2E harness state: %w", err)
 		}
 	}
 	committed := false
@@ -243,7 +240,7 @@ func (h *sqliteRecoveryHarness) Run(
 	}
 	if !committed {
 		if err := h.ensureActor(ctx); err != nil {
-			return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
+			return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
 		}
 		inputs = append(inputs, sqliteRecoveryInput{ID: input.ID, Text: input.Text})
 		proposed := agentledger.NewCheckpoint(
@@ -251,7 +248,7 @@ func (h *sqliteRecoveryHarness) Run(
 		)
 		record, err := h.state.SaveCheckpoint(ctx, revision, proposed)
 		if err != nil {
-			return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, fmt.Errorf("save SQLite E2E harness checkpoint: %w", err)
+			return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, fmt.Errorf("save SQLite E2E harness checkpoint: %w", err)
 		}
 		revision = record.Revision
 		checkpointID = record.ID
@@ -259,12 +256,12 @@ func (h *sqliteRecoveryHarness) Run(
 	if h.block {
 		h.startedOnce.Do(func() { close(h.started) })
 		<-ctx.Done()
-		return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, ctx.Err()
+		return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, ctx.Err()
 	}
-	err = emit(app.NewTurnEvent(input.ID, "agent.message", map[string]any{
+	err = emit(service.NewTurnEvent(input.ID, "agent.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "echo: " + input.Text}},
 	}))
-	return execution.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
+	return harness.TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, err
 }
 
 func (h *sqliteRecoveryHarness) loadCheckpoint(

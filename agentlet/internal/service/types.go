@@ -1,11 +1,11 @@
-package app
+package service
 
 import (
 	"context"
 	"errors"
 	"time"
 
-	"github.com/compforge/agentd/agentlet/internal/execution"
+	"github.com/compforge/agentd/agentlet/internal/harness"
 	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 )
 
@@ -13,7 +13,7 @@ var (
 	ErrNotFound       = errors.New("resource not found")
 	ErrConflict       = errors.New("resource conflict")
 	ErrUnsupported    = errors.New("unsupported feature")
-	ErrUnsafeRecovery = execution.ErrUnsafeRecovery
+	ErrUnsafeRecovery = harness.ErrUnsafeRecovery
 )
 
 type Agent struct {
@@ -63,16 +63,16 @@ type WorkSpec = sessionwork.Spec
 
 type WorkSnapshot = sessionwork.Snapshot
 
-type TurnInput = execution.TurnInput
+type TurnInput = harness.TurnInput
 
-type TurnResult = execution.TurnResult
+type TurnResult = harness.TurnResult
 
 type IncomingEvent struct {
 	Type    string
 	Content []map[string]any
 }
 
-type ManagedEvent = execution.ManagedEvent
+type ManagedEvent = harness.ManagedEvent
 
 type Repository interface {
 	PutAgent(context.Context, Agent) error
@@ -86,12 +86,12 @@ type Repository interface {
 	ListSessions(context.Context) ([]Session, error)
 }
 
-type Harness = execution.Harness
+type Harness = harness.Harness
 
-func executionSession(session Session) execution.Session {
-	return execution.Session{
+func executionSession(session Session) harness.Session {
+	return harness.Session{
 		ID: session.ID,
-		Agent: execution.Agent{
+		Agent: harness.Agent{
 			ID: session.Agent.ID, ModelID: session.Agent.ModelID, System: session.Agent.System,
 			Tools: session.Agent.Tools, Version: session.Agent.Version,
 		},

@@ -33,8 +33,9 @@ agentd
 
 ## Worker、Session 与 Assignment
 
-Worker 是 agentd 的容量和调度单位，一个 Worker 对应一个 Agentlet Pod。Agentlet 是普通 Kubernetes
-workload，不对应 Node，也不要求每个物理节点运行一个实例。
+Worker 是 Agentlet 在 agentd 调度域里的 workload 形态和运行载体称呼，也是容量与调度单位；当前
+一个 Worker 对应一个 Agentlet Pod。它不是另一种独立服务，也不对应 Kubernetes Node，更不要求
+每个物理节点运行一个实例。
 
 Worker 只持久化稳定身份、`capacity`、lifecycle phase 和 Observer facts：
 
@@ -56,9 +57,9 @@ available = worker.capacity - count(sessions where worker_id = worker.id)
 ```
 
 控制面当前只需要三个持久化主体：`workers` 保存容量与观测事实，`sessions` 保存需求和绑定，
-`resource_locks` 保存多实例短租约。表之间不声明数据库外键，归属一致性由 Application 事务保证。
+`resource_locks` 保存多实例短租约。表之间不声明数据库外键，归属一致性由 Service 事务保证。
 Go 代码中，稳定对象定义在 `internal/model`，持久化契约定义在 `internal/repo/repository.go`，GORM
-表映射和查询放在 `internal/repo/gorm`；`internal/app` 只编排业务事务，不暴露 GORM model。
+表映射和查询放在 `internal/repo/gorm`；`internal/service` 只编排业务事务，不暴露 GORM model。
 
 ## Observer
 
@@ -76,7 +77,7 @@ Observer status 与 lifecycle phase 正交：前者描述 Kubernetes 里的外�
 
 ## Scheduler
 
-Application 在数据库事务中锁定 Worker，加载 Observer facts 和绑定 Session 数，再把 typed candidates
+Service 在数据库事务中锁定 Worker，加载 Observer facts 和绑定 Session 数，再把 typed candidates
 交给 Scheduler。Scheduler 是无 I/O 的纯 placement 策略：
 
 1. 保留仍可调度的既有 Assignment；
@@ -186,10 +187,10 @@ DB Record GC 只处理已经 `retired`、Observer 已确认 Pod 不存在且超�
 ## Connector
 
 Connector 是 Agentlet 数据面的唯一入口：按 Session 读取 Assignment，从当前 Worker observation
-解析 endpoint，转发 Claude-compatible Agent API，并保持普通响应或 SSE stream。
+解析 endpoint，把公开请求转换为 Agentlet 内部执行 API，并保持普通响应或 SSE stream。
 
 ```text
-Session ID → Assignment → Worker → fresh endpoint → Agentlet API
+Session ID → Assignment → Worker → fresh endpoint → Agentlet internal API
 ```
 
 endpoint 是一次解析结果，不是持久化 identity。Connector 不选择 Worker、不修改 Assignment、

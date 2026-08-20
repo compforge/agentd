@@ -7,16 +7,16 @@ import (
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
-	"github.com/compforge/agentd/agentd/internal/app"
+	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 type Server struct {
-	app    *app.App
-	logger *slog.Logger
+	service *service.Service
+	logger  *slog.Logger
 }
 
-func New(application *app.App, logger *slog.Logger) *Server {
-	return &Server{app: application, logger: logger}
+func New(controlService *service.Service, logger *slog.Logger) *Server {
+	return &Server{service: controlService, logger: logger}
 }
 
 func (s *Server) Register(engine *route.Engine) {

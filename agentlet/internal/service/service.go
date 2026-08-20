@@ -1,4 +1,4 @@
-package app
+package service
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-type App struct {
+type Service struct {
 	repository Repository
 	events     *EventLog
 	harness    Harness
@@ -32,42 +32,42 @@ type workerState struct {
 	wake bool
 }
 
-type Option func(*App)
+type Option func(*Service)
 
 func WithLogger(logger *slog.Logger) Option {
-	return func(application *App) {
+	return func(executionService *Service) {
 		if logger != nil {
-			application.logger = logger
+			executionService.logger = logger
 		}
 	}
 }
 
 func WithReconcileInterval(interval time.Duration) Option {
-	return func(application *App) {
-		application.reconcileInterval = interval
+	return func(executionService *Service) {
+		executionService.reconcileInterval = interval
 	}
 }
 
-func New(repository Repository, events *EventLog, harness Harness, options ...Option) *App {
+func New(repository Repository, events *EventLog, harness Harness, options ...Option) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
-	application := &App{
+	executionService := &Service{
 		repository: repository, events: events, harness: harness, ctx: ctx, cancel: cancel,
 		logger: slog.Default(), workers: make(map[string]*workerState),
 	}
 	for _, option := range options {
-		option(application)
+		option(executionService)
 	}
-	return application
+	return executionService
 }
 
-func (a *App) Start(ctx context.Context) error {
+func (a *Service) Start(ctx context.Context) error {
 	if a.reconcileInterval <= 0 {
-		return errors.New("start application: reconcile interval must be positive")
+		return errors.New("start service: reconcile interval must be positive")
 	}
 	a.mu.Lock()
 	if a.started || a.closing {
 		a.mu.Unlock()
-		return errors.New("start application: application is already started or closing")
+		return errors.New("start service: service is already started or closing")
 	}
 	a.started = true
 	a.mu.Unlock()
@@ -83,7 +83,7 @@ func (a *App) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) reconcileLoop() {
+func (a *Service) reconcileLoop() {
 	defer a.workerSet.Done()
 	ticker := time.NewTicker(a.reconcileInterval)
 	defer ticker.Stop()
@@ -99,7 +99,7 @@ func (a *App) reconcileLoop() {
 	}
 }
 
-func (a *App) Shutdown(ctx context.Context) error {
+func (a *Service) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closing = true
 	for sessionID := range a.workers {
@@ -116,11 +116,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("shut down application workers: %w", ctx.Err())
+		return fmt.Errorf("shut down service workers: %w", ctx.Err())
 	}
 }
 
-func (a *App) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
+func (a *Service) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
 	if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.ModelID) == "" {
 		return Agent{}, invalid("agent name and model are required")
 	}
@@ -141,15 +141,15 @@ func (a *App) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
 	return value, nil
 }
 
-func (a *App) GetAgent(ctx context.Context, id string) (Agent, error) {
+func (a *Service) GetAgent(ctx context.Context, id string) (Agent, error) {
 	return a.repository.GetAgent(ctx, id)
 }
 
-func (a *App) ListAgents(ctx context.Context) ([]Agent, error) {
+func (a *Service) ListAgents(ctx context.Context) ([]Agent, error) {
 	return a.repository.ListAgents(ctx)
 }
 
-func (a *App) CreateEnvironment(ctx context.Context, value Environment) (Environment, error) {
+func (a *Service) CreateEnvironment(ctx context.Context, value Environment) (Environment, error) {
 	if strings.TrimSpace(value.Name) == "" {
 		return Environment{}, invalid("environment name is required")
 	}
@@ -166,15 +166,15 @@ func (a *App) CreateEnvironment(ctx context.Context, value Environment) (Environ
 	return value, nil
 }
 
-func (a *App) GetEnvironment(ctx context.Context, id string) (Environment, error) {
+func (a *Service) GetEnvironment(ctx context.Context, id string) (Environment, error) {
 	return a.repository.GetEnvironment(ctx, id)
 }
 
-func (a *App) ListEnvironments(ctx context.Context) ([]Environment, error) {
+func (a *Service) ListEnvironments(ctx context.Context) ([]Environment, error) {
 	return a.repository.ListEnvironments(ctx)
 }
 
-func (a *App) CreateSession(ctx context.Context, agentID string, version int64, environmentID, title string, metadata map[string]string) (Session, error) {
+func (a *Service) CreateSession(ctx context.Context, agentID string, version int64, environmentID, title string, metadata map[string]string) (Session, error) {
 	agent, err := a.repository.GetAgent(ctx, agentID)
 	if err != nil {
 		return Session{}, fmt.Errorf("resolve session agent: %w", err)
@@ -212,15 +212,15 @@ func (a *App) CreateSession(ctx context.Context, agentID string, version int64, 
 	return session, nil
 }
 
-func (a *App) GetSession(ctx context.Context, id string) (Session, error) {
+func (a *Service) GetSession(ctx context.Context, id string) (Session, error) {
 	return a.repository.GetSession(ctx, id)
 }
 
-func (a *App) ListSessions(ctx context.Context) ([]Session, error) {
+func (a *Service) ListSessions(ctx context.Context) ([]Session, error) {
 	return a.repository.ListSessions(ctx)
 }
 
-func (a *App) SendEvents(ctx context.Context, sessionID string, incoming []IncomingEvent) ([]ManagedEvent, error) {
+func (a *Service) SendEvents(ctx context.Context, sessionID string, incoming []IncomingEvent) ([]ManagedEvent, error) {
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -281,14 +281,14 @@ func validateIncoming(events []IncomingEvent) error {
 	return nil
 }
 
-func (a *App) ListEvents(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
+func (a *Service) ListEvents(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
 	if _, err := a.repository.GetSession(ctx, sessionID); err != nil {
 		return nil, err
 	}
 	return a.events.List(ctx, sessionID)
 }
 
-func (a *App) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
+func (a *Service) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 	return a.events.Subscribe(sessionID)
 }
 
@@ -298,7 +298,7 @@ func (a *App) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 // +case:id=recover_committed_input,desc=`replace agentd after the harness commits an input but before it emits output`,input=`send one user message, stop the first process, recover, then send a second message`,expect=`one output per input; session returns to idle; harness revision advances once per input`,forbid=`duplicate user input, duplicate harness state, or duplicate agent output`
 // +case:id=reconcile_transient_worker_failure,desc=`a durable event append fails while a worker projects harness output`,expect=`the worker failure is logged; the pending input is retried without restarting agentd; only one durable output is projected`,forbid=`stuck running state or duplicate output`
 // +link=agentd/docs/agentlet.md
-func (a *App) Recover(ctx context.Context) error {
+func (a *Service) Recover(ctx context.Context) error {
 	sessions, err := a.repository.ListSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
@@ -338,14 +338,14 @@ func (a *App) Recover(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) workerActive(sessionID string) bool {
+func (a *Service) workerActive(sessionID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, active := a.workers[sessionID]
 	return active
 }
 
-func (a *App) enqueue(sessionID string) {
+func (a *Service) enqueue(sessionID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closing {
@@ -362,7 +362,7 @@ func (a *App) enqueue(sessionID string) {
 	worker.wake = true
 }
 
-func (a *App) runWorker(sessionID string, worker *workerState) {
+func (a *Service) runWorker(sessionID string, worker *workerState) {
 	defer func() {
 		a.mu.Lock()
 		if a.workers[sessionID] == worker {
@@ -408,7 +408,7 @@ func (a *App) runWorker(sessionID string, worker *workerState) {
 	}
 }
 
-func (a *App) handleWorkerFailure(sessionID string, workerErr error) {
+func (a *Service) handleWorkerFailure(sessionID string, workerErr error) {
 	if a.ctx.Err() != nil {
 		return
 	}
@@ -418,7 +418,7 @@ func (a *App) handleWorkerFailure(sessionID string, workerErr error) {
 	}
 }
 
-func (a *App) markRescheduling(ctx context.Context, sessionID string) error {
+func (a *Service) markRescheduling(ctx context.Context, sessionID string) error {
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
@@ -433,7 +433,7 @@ func (a *App) markRescheduling(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (a *App) process(sessionID string, input ManagedEvent) (bool, error) {
+func (a *Service) process(sessionID string, input ManagedEvent) (bool, error) {
 	ctx := a.ctx
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {

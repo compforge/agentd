@@ -45,7 +45,7 @@ spec:
           {{- end }}
           ports:
             - name: http
-              containerPort: 8082
+              containerPort: 8020
           readinessProbe:
             httpGet:
               path: /healthz

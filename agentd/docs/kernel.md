@@ -11,8 +11,8 @@ agentd 的稳定职责只有四项：
 
 1. **资源控制**：agentd 作为 Control Plane，通过 Claude Managed Agents 兼容 API 管理 Agent、
    Environment、Session 和 Event，并通过 Worker 与 Assignment 选择执行位置。
-2. **节点执行**：每个 Agentlet 接受有效 Assignment，实现执行相关的 Managed Agents API，并在
-   容量边界内管理多个 Harness runtime。
+2. **节点执行**：每个 Agentlet 通过内部执行 API 接受有效 Assignment，并在容量边界内管理多个
+   Harness runtime；Claude 兼容协议止于 agentd。
 3. **冻结与恢复**：Agent 等待用户、外部事件或调度时，可以冻结耐久状态并尽可能释放
    Worker、Harness runtime 和沙箱资源；条件满足后，由任意可用实例恢复执行。
 4. **可审计**：输入、执行、模型与工具调用、恢复决策和外部副作用都有持久化事实，能够
@@ -26,7 +26,7 @@ Claude-compatible API / Baton / scheduled trigger
                          ▼
               agentd / Control Plane
        resource / scheduling / routing / reconcile
-              │ Managed API + Assignment
+              │ internal execution API + Assignment
                          ▼
                       Agentlet
           runtime / freeze / restore
@@ -72,8 +72,8 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 2. 用户 Event 持久化后才确认接收，Controller 生成待执行意图；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
    Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
-4. Connector 转发原始 Managed Agents API 请求和内部 Assignment 元数据；Agentlet 接受后通过
-   Harness Adapter 创建或恢复短命 runtime；
+4. Connector 把公开请求转换为携带 Assignment 的内部执行请求；Agentlet 接受后通过 Harness
+   Adapter 创建或恢复短命 runtime；
 5. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
 6. Harness 输出投影为持久化 Event，并提交最新恢复点；
 7. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收，agentd
@@ -87,8 +87,8 @@ Harness Adapter 拥有模型循环和原生会话语义，Sandbox Engine 拥有�
 
 agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 核心资源，以及
 路径、主要 JSON 形状、错误 envelope、Session 状态和 `{domain}.{action}` Event 命名。兼容性由
-官方 SDK 针对 agentd 的契约测试验证。Agentlet 内部执行端复用同一套 API 语义，agentd 在转发时
-附加不进入公开 schema 的 Assignment 元数据；调用方只依赖 agentd API。
+官方 SDK 针对 agentd 的契约测试验证。Agentlet 的 `/internal/v1` 只服务 agentd，不属于公开兼容面；
+调用方只依赖 agentd API。
 
 Agent 支持 model、system prompt 和 toolset；Environment 的 cloud 配置由当前 Sandbox Engine
 实现。MCP、Skills、Vault、Memory Store、Resource mount、Outcome、Multi-agent、Deployment 和

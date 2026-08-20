@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/compforge/agentd/agentlet/internal/execution"
+	"github.com/compforge/agentd/agentlet/internal/harness"
 )
 
 var (
@@ -16,7 +16,7 @@ var (
 // Spec is the control-plane slice needed to execute one durable Work.
 type Spec struct {
 	AssignmentID string
-	Session      execution.Session
+	Session      harness.Session
 }
 
 // Snapshot is a point-in-time view of process-local Work state.

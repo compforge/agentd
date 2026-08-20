@@ -1,4 +1,4 @@
-package app
+package service
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
-	"github.com/compforge/agentd/agentlet/internal/execution"
+	"github.com/compforge/agentd/agentlet/internal/harness"
 )
 
 func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
@@ -270,13 +270,13 @@ func (recordingHarness) Name() string { return "recording" }
 
 func (recordingHarness) Version() string { return "test" }
 
-func (recordingHarness) PrepareSession(_ context.Context, session execution.Session) (string, error) {
+func (recordingHarness) PrepareSession(_ context.Context, session harness.Session) (string, error) {
 	return "recording/" + session.ID, nil
 }
 
 func (h recordingHarness) Run(
 	_ context.Context,
-	_ execution.Session,
+	_ harness.Session,
 	input TurnInput,
 	emit func(ManagedEvent) error,
 ) (TurnResult, error) {
@@ -296,13 +296,13 @@ type unsafeHarness struct{}
 func (unsafeHarness) Name() string    { return "unsafe" }
 func (unsafeHarness) Version() string { return "test" }
 
-func (unsafeHarness) PrepareSession(_ context.Context, session execution.Session) (string, error) {
+func (unsafeHarness) PrepareSession(_ context.Context, session harness.Session) (string, error) {
 	return "unsafe/" + session.ID, nil
 }
 
 func (unsafeHarness) Run(
 	context.Context,
-	execution.Session,
+	harness.Session,
 	TurnInput,
 	func(ManagedEvent) error,
 ) (TurnResult, error) {

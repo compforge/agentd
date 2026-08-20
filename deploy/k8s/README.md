@@ -22,7 +22,7 @@ Client ── Agent API ──►│ agentd Deployment (replicas=N)│
                          Worker Pod
                     ┌────────────────────────────┐
                     │ Pod                        │
-                    │  Agentlet :8081            │
+                    │  Agentlet :8019            │
                     │      │ localhost           │
                     │  Sandbox Engine :8080      │
                     └────────────────────────────┘

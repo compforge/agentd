@@ -34,7 +34,7 @@ type Decision struct {
 }
 
 // Scheduler owns only Session-to-Worker placement policy. Worker Observer and
-// Assignment storage contribute facts; the application layer applies the
+// Assignment storage contribute facts; the service layer applies the
 // returned decision. Schedule performs no I/O.
 type Scheduler struct {
 	observationMaxAge time.Duration

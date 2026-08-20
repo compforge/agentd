@@ -7,8 +7,6 @@ import (
 
 	agentledger "github.com/compforge/agent-ledger/go"
 	ledgergorm "github.com/compforge/agent-ledger/go/stores/gorm"
-	"github.com/compforge/agentd/agentlet/internal/app"
-	"github.com/compforge/agentd/agentlet/internal/store"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	gormsqlite "gorm.io/driver/sqlite"
@@ -26,7 +24,6 @@ type Config struct {
 
 type Backend struct {
 	Provider    string
-	Resources   app.Repository
 	Ledger      agentledger.EventStore
 	Checkpoints agentledger.CheckpointStore
 	close       func() error
@@ -137,8 +134,7 @@ func initializeBackend(
 		return nil, fmt.Errorf("initialize Agent Ledger store: %w", err)
 	}
 	return &Backend{
-		Provider:  provider,
-		Resources: store.NewMemory(), Ledger: ledger, Checkpoints: ledger,
+		Provider: provider, Ledger: ledger, Checkpoints: ledger,
 		close: closeDatabase,
 	}, nil
 }

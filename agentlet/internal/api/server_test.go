@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -15,20 +16,19 @@ import (
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentlet/internal/api"
-	"github.com/compforge/agentd/agentlet/internal/app"
-	"github.com/compforge/agentd/agentlet/internal/execution"
-	"github.com/compforge/agentd/agentlet/internal/store"
+	"github.com/compforge/agentd/agentlet/internal/harness"
+	"github.com/compforge/agentd/agentlet/internal/service"
 )
 
-func TestClaudeManagedAgentsSDKContract(t *testing.T) {
+func TestAgentdInternalExecutionAPI(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	resources := store.NewMemory()
-	application := app.New(resources, app.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{})
+	resources := service.NewMemoryRepository()
+	executionService := service.New(resources, service.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{})
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = application.Shutdown(shutdownCtx)
+		_ = executionService.Shutdown(shutdownCtx)
 	})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -43,7 +43,7 @@ func TestClaudeManagedAgentsSDKContract(t *testing.T) {
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(application, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(server.Engine)
+	api.New(executionService, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(server.Engine)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Run() }()
 	t.Cleanup(func() {
@@ -52,7 +52,15 @@ func TestClaudeManagedAgentsSDKContract(t *testing.T) {
 		_ = server.Shutdown(shutdownCtx)
 		<-serveErr
 	})
-	client := anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL("http://"+listener.Addr().String()))
+	publicResponse, err := http.Get("http://" + listener.Addr().String() + "/v1/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publicResponse.Body.Close()
+	if publicResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("public Agentlet API status = %d, want 404", publicResponse.StatusCode)
+	}
+	client := anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL("http://"+listener.Addr().String()+"/internal"))
 
 	agent, err := client.Beta.Agents.New(ctx, anthropic.BetaAgentNewParams{
 		Name:  "contract-test",
@@ -176,20 +184,20 @@ func (fakeHarness) Name() string { return "fake" }
 
 func (fakeHarness) Version() string { return "test" }
 
-func (fakeHarness) PrepareSession(_ context.Context, session execution.Session) (string, error) {
+func (fakeHarness) PrepareSession(_ context.Context, session harness.Session) (string, error) {
 	return "fake/" + session.ID, nil
 }
 
 func (fakeHarness) Run(
 	_ context.Context,
-	_ execution.Session,
-	input app.TurnInput,
-	emit func(app.ManagedEvent) error,
-) (app.TurnResult, error) {
-	err := emit(app.NewTurnEvent(input.ID, "agent.message", map[string]any{
+	_ harness.Session,
+	input service.TurnInput,
+	emit func(service.ManagedEvent) error,
+) (service.TurnResult, error) {
+	err := emit(service.NewTurnEvent(input.ID, "agent.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "echo: " + input.Text}},
 	}))
-	return app.TurnResult{}, err
+	return service.TurnResult{}, err
 }
 
 func (fakeHarness) Interrupt(string) {}
