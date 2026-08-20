@@ -35,7 +35,9 @@ The API uses the Claude Managed Agents beta paths and accepts
 
 The stable product boundary, supported surface, and component flow are defined in
 [`server/docs/kernel.md`](server/docs/kernel.md). Persistence, recovery, audit, and trajectory
-boundaries are defined in [`server/docs/state-ledger.md`](server/docs/state-ledger.md).
+boundaries are defined in [`server/docs/state-ledger.md`](server/docs/state-ledger.md). Sandbox
+capabilities and isolation boundaries are defined in
+[`server/docs/sandbox-engine.md`](server/docs/sandbox-engine.md).
 
 ## Development
 

@@ -34,7 +34,7 @@ Claude-compatible API
 - **具体业务工作流** 是导演：决定任务目标、步骤和验收方式，由 Agent、Skill 或更上层的
   业务编排提供，不进入 agentd 内核。
 - **Sandbox Engine** 提供隔离的文件、进程和资源生命周期。Hostel 是首个实现，也可以接入
-  其它本地或远端引擎。
+  其它本地或远端引擎；能力和资源边界见 `sandbox-engine.md`。
 - **Agent Ledger** 记录不可变的执行事实和副作用边界。它帮助恢复判断、审计和追踪，但不保存
   Harness State，也不替 agentd 做调度决策。
 
