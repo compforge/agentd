@@ -42,12 +42,13 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
     ├── agentlet.go            # Agentlet 依赖组装与服务生命周期
     ├── internal/
     │   ├── api/               # 执行侧 Claude 兼容 HTTP/SSE 协议适配
-    │   ├── app/               # Session Run 生命周期
+    │   ├── app/               # Session Work 生命周期
     │   ├── execution/         # App 与 Harness 之间的执行契约
     │   ├── harness/           # Harness adapter；AgentGo 是首个实现，持有原生 Checkpoint codec
     │   ├── persistence/       # Agentlet GORM Provider（SQLite/MySQL）与 Agent Ledger Store 组装
     │   ├── sandbox/           # Sandbox Engine 能力契约与默认 Adapter
-    │   └── store/             # 当前执行侧资源 Store
+    │   ├── store/             # 当前执行侧资源 Store
+    │   └── work/              # Assignment fence 下的进程内 Work 与唤醒合并
     └── tests/e2e/             # 显式 e2e build tag；恢复契约与 live 组件联调
 ```
 
@@ -60,7 +61,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    未实现能力明确返回 `unsupported_feature`，不静默降级。
 2. 用户 Event 先持久化再确认接收；模型和工具调用必须通过 Agent Ledger AgentGo
    Adapter 的 write-before-execute 边界。
-3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、`max_runs` 和当前绑定
+3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、容量和当前绑定
    Session 数调度；Agentlet 不主动注册或发心跳。
 4. Worker Observer 是运行事实的唯一写入者，Scheduler 只做无 I/O 的 placement，Lifecycler 管理
    Worker 供给，Connector 只转发已分配流量；Kubernetes 管理已创建 Pod 的健壮性，SRE 管理 workload

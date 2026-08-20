@@ -66,7 +66,7 @@ func TestReconcileCombinesPendingDemandAndWarmCapacity(t *testing.T) {
 	}
 	provisioner := &fakeProvisioner{}
 	lifecycler := newTestLifecycler(t, repository, provisioner, Config{
-		WorkerMaxRuns: 2, MinIdleWorkers: 1, CreateBatchSize: 10,
+		WorkerCapacity: 2, MinIdleWorkers: 1, CreateBatchSize: 10,
 	})
 
 	if err := lifecycler.Reconcile(context.Background()); err != nil {
@@ -76,12 +76,12 @@ func TestReconcileCombinesPendingDemandAndWarmCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Five pending slots plus two warm slots require four max_runs=2 Workers.
+	// Five pending slots plus two warm slots require four capacity=2 Workers.
 	if len(workers) != 4 {
 		t.Fatalf("Workers = %d, want 4", len(workers))
 	}
 	for _, worker := range workers {
-		if worker.Phase != model.WorkerPhaseCreating || worker.MaxRuns != 2 {
+		if worker.Phase != model.WorkerPhaseCreating || worker.Capacity != 2 {
 			t.Fatalf("Worker = %+v", worker)
 		}
 	}
@@ -97,7 +97,7 @@ func TestReconcileDoesNotGrowBehindPendingWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repository.PutWorker(context.Background(), model.Worker{
-		ID: "worker-pending", Name: "worker-pending", MaxRuns: 1,
+		ID: "worker-pending", Name: "worker-pending", Capacity: 1,
 		Phase: model.WorkerPhaseCreating, ObserverStatus: status, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestReconcileDoesNotGrowBehindPendingWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifecycler := newTestLifecycler(t, repository, &fakeProvisioner{}, Config{
-		WorkerMaxRuns: 1, CreateBatchSize: 10,
+		WorkerCapacity: 1, CreateBatchSize: 10,
 	})
 
 	if err := lifecycler.Reconcile(context.Background()); err != nil {

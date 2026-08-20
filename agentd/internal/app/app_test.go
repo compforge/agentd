@@ -17,8 +17,11 @@ import (
 )
 
 func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
-	application := newTestApp(t)
+	application, repository := newTestControl(t)
 	ctx := context.Background()
+	for index := 1; index <= 4; index++ {
+		putSession(t, repository, fmt.Sprintf("session-%d", index))
+	}
 	observeReadyWorker(t, application, "worker-a", 1, time.Now().UTC())
 	observeReadyWorker(t, application, "worker-b", 2, time.Now().UTC())
 
@@ -68,8 +71,9 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 }
 
 func TestAssignReplacesBindingToUnavailableWorker(t *testing.T) {
-	application := newTestApp(t)
+	application, repository := newTestControl(t)
 	ctx := context.Background()
+	putSession(t, repository, "session-1")
 	observeReadyWorker(t, application, "worker-a", 1, time.Now().UTC())
 
 	first, err := application.Assign(ctx, "session-1")
@@ -94,6 +98,7 @@ func TestAssignReplacesBindingToUnavailableWorker(t *testing.T) {
 func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
+	putSession(t, repository, "session-pending")
 	if _, err := application.Assign(ctx, "session-pending"); !errors.Is(err, app.ErrNoCapacity) {
 		t.Fatalf("Assign() error = %v, want ErrNoCapacity", err)
 	}
@@ -135,6 +140,17 @@ func newTestApp(t *testing.T) *app.App {
 	return application
 }
 
+func putSession(t *testing.T, repository *gormrepo.GORMRepository, id string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := repository.PutSession(context.Background(), model.Session{
+		ID: id, Metadata: map[string]string{}, Status: model.SessionStatusIdle,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("put Session %q: %v", id, err)
+	}
+}
+
 func newTestControl(t *testing.T) (*app.App, *gormrepo.GORMRepository) {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
@@ -154,11 +170,11 @@ func newTestControl(t *testing.T) (*app.App, *gormrepo.GORMRepository) {
 	return application, repository
 }
 
-func observeReadyWorker(t *testing.T, application *app.App, id string, maxRuns int, observedAt time.Time) {
-	observeWorker(t, application, id, maxRuns, observedAt, true)
+func observeReadyWorker(t *testing.T, application *app.App, id string, capacity int, observedAt time.Time) {
+	observeWorker(t, application, id, capacity, observedAt, true)
 }
 
-func observeWorker(t *testing.T, application *app.App, id string, maxRuns int, observedAt time.Time, ready bool) {
+func observeWorker(t *testing.T, application *app.App, id string, capacity int, observedAt time.Time, ready bool) {
 	t.Helper()
 	observerStatus, err := json.Marshal(model.WorkerObserverStatus{
 		ObservedAt: observedAt,
@@ -170,7 +186,7 @@ func observeWorker(t *testing.T, application *app.App, id string, maxRuns int, o
 		t.Fatalf("marshal observer status: %v", err)
 	}
 	_, err = application.ObserveWorker(context.Background(), model.Worker{
-		ID: id, Name: id, MaxRuns: maxRuns, ObserverStatus: observerStatus,
+		ID: id, Name: id, Capacity: capacity, ObserverStatus: observerStatus,
 	})
 	if err != nil {
 		t.Fatalf("ObserveWorker(%q): %v", id, err)

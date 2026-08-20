@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/compforge/agentd/agentlet/internal/execution"
+	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 )
 
 var (
@@ -57,6 +58,10 @@ type ControlState struct {
 	ResumeRef      string `json:"resume_ref"`
 	ResumeRevision int64  `json:"resume_revision"`
 }
+
+type WorkSpec = sessionwork.Spec
+
+type WorkSnapshot = sessionwork.Snapshot
 
 type TurnInput = execution.TurnInput
 

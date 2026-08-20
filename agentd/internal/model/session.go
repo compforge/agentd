@@ -15,13 +15,23 @@ const (
 // A rescheduling Session without a Worker is pending capacity. AssignmentID is
 // regenerated whenever the Session moves to another Worker and acts as a fence.
 type Session struct {
-	ID           string
-	Status       SessionStatus
-	AssignmentID string
-	WorkerID     string
-	AssignedAt   *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             string
+	AgentID        string
+	AgentVersion   int64
+	EnvironmentID  string
+	Title          string
+	Metadata       map[string]string
+	Status         SessionStatus
+	Revision       int64
+	Harness        string
+	HarnessVersion string
+	ResumeRef      string
+	ResumeRevision int64
+	AssignmentID   string
+	WorkerID       string
+	AssignedAt     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Assignment is the current execution ownership of one managed Session. It is

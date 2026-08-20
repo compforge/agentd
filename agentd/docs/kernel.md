@@ -56,13 +56,13 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 - **Agent**：可复用、可版本化的 Harness 配置。
 - **Environment**：Sandbox 和运行环境需求，不等于一台正在运行的沙箱。
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
-- **Run**：Session 的一次实际执行。Run 可以中断、迁移或恢复，但不能与某个进程绑定。
+- **Work**：Session 的长期执行实体。Work 可以冻结、迁移或恢复，但不能与某个进程或 Worker 绑定。
 - **Event**：用户和 Session 之间的持久化输入输出，也是唤醒 Session 的依据。
 - **Worker**：一个由 Lifecycler 管理、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
   容量单位。
 - **Assignment**：Session 当前所在 Worker 的临时执行归属，不是产品身份。
 
-Session 是产品身份，Run 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
+Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
 计算资源，Assignment 只是它们在某一时刻的节点归属。
 
 ## 服务主流程
@@ -101,10 +101,11 @@ Webhook 不属于当前服务边界。无法提供语义保证的能力返回明
 
 Control State 拥有 Worker、Assignment 和 Session 当前决策，其模型与调度规则定义在 `agentd.md`。
 Agentlet 对 Harness Checkpoint 和 Agent Ledger 的使用顺序定义在 `agentlet.md`；Ledger 对象模型、
-协议和存储规范由 Agent Ledger 项目拥有。三者的权威来源独立，Kernel 不重复展开。
+协议和存储规范由 Agent Ledger 项目拥有。三者的权威来源独立，Kernel 不解释 Ledger Run，也不重复
+展开其内部结构。
 
 ## 扩展边界
 
 agentd 通过稳定能力契约接入其它 Harness 和本地或远端 Sandbox Engine。Control Plane 可以增加调度
 策略或水平扩展，Agentlet 可以增加 Harness / Sandbox 能力；Sandbox Engine Adapter 只位于
-Agentlet。这些扩展不改变 Session、Run 和 Event 的产品语义，也不把具体业务工作流引入内核。
+Agentlet。这些扩展不改变 Session、Work 和 Event 的产品语义，也不把具体业务工作流引入内核。

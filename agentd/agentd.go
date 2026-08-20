@@ -52,7 +52,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithIdleTimeout(config.idleTimeout),
 		hertzserver.WithMaxRequestBodySize(1<<20),
 	)
-	api.New().Register(httpServer.Engine)
+	api.New(application, logger).Register(httpServer.Engine)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -91,7 +91,7 @@ func buildWorkerObserver(config config, application *control.App, logger *slog.L
 	if err != nil {
 		return nil, err
 	}
-	source, err := observer.NewKubernetesSource(kubernetesClient, config.workerPort, config.workerMaxRuns)
+	source, err := observer.NewKubernetesSource(kubernetesClient, config.workerPort, config.workerCapacity)
 	if err != nil {
 		return nil, err
 	}

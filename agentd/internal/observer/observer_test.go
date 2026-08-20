@@ -34,10 +34,10 @@ func (f *fakeSink) ObserveWorker(_ context.Context, worker model.Worker) (model.
 
 func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 	sink := &fakeSink{workers: map[string]model.Worker{
-		"uid-old": {ID: "uid-old", Name: "old", MaxRuns: 2},
+		"uid-old": {ID: "uid-old", Name: "old", Capacity: 2},
 	}}
 	controller, err := New(fakeSource{workers: []WorkerSnapshot{{
-		ID: "uid-new", Name: "new", Endpoint: "http://10.0.0.1:8081", Ready: true, MaxRuns: 4,
+		ID: "uid-new", Name: "new", Endpoint: "http://10.0.0.1:8081", Ready: true, Capacity: 4,
 	}}}, sink, Config{Interval: time.Second, RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)

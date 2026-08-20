@@ -127,11 +127,6 @@ func initializeBackend(
 	closeDatabase func() error,
 	operationTimeout time.Duration,
 ) (*Backend, error) {
-	resources, err := store.NewGORM(db.WithContext(ctx))
-	if err != nil {
-		_ = closeDatabase()
-		return nil, err
-	}
 	ledger, err := ledgergorm.New(db, operationTimeout)
 	if err != nil {
 		_ = closeDatabase()
@@ -143,7 +138,7 @@ func initializeBackend(
 	}
 	return &Backend{
 		Provider:  provider,
-		Resources: resources, Ledger: ledger, Checkpoints: ledger,
+		Resources: store.NewMemory(), Ledger: ledger, Checkpoints: ledger,
 		close: closeDatabase,
 	}, nil
 }

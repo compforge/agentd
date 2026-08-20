@@ -26,7 +26,7 @@ type Config struct {
 	Interval        time.Duration
 	RequestTimeout  time.Duration
 	LeaseTTL        time.Duration
-	WorkerMaxRuns   int
+	WorkerCapacity  int
 	MinIdleWorkers  int
 	CreateBatchSize int
 	Logger          *slog.Logger
@@ -52,7 +52,7 @@ func New(
 	if config.Interval <= 0 || config.RequestTimeout <= 0 || config.LeaseTTL <= 0 {
 		return nil, fmt.Errorf("create Worker Lifecycler: intervals and lease TTL must be positive")
 	}
-	if config.WorkerMaxRuns <= 0 || config.CreateBatchSize <= 0 || config.MinIdleWorkers < 0 {
+	if config.WorkerCapacity <= 0 || config.CreateBatchSize <= 0 || config.MinIdleWorkers < 0 {
 		return nil, fmt.Errorf("create Worker Lifecycler: invalid capacity configuration")
 	}
 	if config.Logger == nil {
@@ -129,23 +129,23 @@ func (l *Lifecycler) planCapacity(ctx context.Context) ([]model.Worker, error) {
 	for _, worker := range workers {
 		switch worker.Phase {
 		case model.WorkerPhaseCreating:
-			plannedFreeSlots += int64(worker.MaxRuns)
+			plannedFreeSlots += int64(worker.Capacity)
 		case model.WorkerPhaseActive:
 			assigned, err := l.repository.CountWorkerSessions(ctx, worker.ID)
 			if err != nil {
 				return nil, err
 			}
-			if assigned < int64(worker.MaxRuns) {
-				plannedFreeSlots += int64(worker.MaxRuns) - assigned
+			if assigned < int64(worker.Capacity) {
+				plannedFreeSlots += int64(worker.Capacity) - assigned
 			}
 		}
 	}
-	requiredFreeSlots := pending + int64(l.config.MinIdleWorkers*l.config.WorkerMaxRuns)
+	requiredFreeSlots := pending + int64(l.config.MinIdleWorkers*l.config.WorkerCapacity)
 	deficit := requiredFreeSlots - plannedFreeSlots
 	if deficit <= 0 {
 		return nil, nil
 	}
-	count := int((deficit + int64(l.config.WorkerMaxRuns) - 1) / int64(l.config.WorkerMaxRuns))
+	count := int((deficit + int64(l.config.WorkerCapacity) - 1) / int64(l.config.WorkerCapacity))
 	if count > l.config.CreateBatchSize {
 		count = l.config.CreateBatchSize
 	}
@@ -154,7 +154,7 @@ func (l *Lifecycler) planCapacity(ctx context.Context) ([]model.Worker, error) {
 	for range count {
 		id := agentledger.NewID()
 		worker := model.Worker{
-			ID: id, Name: "agentd-worker-" + id, MaxRuns: l.config.WorkerMaxRuns,
+			ID: id, Name: "agentd-worker-" + id, Capacity: l.config.WorkerCapacity,
 			Phase: model.WorkerPhaseCreating, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := l.repository.PutWorker(ctx, worker); err != nil {

@@ -83,7 +83,7 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 	for _, snapshot := range snapshots {
 		seen[snapshot.ID] = struct{}{}
 		if err := o.observe(ctx, model.Worker{
-			ID: snapshot.ID, Name: snapshot.Name, MaxRuns: snapshot.MaxRuns,
+			ID: snapshot.ID, Name: snapshot.Name, Capacity: snapshot.Capacity,
 		}, model.WorkerObserverStatus{
 			ObservedAt: observedAt, Exists: true, Ready: snapshot.Ready, Endpoint: snapshot.Endpoint,
 			PodUID: snapshot.PodUID, PodPhase: snapshot.PodPhase, Unschedulable: snapshot.Unschedulable,
@@ -96,7 +96,7 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if err := o.observe(ctx, model.Worker{
-			ID: worker.ID, Name: worker.Name, MaxRuns: worker.MaxRuns,
+			ID: worker.ID, Name: worker.Name, Capacity: worker.Capacity,
 		}, model.WorkerObserverStatus{ObservedAt: observedAt, Exists: false}); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
 		}

@@ -21,4 +21,7 @@ func TestOpenFallsBackToSQLite(t *testing.T) {
 	if backend.Resources == nil || backend.Ledger == nil || backend.Checkpoints == nil {
 		t.Fatal("SQLite backend did not initialize all stores")
 	}
+	if _, err := backend.Resources.ListSessions(context.Background()); err != nil {
+		t.Fatalf("list in-memory Agentlet sessions: %v", err)
+	}
 }
