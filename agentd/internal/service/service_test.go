@@ -17,6 +17,10 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+type demandNotifierFunc func()
+
+func (notify demandNotifierFunc) NotifyDemand() { notify() }
+
 func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
@@ -136,6 +140,28 @@ func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
 	}
 }
 
+func TestAssignNotifiesDemandAfterPendingSessionIsDurable(t *testing.T) {
+	var repository *gormrepo.GORMRepository
+	notifications := 0
+	pendingAtNotification := int64(-1)
+	application, repository := newTestControlWithNotifier(t, demandNotifierFunc(func() {
+		notifications++
+		count, err := repository.CountPendingSessions(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pendingAtNotification = count
+	}))
+	putSession(t, repository, "session-pending")
+
+	if _, err := application.Assign(context.Background(), "session-pending"); !errors.Is(err, service.ErrNoCapacity) {
+		t.Fatalf("Assign() error = %v, want ErrNoCapacity", err)
+	}
+	if notifications != 1 || pendingAtNotification != 1 {
+		t.Fatalf("notifications = %d, pending at notification = %d", notifications, pendingAtNotification)
+	}
+}
+
 func TestPrepareExecutionBuildsAssignedWorkSnapshot(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
@@ -245,6 +271,13 @@ func putSession(t *testing.T, repository *gormrepo.GORMRepository, id string) {
 }
 
 func newTestControl(t *testing.T) (*service.Service, *gormrepo.GORMRepository) {
+	return newTestControlWithNotifier(t, nil)
+}
+
+func newTestControlWithNotifier(
+	t *testing.T,
+	notifier service.DemandNotifier,
+) (*service.Service, *gormrepo.GORMRepository) {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -256,7 +289,7 @@ func newTestControl(t *testing.T) (*service.Service, *gormrepo.GORMRepository) {
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
-	application, err := service.New(repository, time.Minute)
+	application, err := service.New(repository, time.Minute, notifier)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}

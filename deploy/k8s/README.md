@@ -5,7 +5,8 @@ agentd 根据持久化的 Session 需求创建 Worker，并在 Worker 空闲后�
 Pod，Pod 内固定包含 Agentlet 与 Sandbox Engine 两个容器。
 
 Helm Chart 位于 `deploy/k8s/agentd`，负责安装 agentd workload、namespace RBAC 和 Worker
-PodTemplate。Worker Lifecycler 与 Connector 的运行时接线仍随 Control Plane 实现继续收敛。
+PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Lifecycler 和 Pod GC；Connector
+只转发已经完成 Assignment 的请求。
 
 ## 部署拓扑
 

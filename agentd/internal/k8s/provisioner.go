@@ -3,14 +3,32 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/compforge/agentd/agentd/internal/model"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
 )
 
 type WorkerProvisioner struct {
 	client   *Client
 	template corev1.PodTemplateSpec
+}
+
+func LoadPodTemplate(path string) (corev1.PodTemplateSpec, error) {
+	if strings.TrimSpace(path) == "" {
+		return corev1.PodTemplateSpec{}, fmt.Errorf("load Worker Pod template: path is required")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return corev1.PodTemplateSpec{}, fmt.Errorf("load Worker Pod template %q: %w", path, err)
+	}
+	var template corev1.PodTemplateSpec
+	if err := yaml.UnmarshalStrict(raw, &template); err != nil {
+		return corev1.PodTemplateSpec{}, fmt.Errorf("decode Worker Pod template %q: %w", path, err)
+	}
+	return template, nil
 }
 
 func NewWorkerProvisioner(client *Client, template corev1.PodTemplateSpec) (*WorkerProvisioner, error) {

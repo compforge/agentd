@@ -210,7 +210,8 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 Helm 部署形态、Worker 双容器模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
-当前运行路径可以把公开 Managed Agents Event API 分配并转发到已经被 Observer 发现的 Ready Worker，
-同时把 Agentlet 的 ResumePoint 按 Assignment fence 条件写回 Control State。Lifecycler 和 Kubernetes
-Provisioner 尚未接入 agentd 进程，因此容量自动供给、Assignment 释放和跨 Worker 恢复仍不是已接通
-能力；文档中的 phase 与弹性流程描述其稳定契约。
+启用 Kubernetes Worker source 后，每个 agentd 副本同时运行 Observer、Lifecycler 和 Pod GC。
+无容量的调度结果先持久化为待分配 Session，再唤醒 Lifecycler；Provisioner 根据缺口创建 Worker Pod，
+Observer 确认 Ready 后，后续请求即可完成 Assignment 并由 Connector 转发到 Agentlet。Pod GC 同时收敛
+空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Assignment 主动释放与跨 Worker 恢复尚未
+接通；它们属于 Control State 和 Ledger 恢复链路，不混入 Worker 供给控制器。

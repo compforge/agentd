@@ -47,7 +47,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlService, err := service.New(repository, time.Minute)
+	controlService, err := service.New(repository, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,9 +17,18 @@ type Service struct {
 	repository         repo.Repository
 	scheduler          *scheduler.Scheduler
 	observationTimeout time.Duration
+	demandNotifier     DemandNotifier
 }
 
-func New(repository repo.Repository, observationTimeout time.Duration) (*Service, error) {
+type DemandNotifier interface {
+	NotifyDemand()
+}
+
+func New(
+	repository repo.Repository,
+	observationTimeout time.Duration,
+	demandNotifier DemandNotifier,
+) (*Service, error) {
 	if repository == nil {
 		return nil, fmt.Errorf("create control plane: repository is required")
 	}
@@ -28,7 +37,7 @@ func New(repository repo.Repository, observationTimeout time.Duration) (*Service
 	}
 	return &Service{
 		repository: repository, scheduler: scheduler.New(observationTimeout),
-		observationTimeout: observationTimeout,
+		observationTimeout: observationTimeout, demandNotifier: demandNotifier,
 	}, nil
 }
 
@@ -106,7 +115,7 @@ func (a *Service) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 // free Work capacity. The transaction locks the schedulable Worker set so two
 // concurrent schedulers cannot consume the same final slot.
 //
-// +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below capacity`
+// +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below capacity; no-capacity demand is durable before Lifecycler is notified`
 // +link=agentd/docs/agentd.md
 func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
 	if strings.TrimSpace(sessionID) == "" {
@@ -174,6 +183,9 @@ func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignmen
 		return model.Assignment{}, err
 	}
 	if noCapacity {
+		if a.demandNotifier != nil {
+			a.demandNotifier.NotifyDemand()
+		}
 		return model.Assignment{}, ErrNoCapacity
 	}
 	return selected, nil
