@@ -1,0 +1,5 @@
+.git
+.devloop
+**/.DS_Store
+**/*_test.go
+deploy/k8s

@@ -1,0 +1,78 @@
+{{- if and (not .Values.agentd.database.dsn) (gt (int .Values.replicaCount) 1) }}
+{{- fail "agentd.database.dsn is required when replicaCount is greater than 1" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentd.fullname" . }}
+  labels:
+    {{- include "agentd.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentd.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentd.selectorLabels" . | nindent 8 }}
+        {{- with .Values.agentd.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.agentd.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentd.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agentd
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if or .Values.agentd.database.dsn .Values.agentd.extraEnv }}
+          env:
+            {{- if .Values.agentd.database.dsn }}
+            - name: AGENTD_MYSQL_DSN
+              value: {{ .Values.agentd.database.dsn | quote }}
+            {{- end }}
+            {{- with .Values.agentd.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: worker-template
+              mountPath: /etc/agentd/worker-template
+              readOnly: true
+          resources:
+            {{- toYaml .Values.agentd.resources | nindent 12 }}
+      volumes:
+        - name: worker-template
+          configMap:
+            name: {{ include "agentd.fullname" . }}-worker-template
+      {{- with .Values.agentd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agentd.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agentd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

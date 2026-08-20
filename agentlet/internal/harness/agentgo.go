@@ -65,7 +65,7 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session execution.Se
 // +spec=`Model calls use the session's model and system prompt; only complete assistant messages become managed events, while every model attempt remains auditable`
 // +case:id=model_question_answer,desc=`answer through an Anthropic-compatible streaming model`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
 // +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
-// +link=agentd/docs/state-ledger.md
+// +link=agentd/docs/agentlet.md
 func (r *AgentGoRunner) Run(
 	ctx context.Context,
 	session execution.Session,

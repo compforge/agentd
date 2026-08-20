@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentd.fullname" . }}-worker-template
+  labels:
+    {{- include "agentd.labels" . | nindent 4 }}
+data:
+  pod-template.yaml: |
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentlet
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: worker
+        {{- with .Values.worker.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Always
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: agentlet
+          image: "{{ .Values.worker.agentlet.image.repository }}:{{ .Values.worker.agentlet.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.agentlet.image.pullPolicy }}
+          env:
+            - name: AGENTD_ADDRESS
+              value: 0.0.0.0:8081
+            {{- if .Values.agentlet.database.dsn }}
+            - name: AGENTD_MYSQL_DSN
+              value: {{ .Values.agentlet.database.dsn | quote }}
+            {{- end }}
+            - name: AGENTD_SANDBOX_ENDPOINT
+              value: http://127.0.0.1:8080
+            {{- if .Values.model.apiKey }}
+            - name: ANTHROPIC_API_KEY
+              value: {{ .Values.model.apiKey | quote }}
+            {{- end }}
+            {{- if .Values.model.baseURL }}
+            - name: ANTHROPIC_BASE_URL
+              value: {{ .Values.model.baseURL | quote }}
+            {{- end }}
+          ports:
+            - name: agentlet-http
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: agentlet-http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: agentlet-http
+          securityContext:
+            {{- toYaml .Values.worker.agentlet.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: agentlet-data
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.worker.agentlet.resources | nindent 12 }}
+        - name: sandbox-engine
+          image: "{{ .Values.worker.sandboxEngine.image.repository }}:{{ .Values.worker.sandboxEngine.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.sandboxEngine.image.pullPolicy }}
+          ports:
+            - name: sandbox-http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: sandbox-http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: sandbox-http
+          securityContext:
+            {{- toYaml .Values.worker.sandboxEngine.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.sandboxEngine.resources | nindent 12 }}
+      volumes:
+        - name: agentlet-data
+          emptyDir: {}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

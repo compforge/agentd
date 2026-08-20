@@ -297,7 +297,7 @@ func (a *App) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 // +spec=`A persisted user input survives process replacement or a transient worker failure and is completed exactly once before the session accepts later input`
 // +case:id=recover_committed_input,desc=`replace agentd after the harness commits an input but before it emits output`,input=`send one user message, stop the first process, recover, then send a second message`,expect=`one output per input; session returns to idle; harness revision advances once per input`,forbid=`duplicate user input, duplicate harness state, or duplicate agent output`
 // +case:id=reconcile_transient_worker_failure,desc=`a durable event append fails while a worker projects harness output`,expect=`the worker failure is logged; the pending input is retried without restarting agentd; only one durable output is projected`,forbid=`stuck running state or duplicate output`
-// +link=agentd/docs/state-ledger.md
+// +link=agentd/docs/agentlet.md
 func (a *App) Recover(ctx context.Context) error {
 	sessions, err := a.repository.ListSessions(ctx)
 	if err != nil {

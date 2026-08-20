@@ -1,4 +1,4 @@
-.PHONY: fix lint test test-e2e test-model-integration test-integration build run
+.PHONY: fix lint test test-e2e test-model-integration test-integration build run run-agentd run-agentlet
 
 fix:
 	gofmt -w $$(find agentd agentlet cmd -name '*.go' -not -path '*/vendor/*')
@@ -16,10 +16,15 @@ test-model-integration:
 	AGENTD_REQUIRE_INTEGRATION=1 go test -tags=e2e ./agentlet/tests/e2e -run TestManagedAgentAnswersThroughRealModel -count=1 -v
 
 test-integration:
-	AGENTD_REQUIRE_INTEGRATION=1 go test -tags=e2e ./agentlet/tests/e2e -run TestManagedAgentMySQLHostelRoundTripAndRestart -count=1 -v
+	AGENTD_REQUIRE_INTEGRATION=1 go test -tags=e2e ./agentlet/tests/e2e -run TestManagedAgentMySQLSandboxRoundTripAndRestart -count=1 -v
 
 build:
 	go build ./...
 
-run:
+run: run-agentlet
+
+run-agentd:
+	go run ./cmd/agentd
+
+run-agentlet:
 	go run ./cmd/agentlet

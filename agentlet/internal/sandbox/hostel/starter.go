@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/compforge/agentd/agentlet/internal/sandbox/engine"
@@ -12,14 +11,13 @@ import (
 
 type EngineConfig struct {
 	URL            string
-	Command        string
 	RequestTimeout time.Duration
 	StartupTimeout time.Duration
 }
 
 type Engine struct {
-	client     *Client
-	supervisor *Supervisor
+	client  *Client
+	starter *Starter
 }
 
 var _ engine.Engine = (*Engine)(nil)
@@ -30,10 +28,8 @@ func NewEngine(config EngineConfig) (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{
-		client: client,
-		supervisor: &Supervisor{
-			Command: config.Command, Client: client, StartupTimeout: config.StartupTimeout,
-		},
+		client:  client,
+		starter: &Starter{Client: client, StartupTimeout: config.StartupTimeout},
 	}, nil
 }
 
@@ -42,7 +38,7 @@ func (e *Engine) Name() string {
 }
 
 func (e *Engine) Start(ctx context.Context) error {
-	return e.supervisor.Start(ctx)
+	return e.starter.Start(ctx)
 }
 
 func (e *Engine) Ensure(ctx context.Context, sandboxID string) error {
@@ -73,30 +69,17 @@ func (e *Engine) Execute(ctx context.Context, sandboxID string, command engine.C
 	return e.client.Run(ctx, sandboxID, command)
 }
 
-type Supervisor struct {
-	Command        string
+// Starter only waits for the Sandbox Engine endpoint to become ready. The
+// Worker Pod, not Agentlet, owns the Engine process lifecycle.
+type Starter struct {
 	Client         *Client
 	StartupTimeout time.Duration
-
-	process *exec.Cmd
 }
 
-func (s *Supervisor) Start(ctx context.Context) error {
+func (s *Starter) Start(ctx context.Context) error {
 	if s.StartupTimeout <= 0 {
 		return fmt.Errorf("start Hostel: startup timeout must be positive")
 	}
-	if s.Command != "" {
-		// The command is operator-owned configuration, not request input. A shell
-		// keeps local development practical without coupling Agentlet to Hostel flags.
-		s.process = exec.CommandContext(ctx, "/bin/sh", "-c", s.Command)
-		s.process.Stdout = os.Stdout
-		s.process.Stderr = os.Stderr
-		if err := s.process.Start(); err != nil {
-			return fmt.Errorf("start Hostel child process: %w", err)
-		}
-		go func() { _ = s.process.Wait() }()
-	}
-
 	deadlineCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
