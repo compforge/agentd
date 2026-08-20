@@ -6,6 +6,9 @@
 
 It exposes the core Claude Managed Agents resources—Agent, Environment, Session, and Event—while
 running the agent harness and sandbox on infrastructure you control. The API transport uses Hertz.
+The architecture separates the `agentd` control plane from per-Pod Agentlet instances. `agentd`
+accepts the Managed Agents API, schedules or locates a Session, and forwards the same API request;
+each Agentlet implements its execution semantics and manages multiple assigned harness runtimes.
 
 ## Core capabilities
 
@@ -13,7 +16,7 @@ running the agent harness and sandbox on infrastructure you control. The API tra
 - a pluggable Sandbox Engine, with one isolated Hostel Bed for each session in the first adapter;
 - asynchronous session input with persisted event history and SSE output;
 - durable Harness State plus write-before-execute model/tool records through Agent Ledger;
-- recovery of an AgentGo session after the `agentd` process is replaced.
+- recovery of an AgentGo session after the Agentlet process is replaced.
 
 ## Quick start
 
@@ -27,18 +30,23 @@ make run
 MySQL/GORM is the initial persistence provider. The controller, harness, and ledger integration use
 storage interfaces rather than GORM types, so another provider can be added without changing them.
 
-The first version binds to `127.0.0.1:8081` and is intended for a single agentd process. Multi-replica
-ownership, durable wake-up, and fencing are part of the kernel evolution, not claimed by this version.
+`make run` starts the current Agentlet implementation directly on `127.0.0.1:8081`. The Agentlet
+exposes the execution-side API so its harness, recovery, and sandbox behavior can be developed and
+tested before the `agentd` control plane is implemented. Multi-instance registration,
+capacity-aware placement, durable wake-up, and fencing are design commitments, not capabilities
+claimed by the current binary.
 
 The API uses the Claude Managed Agents beta paths and accepts
 `anthropic-beta: managed-agents-2026-04-01`.
 
 The stable product boundary, supported surface, and component flow are defined in
-[`server/docs/kernel.md`](server/docs/kernel.md). Harness execution and adapter boundaries are
-defined in [`server/docs/harness.md`](server/docs/harness.md). Persistence, recovery, audit, and
-trajectory boundaries are defined in [`server/docs/state-ledger.md`](server/docs/state-ledger.md).
-Sandbox capabilities and isolation boundaries are defined in
-[`server/docs/sandbox-engine.md`](server/docs/sandbox-engine.md).
+[`agentd/docs/kernel.md`](agentd/docs/kernel.md). The Control Plane, Agentlet, scheduling, capacity,
+and Control State model are defined in
+[`agentd/docs/control-plane.md`](agentd/docs/control-plane.md). Harness execution and adapter
+boundaries are defined in [`agentd/docs/harness.md`](agentd/docs/harness.md). Harness State, Ledger,
+recovery, audit, and trajectory boundaries are defined in
+[`agentd/docs/state-ledger.md`](agentd/docs/state-ledger.md). Sandbox capabilities and isolation
+boundaries are defined in [`agentd/docs/sandbox-engine.md`](agentd/docs/sandbox-engine.md).
 
 ## Development
 
@@ -53,7 +61,8 @@ make build
 `make test-e2e` explicitly enables the `tests/e2e` suite. The local cases run the Claude SDK against
 a real Hertz server and SQLite-backed Control State, Harness State, and Ledger stores. They cover
 process replacement plus successful and interrupted model streams through a deterministic local
-Anthropic API server, so they need no external services. See [`server/tests/e2e`](server/tests/e2e).
+Anthropic API server, so they need no external services. See
+[`agentlet/tests/e2e`](agentlet/tests/e2e).
 
 An opt-in real-model check uses the same SQLite-backed server path without requiring MySQL or Hostel:
 
