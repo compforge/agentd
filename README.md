@@ -1,5 +1,10 @@
 # agentd
 
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 `agentd` is a managed agent server built with [AgentGo](https://github.com/compforge/agentgo) and
 [Agent Ledger](https://github.com/compforge/agent-ledger), with a pluggable Sandbox Engine.
 
@@ -17,6 +22,19 @@ API and manages assigned harness runtimes.
 - durable Harness State plus write-before-execute model/tool records through Agent Ledger;
 - recovery of an AgentGo session after the Agentlet process is replaced;
 - Worker observation and capacity-aware Session Assignment.
+
+## Architecture
+
+![agentd managed agent architecture](agentd/docs/architecture.svg)
+
+`agentd` owns the public API, durable managed-agent identity, and control state. It schedules each
+Session onto an elastic Worker and routes execution through the Connector. A Worker is Agentlet's
+workload form; on Kubernetes it is a Pod containing Agentlet and a Sandbox Engine sidecar.
+
+Agentlet drives the selected Harness—AgentGo is the first implementation—while the Sandbox Engine
+provides isolated tool execution. Checkpoints and append-only execution facts are persisted through
+Agent Ledger, so a Session can release its Worker and later resume on another one without making
+the control plane understand Harness-native state.
 
 ## Quick start
 
@@ -76,7 +94,8 @@ process replacement plus successful and interrupted model streams through a dete
 Anthropic API server, so they need no external services. See
 [`agentlet/tests/e2e`](agentlet/tests/e2e).
 
-An opt-in real-model check uses the same SQLite-backed server path without requiring MySQL or an external Sandbox Engine:
+An opt-in real-model check uses the same SQLite-backed server path without requiring MySQL or an
+external Sandbox Engine:
 
 ```bash
 export ANTHROPIC_API_KEY='your-key'

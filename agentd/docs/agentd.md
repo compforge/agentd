@@ -5,19 +5,7 @@
 agentd 是 Managed Agent 的 Control Plane，负责全局资源、执行时机、Worker 供给、Session placement
 和请求路由，不运行 Harness Loop。执行发生在 Agentlet，二者通过网络协议协作。
 
-```text
-Client
-  │ Managed Agents API
-  ▼
-agentd
-  ├─ Observer ──── observe Worker facts
-  ├─ Scheduler ─── decide Session placement
-  ├─ Lifecycler ── reconcile Worker supply
-  └─ Connector ─── forward Agent API
-                    │
-                    ▼
-                 Agentlet
-```
+![agentd Managed Agent 架构](architecture.svg)
 
 ## 四个 Control Plane 角色
 
