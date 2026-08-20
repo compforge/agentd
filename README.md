@@ -42,34 +42,25 @@ provides isolated tool execution. Checkpoints and append-only execution facts ar
 Agent Ledger, so a Session can release its Worker and later resume on another one without making
 the control plane understand Harness-native state.
 
-## Quick start
+## Kubernetes deployment (preview)
 
 ```bash
-export ANTHROPIC_API_KEY=your-key
-export AGENTD_SANDBOX_ENDPOINT=http://127.0.0.1:8080
-make run
+helm upgrade --install agentd deploy/k8s/agentd \
+  --namespace agentd --create-namespace
+
+kubectl -n agentd port-forward service/agentd 8020:8020
+curl http://127.0.0.1:8020/healthz
 ```
 
-agentd and Agentlet use local SQLite when `AGENTD_MYSQL_DSN` is empty. This is convenient for a
-single-process trial, but deleting the process filesystem loses state, Ledger, and Checkpoints.
-Set separate external MySQL DSNs for robust deployments; the two services do not share tables.
-The controller, harness, and ledger integration use storage interfaces rather than GORM types.
+The public Managed Agents API is exposed by agentd on port `8020`. Agentlet listens on port `8019`
+inside each Worker Pod and serves only agentd under `/internal/v1`; clients should not connect to it
+directly.
 
-`make run` starts the Agentlet directly on `127.0.0.1:8019`. `make run-agentd` starts the Control
-Plane on `0.0.0.0:8020`; it uses local SQLite unless `AGENTD_MYSQL_DSN` is set. When running in a
-Kubernetes Pod, agentd discovers the namespace from its ServiceAccount and enables the Kubernetes
-Worker source by default. Outside Kubernetes, `AGENTD_WORKER_SOURCE=kubernetes` enables it explicitly.
-The Worker Observer periodically
-lists Agentlet Pods and persists observations for capacity-aware Session Assignment. Agentlet does
-not register or heartbeat with agentd. Kubernetes owns Worker Pod health and replacement; agentd
-only uses fresh Pod observations for placement. The Claude-compatible API is exposed only by agentd;
-Agentlet serves agentd under `/internal/v1`.
-
-```bash
-export AGENTD_WORKER_SOURCE=kubernetes
-export AGENTD_WORKER_NAMESPACE=default
-export AGENTD_WORKER_LABEL_SELECTOR='app.kubernetes.io/name=agentlet'
-```
+The default Helm values install one agentd replica backed by ephemeral SQLite. Production and
+multi-replica deployments require external MySQL storage. The Helm topology is currently a preview
+while Worker lifecycle runtime wiring is being completed. See
+[`deploy/k8s/README.md`](deploy/k8s/README.md) for the topology, persistence options, image settings,
+and current limitations.
 
 The API uses the Claude Managed Agents beta paths and accepts
 `anthropic-beta: managed-agents-2026-04-01`.
@@ -81,5 +72,3 @@ Checkpoint/Ledger integration, and recovery ordering are defined in
 [`agentd/docs/agentlet.md`](agentd/docs/agentlet.md). Harness execution and adapter boundaries are
 defined in [`agentd/docs/harness.md`](agentd/docs/harness.md). Sandbox capabilities and isolation
 boundaries are defined in [`agentd/docs/sandbox-engine.md`](agentd/docs/sandbox-engine.md).
-The target Helm topology and Worker elasticity model are described in
-[`deploy/k8s/README.md`](deploy/k8s/README.md).
