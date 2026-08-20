@@ -445,7 +445,7 @@ func unresolvedToolAttempts(
 	}
 	toolAttempts := make(map[string]struct{}, len(view.Attempts))
 	for _, attempt := range view.Attempts {
-		if actionTypes[attempt.ActionID] == "tool_call" {
+		if actionTypes[attempt.ActionID] == agentledger.ActionTypeToolCall {
 			toolAttempts[attempt.ID] = struct{}{}
 		}
 	}
@@ -455,9 +455,9 @@ func unresolvedToolAttempts(
 			continue
 		}
 		switch event.EventType {
-		case "attempt.requested":
+		case agentledger.EventTypeAttemptRequested:
 			pending[event.SubjectID] = struct{}{}
-		case "attempt.completed", "attempt.failed":
+		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed:
 			delete(pending, event.SubjectID)
 		}
 	}

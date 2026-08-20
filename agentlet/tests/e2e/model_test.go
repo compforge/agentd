@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/sandbox/engine"
@@ -40,7 +41,9 @@ func TestManagedAgentAnswersThroughModel(t *testing.T) {
 
 	model.assertRequests(t, 1, "Answer arithmetic questions with only the number.", "What is 6 * 7?")
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, []string{"42"})
-	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{"model.requested", "model.completed"})
+	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{
+		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptCompleted,
+	})
 }
 
 func TestManagedAgentContinuesAfterMidStreamModelTimeout(t *testing.T) {
@@ -66,14 +69,17 @@ func TestManagedAgentContinuesAfterMidStreamModelTimeout(t *testing.T) {
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, nil)
 	assertSQLiteE2EEventContains(t, ctx, client, session.ID, "session.error", "runtime_error")
 	assertSQLiteE2EEventContains(t, ctx, client, session.ID, "session.status_idle", "retries_exhausted")
-	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{"model.requested", "model.failed"})
+	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{
+		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptFailed,
+	})
 
 	sendSQLiteE2EMessage(t, ctx, client, session.ID, "Try again.")
 	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
 	model.assertRequests(t, 2)
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, []string{"RECOVERED"})
 	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{
-		"model.requested", "model.failed", "model.requested", "model.completed",
+		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptFailed,
+		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptCompleted,
 	})
 }
 
@@ -94,7 +100,9 @@ func TestManagedAgentAnswersThroughRealModel(t *testing.T) {
 	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
 
 	assertSQLiteE2EAgentMessageContains(t, ctx, client, session.ID, "AGENTD_REAL_MODEL_E2E_OK")
-	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{"model.requested", "model.completed"})
+	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{
+		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptCompleted,
+	})
 }
 
 func startAgentGoModelE2E(
@@ -282,8 +290,14 @@ func assertSQLiteE2EModelLedger(
 		attempts[attempt.ID] = actions[attempt.ActionID]
 	}
 	for _, event := range view.Events {
-		if attempts[event.SubjectID] == "model_call" && strings.HasPrefix(event.EventType, "attempt.") {
-			got = append(got, "model."+strings.TrimPrefix(event.EventType, "attempt."))
+		if attempts[event.SubjectID] != agentledger.ActionTypeModelCall {
+			continue
+		}
+		switch event.EventType {
+		case agentledger.EventTypeAttemptRequested,
+			agentledger.EventTypeAttemptCompleted,
+			agentledger.EventTypeAttemptFailed:
+			got = append(got, event.EventType)
 		}
 	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {

@@ -148,11 +148,11 @@ func assertLiveToolLedger(
 		attempts[attempt.ID] = actions[attempt.ActionID]
 	}
 	for _, event := range view.Events {
-		if attempts[event.SubjectID] == "tool_call" {
+		if attempts[event.SubjectID] == agentledger.ActionTypeToolCall {
 			counts[event.EventType]++
 		}
 	}
-	if counts["attempt.requested"] != 2 || counts["attempt.completed"] != 2 {
+	if counts[agentledger.EventTypeAttemptRequested] != 2 || counts[agentledger.EventTypeAttemptCompleted] != 2 {
 		t.Fatalf("tool ledger counts = %#v, want two requested and two completed", counts)
 	}
 }
