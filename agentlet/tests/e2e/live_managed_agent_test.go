@@ -14,12 +14,12 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/persistence"
-	"github.com/compforge/agentd/agentlet/internal/sandbox/hostel"
+	"github.com/compforge/agentd/agentlet/internal/sandbox"
 )
 
-func TestManagedAgentMySQLHostelRoundTripAndRestart(t *testing.T) {
+func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	dsn := integrationEnv(t, "AGENTD_TEST_MYSQL_DSN")
-	hostelURL := integrationEnv(t, "AGENTD_TEST_HOSTEL_URL")
+	sandboxEndpoint := integrationEnv(t, "AGENTD_TEST_SANDBOX_ENDPOINT")
 	model := newAnthropicModelStub(t, func(attempt int, writer http.ResponseWriter, _ *http.Request) {
 		if attempt%2 == 1 {
 			writeAnthropicBashCall(writer, attempt)
@@ -42,8 +42,8 @@ func TestManagedAgentMySQLHostelRoundTripAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
-	sandboxEngine, err := hostel.NewEngine(hostel.EngineConfig{
-		URL: hostelURL, RequestTimeout: 30 * time.Second, StartupTimeout: 30 * time.Second,
+	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{
+		Endpoint: sandboxEndpoint, RequestTimeout: 30 * time.Second, StartupTimeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

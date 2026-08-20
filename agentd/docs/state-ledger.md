@@ -88,7 +88,7 @@ release Assignment, runtime and optional sandbox resources
 必须先得到可读取的 Checkpoint ID，Agentlet 再把它作为 `ResumeRef` 上报 ResumePoint，由 agentd 把
 Control State 提交为可释放资源的等待态。若 Checkpoint 已保存但 Control State 尚未更新就崩溃，新
 revision 只是未引用版本，可以对账后回收；反向顺序会让 Session 指向尚未完成的恢复材料。
-ResumePoint、Assignment generation 和条件更新规则见 `control-plane.md`。
+ResumePoint 与当前 Assignment 的边界见 `control-plane.md`。
 
 ### 恢复
 
@@ -133,9 +133,8 @@ Agent Ledger 仓库可以继续提供 Bolt 等独立 EventStore 实现，但它�
 event ID 与已覆盖 cursor 识别不完整窗口，并在恢复时对账收敛。Trace 和日志只用于诊断，不能充当
 任何一个数据面的权威存储。
 
-当前 AgentGo CheckpointKey 下的 revision 已使用乐观并发检查。只有当对应精确 Checkpoint ID 被带
-Assignment generation 与 fencing token 的 Control State 更新接受后，该 revision 才能成为当前
-恢复点。
+当前 AgentGo CheckpointKey 下的 revision 已使用乐观并发检查。只有当对应精确 Checkpoint ID 被
+Control State 接受后，该 revision 才能成为当前恢复点。
 
 ## 轨迹与能力优化
 

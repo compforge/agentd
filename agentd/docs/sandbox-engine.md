@@ -127,10 +127,7 @@ Harness State 和 Sandbox Workspace 是两类不同的恢复材料。Harness Sta
 2. Engine 若保留 Workspace，必须让重新连接后的 Session 看到一致内容；
 3. Engine 若会因 TTL 或策略回收 Workspace，必须先通过 snapshot、artifact 或 volume 提供耐久恢复路径；
 4. 未决 Tool Attempt 是否可重放由 Ledger 和 agentd 判断，Workspace 中出现文件不能单独证明命令成功；
-5. `Ensure` 只负责资源就绪，不授予 Session 执行所有权，也不能替代多实例所需的 lease 和 fencing。
-
-多个 Agentlet 共享同一远端 Engine 时，执行所有权仍由 agentd Control State 维护；Agentlet 的 Engine
-调用必须受 Assignment generation 与 fencing 约束，不能依赖 Sandbox 服务自行避免并发执行。
+5. `Ensure` 只负责资源就绪，不授予 Session 执行所有权；执行归属仍由 Assignment 表达。
 
 ## 隔离与运行要求
 
@@ -154,7 +151,8 @@ Hostel 的设计参考了 OpenSandbox，`agentlet/internal/sandbox/hostel` 是�
 - 一个 Session ID 对应一个 Bed ID；
 - `Ensure` 创建或重新连接 Bed，并等待其进入可用状态；
 - 文件操作和命令流沿用 OpenSandbox Execd 语义，通过 Hostel HTTP API 完成；
-- Hostel 通常作为独立服务运行，本地开发时也可由可选 Supervisor 启动子进程。
+- 本地 Engine 推荐作为 Worker Pod sidecar 运行，由 Kubernetes 管理进程生命周期和 readiness；
+  Agentlet 只通过 endpoint 使用它，不负责启动或保活 Engine。远端 Engine 继续使用相同接口。
 
 Hostel 的 Bed 命名、endpoint 和协议细节只存在于 Adapter 内部。接入其它 Engine 时，可以继续参考
 OpenSandbox 的 Sandbox、Execution 和 Workspace 设计，但只需实现 Agentlet 的 `sandbox.Engine` 契约并

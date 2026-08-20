@@ -45,7 +45,7 @@ session 类型。
 durable user Event + Assignment
         │
         ▼
-Agentlet validates fencing and marks local run active
+Agentlet receives the current Assignment
         │
         ▼
 Harness Adapter restores native state
@@ -59,7 +59,7 @@ model loop ── tool call ──► Sandbox Engine
 commit native state + project Managed Event
         │
         ▼
-Agentlet reports revision and observed state to agentd
+Agentlet returns the committed revision to agentd
 ```
 
 Harness runtime 是本轮执行资源，不是 Session 本身。当前 AgentGo Adapter 每次 `Run` 都从持久化
@@ -88,11 +88,11 @@ Harness Adapter 是 Agent Loop 与两个稳定能力边界之间的桥梁：
 
 - 模型和工具 hook 通过对应 Ledger Adapter 翻译为跨 Harness 的规范化事实，并遵守
   write-before-execute；Ledger 不保存原生上下文。
-- Harness 的 Tool/Workspace API 只通过 `sandbox.Engine` 使用隔离环境，不直接依赖 Hostel 类型、
+- Harness 的 Tool/Workspace API 只通过 `sandbox.Engine` 使用隔离环境，不直接依赖具体 Engine 类型、
   HTTP 路由或本地路径；具体契约见 [sandbox-engine.md](sandbox-engine.md)。
 
 这两类集成属于 Adapter，不应进入 agentd Control Plane。Agentlet 只消费 Harness 的运行结果、
-持久化输出和明确的恢复错误，再携带 Assignment 身份上报 observed state。
+持久化输出和明确的恢复错误。
 
 ## AgentGo Adapter
 

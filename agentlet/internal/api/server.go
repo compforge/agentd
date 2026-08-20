@@ -129,7 +129,7 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 		return
 	}
 	if networking, ok := input.Config["networking"].(map[string]any); ok && networking["type"] != nil && networking["type"] != "unrestricted" {
-		s.writeError(ctx, request, fmt.Errorf("%w: Hostel network policy %q", app.ErrUnsupported, networking["type"]))
+		s.writeError(ctx, request, fmt.Errorf("%w: sandbox network policy %q", app.ErrUnsupported, networking["type"]))
 		return
 	}
 	created, err := s.app.CreateEnvironment(ctx, app.Environment{

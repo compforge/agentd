@@ -17,7 +17,7 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/persistence"
-	"github.com/compforge/agentd/agentlet/internal/sandbox/hostel"
+	"github.com/compforge/agentd/agentlet/internal/sandbox"
 )
 
 // Run starts the Agentlet execution service and blocks until it stops.
@@ -36,9 +36,9 @@ func Run(logger *slog.Logger) error {
 	}
 	defer storage.Close()
 
-	sandboxEngine, err := hostel.NewEngine(hostel.EngineConfig{
-		URL: config.hostelURL, Command: config.hostelCommand,
-		RequestTimeout: config.hostelRequestTimeout, StartupTimeout: config.hostelStartupTimeout,
+	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{
+		Endpoint:       config.sandboxEndpoint,
+		RequestTimeout: config.sandboxRequestTimeout, StartupTimeout: config.sandboxStartupTimeout,
 	})
 	if err != nil {
 		return err
@@ -116,11 +116,10 @@ type config struct {
 	mysqlMaxOpenConns      int
 	mysqlMaxIdleConns      int
 	mysqlConnMaxLifetime   time.Duration
-	hostelURL              string
-	hostelCommand          string
+	sandboxEndpoint        string
 	storageTimeout         time.Duration
-	hostelRequestTimeout   time.Duration
-	hostelStartupTimeout   time.Duration
+	sandboxRequestTimeout  time.Duration
+	sandboxStartupTimeout  time.Duration
 	modelRequestTimeout    time.Duration
 	ledgerOperationTimeout time.Duration
 	toolTimeout            time.Duration
@@ -137,8 +136,7 @@ func loadConfig() (config, error) {
 		mysqlMaxOpenConns:    32,
 		mysqlMaxIdleConns:    8,
 		mysqlConnMaxLifetime: 30 * time.Minute,
-		hostelURL:            envOr("AGENTD_HOSTEL_URL", "http://127.0.0.1:8080"),
-		hostelCommand:        os.Getenv("AGENTD_HOSTEL_COMMAND"),
+		sandboxEndpoint:      envOr("AGENTD_SANDBOX_ENDPOINT", "http://127.0.0.1:8080"),
 		storageTimeout:       5 * time.Second,
 	}
 	var err error
@@ -156,8 +154,8 @@ func loadConfig() (config, error) {
 		fallback    time.Duration
 		destination *time.Duration
 	}{
-		{"AGENTD_HOSTEL_REQUEST_TIMEOUT", 30 * time.Second, &value.hostelRequestTimeout},
-		{"AGENTD_HOSTEL_STARTUP_TIMEOUT", 30 * time.Second, &value.hostelStartupTimeout},
+		{"AGENTD_SANDBOX_REQUEST_TIMEOUT", 30 * time.Second, &value.sandboxRequestTimeout},
+		{"AGENTD_SANDBOX_STARTUP_TIMEOUT", 30 * time.Second, &value.sandboxStartupTimeout},
 		{"AGENTD_MODEL_REQUEST_TIMEOUT", 2 * time.Minute, &value.modelRequestTimeout},
 		{"AGENTD_LEDGER_OPERATION_TIMEOUT", 30 * time.Second, &value.ledgerOperationTimeout},
 		{"AGENTD_TOOL_TIMEOUT", 2 * time.Minute, &value.toolTimeout},
