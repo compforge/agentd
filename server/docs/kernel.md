@@ -30,7 +30,7 @@ Claude-compatible API
 ```
 
 - **Harness** 是演员：执行模型循环、工具调用和上下文处理。AgentGo 是首个实现，后续可接入
-  其它 Harness。
+  其它 Harness；执行边界与适配契约见 `harness.md`。
 - **具体业务工作流** 是导演：决定任务目标、步骤和验收方式，由 Agent、Skill 或更上层的
   业务编排提供，不进入 agentd 内核。
 - **Sandbox Engine** 提供隔离的文件、进程和资源生命周期。Hostel 是首个实现，也可以接入
