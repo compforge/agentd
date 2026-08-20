@@ -90,7 +90,8 @@ func executionSession(session Session) execution.Session {
 			ID: session.Agent.ID, ModelID: session.Agent.ModelID, System: session.Agent.System,
 			Tools: session.Agent.Tools, Version: session.Agent.Version,
 		},
-		EnvironmentID: session.EnvironmentID,
-		ResumeRef:     session.Control.ResumeRef,
+		EnvironmentID:  session.EnvironmentID,
+		ResumeRef:      session.Control.ResumeRef,
+		ResumeRevision: session.Control.ResumeRevision,
 	}
 }

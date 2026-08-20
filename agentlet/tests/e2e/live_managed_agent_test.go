@@ -54,7 +54,7 @@ func TestManagedAgentMySQLHostelRoundTripAndRestart(t *testing.T) {
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: "test", BaseURL: model.URL(),
 		RequestTimeout: 2 * time.Minute, OperationTimeout: 15 * time.Second, ToolTimeout: time.Minute,
-		Ledger: storage.Ledger, State: storage.HarnessStates, Sandbox: sandboxEngine,
+		Ledger: storage.Ledger, Checkpoints: storage.Checkpoints, Sandbox: sandboxEngine,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -135,13 +135,24 @@ func assertLiveToolLedger(
 ) {
 	t.Helper()
 	counts := make(map[string]int)
-	for event, err := range store.ScanSession(ctx, sessionID, "") {
-		if err != nil {
-			t.Fatalf("scan live ledger events: %v", err)
-		}
-		counts[event.EventType]++
+	view, err := store.LoadSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("load live ledger session: %v", err)
 	}
-	if counts["tool.requested"] != 2 || counts["tool.completed"] != 2 {
+	actions := make(map[string]string, len(view.Actions))
+	for _, action := range view.Actions {
+		actions[action.ID] = action.Type
+	}
+	attempts := make(map[string]string, len(view.Attempts))
+	for _, attempt := range view.Attempts {
+		attempts[attempt.ID] = actions[attempt.ActionID]
+	}
+	for _, event := range view.Events {
+		if attempts[event.SubjectID] == agentledger.ActionTypeToolCall {
+			counts[event.EventType]++
+		}
+	}
+	if counts[agentledger.EventTypeAttemptRequested] != 2 || counts[agentledger.EventTypeAttemptCompleted] != 2 {
 		t.Fatalf("tool ledger counts = %#v, want two requested and two completed", counts)
 	}
 }
