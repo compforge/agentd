@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -59,7 +62,11 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	if err := events.Append(ctx, session.ID, queued); err != nil {
 		t.Fatal(err)
 	}
-	if application.process(session.ID, input) {
+	keepRunning, err := application.process(session.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keepRunning {
 		t.Fatal("unsafe recovery allowed the worker to continue")
 	}
 	current, err := repository.GetSession(ctx, session.ID)
@@ -75,6 +82,97 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	}
 	if len(pending) != 1 || pending[0]["id"] != queued["id"] {
 		t.Fatalf("pending inputs = %#v, want only queued input", pending)
+	}
+}
+
+func TestReconcileRetriesInputAfterWorkerPersistenceFailure(t *testing.T) {
+	ctx := context.Background()
+	repository := newMemoryRepository()
+	store := &failOnceEventStore{
+		EventStore: agentledger.NewMemoryEventStore(),
+		eventType:  "agent.message",
+	}
+	events := NewEventLog(store)
+	harness := recordingHarness{inputs: make(chan TurnInput, 2)}
+	var logs bytes.Buffer
+	application := New(
+		repository,
+		events,
+		harness,
+		WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))),
+		WithReconcileInterval(10*time.Millisecond),
+	)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = application.Shutdown(shutdownCtx)
+	})
+	agent, err := application.CreateAgent(ctx, Agent{Name: "test", ModelID: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := application.CreateEnvironment(ctx, Environment{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := application.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := application.SendEvents(ctx, session.ID, []IncomingEvent{{
+		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "retry me"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputID, _ := accepted[0]["id"].(string)
+	for attempt := 0; attempt < 2; attempt++ {
+		select {
+		case input := <-harness.inputs:
+			if input.ID != inputID {
+				t.Fatalf("harness input id = %q, want %q", input.ID, inputID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for harness attempt %d", attempt+1)
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, getErr := repository.GetSession(ctx, session.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		pending, pendingErr := events.UnprocessedUserMessages(ctx, session.ID)
+		if pendingErr != nil {
+			t.Fatal(pendingErr)
+		}
+		if current.Control.Status == "idle" && len(pending) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reconciliation did not settle: status=%s pending=%d", current.Control.Status, len(pending))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stored, err := events.List(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := make(map[string]int)
+	for _, event := range stored {
+		if eventType, ok := event["type"].(string); ok {
+			counts[eventType]++
+		}
+	}
+	if counts["agent.message"] != 1 || counts["session.status_rescheduled"] != 1 {
+		t.Fatalf("event counts = %#v", counts)
+	}
+	if !strings.Contains(logs.String(), "session worker stopped") || !strings.Contains(logs.String(), session.ID) {
+		t.Fatalf("worker failure log = %q", logs.String())
 	}
 }
 
@@ -210,6 +308,33 @@ func (unsafeHarness) Run(
 }
 
 func (unsafeHarness) Interrupt(string) {}
+
+type failOnceEventStore struct {
+	agentledger.EventStore
+
+	mu        sync.Mutex
+	eventType string
+	failed    bool
+}
+
+func (s *failOnceEventStore) Append(
+	ctx context.Context,
+	stream agentledger.EventStream,
+	expectedVersion int64,
+	appendID string,
+	events ...agentledger.ProposedEvent,
+) (agentledger.CommitReceipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, event := range events {
+		managed, _ := event.Payload["event"].(map[string]any)
+		if managed["type"] == s.eventType && !s.failed {
+			s.failed = true
+			return agentledger.CommitReceipt{}, fmt.Errorf("injected %s append failure", s.eventType)
+		}
+	}
+	return s.EventStore.Append(ctx, stream, expectedVersion, appendID, events...)
+}
 
 type memoryRepository struct {
 	mu           sync.Mutex

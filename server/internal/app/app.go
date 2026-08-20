@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -15,35 +16,97 @@ type App struct {
 	repository Repository
 	events     *EventLog
 	harness    Harness
+	logger     *slog.Logger
 	ctx        context.Context
 	cancel     context.CancelFunc
 
-	mu        sync.Mutex
-	workers   map[string]*workerState
-	workerSet sync.WaitGroup
-	closing   bool
+	mu                sync.Mutex
+	workers           map[string]*workerState
+	workerSet         sync.WaitGroup
+	reconcileInterval time.Duration
+	started           bool
+	closing           bool
 }
 
 type workerState struct {
 	wake bool
 }
 
-func New(repository Repository, events *EventLog, harness Harness) *App {
+type Option func(*App)
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(application *App) {
+		if logger != nil {
+			application.logger = logger
+		}
+	}
+}
+
+func WithReconcileInterval(interval time.Duration) Option {
+	return func(application *App) {
+		application.reconcileInterval = interval
+	}
+}
+
+func New(repository Repository, events *EventLog, harness Harness, options ...Option) *App {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{
+	application := &App{
 		repository: repository, events: events, harness: harness, ctx: ctx, cancel: cancel,
-		workers: make(map[string]*workerState),
+		logger: slog.Default(), workers: make(map[string]*workerState),
+	}
+	for _, option := range options {
+		option(application)
+	}
+	return application
+}
+
+func (a *App) Start(ctx context.Context) error {
+	if a.reconcileInterval <= 0 {
+		return errors.New("start application: reconcile interval must be positive")
+	}
+	a.mu.Lock()
+	if a.started || a.closing {
+		a.mu.Unlock()
+		return errors.New("start application: application is already started or closing")
+	}
+	a.started = true
+	a.mu.Unlock()
+	if err := a.Recover(ctx); err != nil {
+		a.mu.Lock()
+		a.started = false
+		a.mu.Unlock()
+		return fmt.Errorf("initial session reconciliation: %w", err)
+	}
+
+	a.workerSet.Add(1)
+	go a.reconcileLoop()
+	return nil
+}
+
+func (a *App) reconcileLoop() {
+	defer a.workerSet.Done()
+	ticker := time.NewTicker(a.reconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.Recover(a.ctx); err != nil && a.ctx.Err() == nil {
+				a.logger.Error("reconcile durable session inputs", "error", err)
+			}
+		}
 	}
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
-	a.cancel()
 	a.mu.Lock()
 	a.closing = true
 	for sessionID := range a.workers {
 		a.harness.Interrupt(sessionID)
 	}
 	a.mu.Unlock()
+	a.cancel()
 	done := make(chan struct{})
 	go func() {
 		a.workerSet.Wait()
@@ -53,7 +116,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("shut down session workers: %w", ctx.Err())
+		return fmt.Errorf("shut down application workers: %w", ctx.Err())
 	}
 }
 
@@ -182,7 +245,7 @@ func (a *App) SendEvents(ctx context.Context, sessionID string, incoming []Incom
 			if err := a.repository.PutSession(ctx, session); err != nil {
 				return nil, err
 			}
-			a.enqueue(sessionID, event)
+			a.enqueue(sessionID)
 		case "user.interrupt":
 			event := NewManagedEvent(item.Type, nil)
 			if err := a.events.Append(ctx, sessionID, event); err != nil {
@@ -229,48 +292,60 @@ func (a *App) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
 	return a.events.Subscribe(sessionID)
 }
 
-// Recover resumes durable inputs left by a replaced agentd process.
+// Recover reconciles durable inputs left by a replaced process or stopped worker.
 //
-// +spec=`A persisted user input survives process replacement and is completed exactly once before the session accepts later input`
+// +spec=`A persisted user input survives process replacement or a transient worker failure and is completed exactly once before the session accepts later input`
 // +case:id=recover_committed_input,desc=`replace agentd after the harness commits an input but before it emits output`,input=`send one user message, stop the first process, recover, then send a second message`,expect=`one output per input; session returns to idle; harness revision advances once per input`,forbid=`duplicate user input, duplicate harness state, or duplicate agent output`
+// +case:id=reconcile_transient_worker_failure,desc=`a durable event append fails while a worker projects harness output`,expect=`the worker failure is logged; the pending input is retried without restarting agentd; only one durable output is projected`,forbid=`stuck running state or duplicate output`
 // +link=server/docs/state-ledger.md
 func (a *App) Recover(ctx context.Context) error {
 	sessions, err := a.repository.ListSessions(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list sessions: %w", err)
 	}
 	for _, session := range sessions {
 		if session.Control.Status == "terminated" {
 			continue
 		}
+		if a.workerActive(session.ID) {
+			continue
+		}
 		pending, err := a.events.UnprocessedUserMessages(ctx, session.ID)
 		if err != nil {
-			return err
+			return fmt.Errorf("list pending inputs for session %q: %w", session.ID, err)
 		}
 		if len(pending) == 0 {
 			if session.Control.Status == "running" || session.Control.Status == "rescheduling" {
 				transition(&session, "idle")
 				if err := a.repository.PutSession(ctx, session); err != nil {
-					return err
+					return fmt.Errorf("repair idle session %q: %w", session.ID, err)
 				}
 			}
 			continue
 		}
-		transition(&session, "rescheduling")
-		if err := a.repository.PutSession(ctx, session); err != nil {
-			return err
+		if session.Control.Status != "rescheduling" {
+			transition(&session, "rescheduling")
+			if err := a.repository.PutSession(ctx, session); err != nil {
+				return fmt.Errorf("reschedule session %q: %w", session.ID, err)
+			}
 		}
-		if err := a.events.Append(ctx, session.ID, NewManagedEvent("session.status_rescheduled", nil)); err != nil {
-			return err
+		inputID, _ := pending[0]["id"].(string)
+		if err := a.events.Append(ctx, session.ID, NewTurnEvent(inputID, "session.status_rescheduled", nil)); err != nil {
+			return fmt.Errorf("record rescheduled session %q: %w", session.ID, err)
 		}
-		for _, event := range pending {
-			a.enqueue(session.ID, event)
-		}
+		a.enqueue(session.ID)
 	}
 	return nil
 }
 
-func (a *App) enqueue(sessionID string, _ ManagedEvent) {
+func (a *App) workerActive(sessionID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, active := a.workers[sessionID]
+	return active
+}
+
+func (a *App) enqueue(sessionID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closing {
@@ -302,10 +377,16 @@ func (a *App) runWorker(sessionID string, worker *workerState) {
 		}
 		pending, err := a.events.UnprocessedUserMessages(a.ctx, sessionID)
 		if err != nil {
+			a.handleWorkerFailure(sessionID, fmt.Errorf("list pending inputs: %w", err))
 			return
 		}
 		if len(pending) > 0 {
-			if !a.process(sessionID, pending[0]) {
+			keepRunning, err := a.process(sessionID, pending[0])
+			if err != nil {
+				a.handleWorkerFailure(sessionID, err)
+				return
+			}
+			if !keepRunning {
 				return
 			}
 			continue
@@ -327,19 +408,44 @@ func (a *App) runWorker(sessionID string, worker *workerState) {
 	}
 }
 
-func (a *App) process(sessionID string, input ManagedEvent) bool {
+func (a *App) handleWorkerFailure(sessionID string, workerErr error) {
+	if a.ctx.Err() != nil {
+		return
+	}
+	a.logger.Error("session worker stopped", "session_id", sessionID, "error", workerErr)
+	if err := a.markRescheduling(a.ctx, sessionID); err != nil {
+		a.logger.Error("mark failed session for reconciliation", "session_id", sessionID, "error", err)
+	}
+}
+
+func (a *App) markRescheduling(ctx context.Context, sessionID string) error {
+	session, err := a.repository.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
+	}
+	if session.Control.Status == "terminated" || session.Control.Status == "rescheduling" {
+		return nil
+	}
+	transition(&session, "rescheduling")
+	if err := a.repository.PutSession(ctx, session); err != nil {
+		return fmt.Errorf("persist rescheduling state: %w", err)
+	}
+	return nil
+}
+
+func (a *App) process(sessionID string, input ManagedEvent) (bool, error) {
 	ctx := a.ctx
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("load session: %w", err)
 	}
 	transition(&session, "running")
 	if err := a.repository.PutSession(ctx, session); err != nil {
-		return false
+		return false, fmt.Errorf("persist running state: %w", err)
 	}
 	inputID, _ := input["id"].(string)
 	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_running", nil)); err != nil {
-		return false
+		return false, fmt.Errorf("record running state: %w", err)
 	}
 
 	var outputErr error
@@ -357,30 +463,28 @@ func (a *App) process(sessionID string, input ManagedEvent) bool {
 	persistErr := outputErr
 	outputMu.Unlock()
 	if persistErr != nil {
-		transition(&session, "rescheduling")
-		_ = a.repository.PutSession(ctx, session)
-		return false
+		return false, fmt.Errorf("persist harness output: %w", persistErr)
 	}
 	session.Control.ResumeRevision = result.ResumeRevision
 	if errors.Is(runErr, ErrUnsafeRecovery) {
 		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "unsafe_recovery", "message": runErr.Error()},
 		})); err != nil {
-			return false
+			return false, fmt.Errorf("record unsafe recovery: %w", err)
 		}
 		transition(&session, "terminated")
 		if err := a.repository.PutSession(ctx, session); err != nil {
-			return false
+			return false, fmt.Errorf("persist terminated state: %w", err)
 		}
 		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_terminated", nil)); err != nil {
-			return false
+			return false, fmt.Errorf("record terminated state: %w", err)
 		}
 		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
-			return false
+			return false, fmt.Errorf("mark unsafe input processed: %w", err)
 		}
 		// Termination applies to the whole session. Leave later inputs pending for
 		// manual reconciliation instead of letting this worker revive the session.
-		return false
+		return false, nil
 	}
 
 	stopReason := map[string]any{"type": "end_turn"}
@@ -388,21 +492,21 @@ func (a *App) process(sessionID string, input ManagedEvent) bool {
 		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "runtime_error", "message": runErr.Error()},
 		})); err != nil {
-			return false
+			return false, fmt.Errorf("record harness error: %w", err)
 		}
 		stopReason = map[string]any{"type": "retries_exhausted"}
 	}
 	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_idle", map[string]any{"stop_reason": stopReason})); err != nil {
-		return false
+		return false, fmt.Errorf("record idle state: %w", err)
 	}
 	if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
-		return false
+		return false, fmt.Errorf("mark input processed: %w", err)
 	}
 	transition(&session, "idle")
 	if err := a.repository.PutSession(ctx, session); err != nil {
-		return false
+		return false, fmt.Errorf("persist idle state: %w", err)
 	}
-	return true
+	return true, nil
 }
 
 func transition(session *Session, status string) {

@@ -20,13 +20,13 @@ func TestRemoteEngineExecutesInSessionBed(t *testing.T) {
 		case "/healthz":
 			writer.WriteHeader(http.StatusOK)
 		case "/v1/beds":
-			_ = json.NewEncoder(writer).Encode(map[string]any{"ready": true})
+			_ = json.NewEncoder(writer).Encode(map[string]any{"state": "active"})
 		case "/command":
 			if value := request.Header.Get(bedHeader); value != "session_123" {
 				t.Errorf("bed header = %q", value)
 			}
 			_, _ = writer.Write([]byte("{\"type\":\"stdout\",\"text\":\"hello\"}\n"))
-			_, _ = writer.Write([]byte("{\"type\":\"execution_end\",\"result\":{\"process\":{\"exit_code\":0},\"termination_cause\":\"exited\"}}\n"))
+			_, _ = writer.Write([]byte("{\"type\":\"execution_complete\",\"exit_code\":0}\n"))
 		default:
 			http.NotFound(writer, request)
 		}
