@@ -36,18 +36,21 @@ Harness Adapter 负责确定安全冻结边界、持久化原生状态、校验 
 Harness 自己的恢复或继续 API。`ResumeRef` 对 Agentlet 和 Control Plane 是不透明引用；其底层
 可以使用 agentd 提供的 blob / KV backend，也可以指向 Harness 自己的持久化服务。
 
-Harness State 的物理记录即使复用 Agent Ledger 的 EventStore，也仍属于 Harness Adapter，不进入
-跨 Harness Ledger 协议，不能成为审计或轨迹投影必须理解的数据格式。
+Harness State 即使通过 Agent Ledger 的 CheckpointStore 保存，也仍属于 Harness Adapter；Store 只解释
+Checkpoint envelope，不解释其中的原生状态，审计与轨迹投影也不能依赖其格式。
 
-首个 AgentGo Adapter 将已提交的原生 message 序列保存为版本化 opaque record。其它 Harness
-可以使用不同格式、snapshot 或远端 session ID，只要实现相同的准备、运行和恢复能力，不要求
-转换成 AgentGo 的状态模型。
+首个 AgentGo Adapter 将已提交的原生 message 序列保存为版本化 Checkpoint。CheckpointKey 组织同一
+Session 的多个 revision，Control State 中的 `ResumeRef` 则引用某个精确 Checkpoint ID；尚未被
+Control State 采纳的 revision 不能仅因它更新就自动成为恢复基线。其它 Harness 可以使用不同格式、
+snapshot 或远端 session ID，只要实现相同的准备、运行和恢复能力，不要求转换成 AgentGo 的状态模型。
+Checkpoint 可以锚定某条 Lane 上已经吸收的最后一个 Event；恢复器只处理 Anchor 之后的 Ledger 尾部。
 
 ### Ledger
 
-Agent Ledger 定义跨 Harness 的 Run、Step、Model Attempt、Tool Attempt、因果关系、幂等追加和
-write-before-execute 契约。每个 Harness 的 recording adapter 把原生 hook 翻译为规范化事实，
-但不借此拥有 Harness 的恢复状态。
+Agent Ledger 的执行层级是 `Session → Run → Lane → Turn → Action → Attempt`。Action 表示
+`model_call`、`tool_call`、`compact` 等逻辑动作，Attempt 表示一次物理尝试；重试沿用 Action 并递增
+Attempt 序号。每个 Harness 的 recording adapter 把原生 hook 翻译为规范化事实，但不借此拥有
+Harness 的恢复状态。
 
 Ledger 主要支持：
 
@@ -67,10 +70,10 @@ Harness Adapter 或下游 Eval / Optimizer 拥有。
 Harness reaches a safe boundary
           │
           ▼
-Adapter persists Harness State
+Adapter persists a Harness Checkpoint
           │
           ▼
-Adapter returns durable ResumeRef
+Adapter returns the exact Checkpoint ID
           │
           ▼
 Agentlet reports ResumePoint with Assignment token
@@ -82,10 +85,10 @@ agentd conditionally commits ResumePoint to Control State
 release Assignment, runtime and optional sandbox resources
 ```
 
-必须先得到可读取的 `ResumeRef`，Agentlet 再上报 ResumePoint，由 agentd 把 Control State 提交为
-可释放资源的等待态。若 State 已保存但 Control State 尚未更新就崩溃，新 State 只是未引用版本，
-可以回收；反向顺序会让 Session 指向尚未完成的恢复材料。ResumePoint、Assignment generation 和
-条件更新规则见 `control-plane.md`。
+必须先得到可读取的 Checkpoint ID，Agentlet 再把它作为 `ResumeRef` 上报 ResumePoint，由 agentd 把
+Control State 提交为可释放资源的等待态。若 Checkpoint 已保存但 Control State 尚未更新就崩溃，新
+revision 只是未引用版本，可以对账后回收；反向顺序会让 Session 指向尚未完成的恢复材料。
+ResumePoint、Assignment generation 和条件更新规则见 `control-plane.md`。
 
 ### 恢复
 
@@ -110,13 +113,14 @@ tool-call 边界，Session 进入 `terminated`，等待人工对账，不自动�
 
 ## 存储与一致性
 
-agentd 通过 Harness State Store 和 Agent Ledger EventStore 两个稳定接口使用这两类数据。
+agentd 通过 Agent Ledger CheckpointStore 和 EventStore 两个稳定接口使用这两类数据。
 `PersistenceProvider` 根据配置组装具体实现，Control Plane、Agentlet 与 Harness 不接触 GORM、Bolt
 或连接信息。Control State Repository 是独立接口，定义在 `control-plane.md`。
 
-当前提供 MySQL / GORM Provider：复用一个显式配置连接池与超时的 `*gorm.DB`，但不同数据面使用
-独立表和存储接口。可替换性来自接口和依赖注入；增加其它数据库、对象存储或远端 Harness 自带存储
-时，不改变 Control Plane、Agentlet 与 Harness。
+当前提供 MySQL / GORM Provider：复用一个显式配置连接池与超时的 `*gorm.DB`，Checkpoint 与 Ledger
+直接使用 Agent Ledger 提供的 GORM Store，但仍使用独立表和存储接口。可替换性来自接口和依赖注入，
+Agentlet 不重复实现 Agent Ledger backend；增加其它数据库、对象存储或远端 Harness 自带存储时，
+不改变 Control Plane、Agentlet 与 Harness。
 
 Agent Ledger 仓库可以继续提供 Bolt 等独立 EventStore 实现，但它们不是 agentd 的默认部署组成。
 
@@ -129,7 +133,7 @@ Agent Ledger 仓库可以继续提供 Bolt 等独立 EventStore 实现，但它�
 event ID 与已覆盖 cursor 识别不完整窗口，并在恢复时对账收敛。Trace 和日志只用于诊断，不能充当
 任何一个数据面的权威存储。
 
-当前 AgentGo Harness State 追加已使用 revision 做乐观并发检查。只有当对应 ResumePoint 被带
+当前 AgentGo CheckpointKey 下的 revision 已使用乐观并发检查。只有当对应精确 Checkpoint ID 被带
 Assignment generation 与 fencing token 的 Control State 更新接受后，该 revision 才能成为当前
 恢复点。
 

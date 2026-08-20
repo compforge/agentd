@@ -193,7 +193,7 @@ func (a *App) CreateSession(ctx context.Context, agentID string, version int64, 
 		Title:         title,
 		Metadata:      metadata,
 		Control: ControlState{
-			Status: "idle", Harness: a.harness.Name(), HarnessVersion: a.harness.Version(), ResumeRevision: -1,
+			Status: "idle", Harness: a.harness.Name(), HarnessVersion: a.harness.Version(), ResumeRevision: 0,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -464,6 +464,9 @@ func (a *App) process(sessionID string, input ManagedEvent) (bool, error) {
 	outputMu.Unlock()
 	if persistErr != nil {
 		return false, fmt.Errorf("persist harness output: %w", persistErr)
+	}
+	if result.ResumeRef != "" {
+		session.Control.ResumeRef = result.ResumeRef
 	}
 	session.Control.ResumeRevision = result.ResumeRevision
 	if errors.Is(runErr, ErrUnsafeRecovery) {

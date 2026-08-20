@@ -116,7 +116,7 @@ func startAgentGoModelE2EWithKey(
 	runner, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: apiKey, BaseURL: modelURL, RequestTimeout: requestTimeout,
 		OperationTimeout: 2 * time.Second, ToolTimeout: 2 * time.Second,
-		Ledger: backend.ledger, State: backend.harnessStates, Sandbox: noopSandbox{},
+		Ledger: backend.ledger, Checkpoints: backend.checkpoints, Sandbox: noopSandbox{},
 	})
 	if err != nil {
 		t.Fatalf("create AgentGo E2E runner: %v", err)
@@ -269,12 +269,21 @@ func assertSQLiteE2EModelLedger(
 ) {
 	t.Helper()
 	var got []string
-	for event, err := range backend.ledger.ScanSession(ctx, sessionID, "") {
-		if err != nil {
-			t.Fatalf("scan model ledger events: %v", err)
-		}
-		if strings.HasPrefix(event.EventType, "model.") {
-			got = append(got, event.EventType)
+	view, err := backend.ledger.LoadSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("load model ledger session: %v", err)
+	}
+	actions := make(map[string]string, len(view.Actions))
+	for _, action := range view.Actions {
+		actions[action.ID] = action.Type
+	}
+	attempts := make(map[string]string, len(view.Attempts))
+	for _, attempt := range view.Attempts {
+		attempts[attempt.ID] = actions[attempt.ActionID]
+	}
+	for _, event := range view.Events {
+		if attempts[event.SubjectID] == "model_call" && strings.HasPrefix(event.EventType, "attempt.") {
+			got = append(got, "model."+strings.TrimPrefix(event.EventType, "attempt."))
 		}
 	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {

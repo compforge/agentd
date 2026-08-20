@@ -12,17 +12,25 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/execution"
 )
 
-const managedEventStream = "managed/events"
+const (
+	managedEventRun  = "managed-control"
+	managedEventLane = "managed/events"
+)
 
 type EventLog struct {
 	store agentledger.EventStore
 
-	mu          sync.Mutex
-	subscribers map[string]map[chan ManagedEvent]struct{}
+	mu                sync.Mutex
+	subscribers       map[string]map[chan ManagedEvent]struct{}
+	userActor         agentledger.Actor
+	orchestratorActor agentledger.Actor
 }
 
 func NewEventLog(store agentledger.EventStore) *EventLog {
-	return &EventLog{store: store, subscribers: make(map[string]map[chan ManagedEvent]struct{})}
+	return &EventLog{
+		store: store, subscribers: make(map[string]map[chan ManagedEvent]struct{}),
+		userActor: agentledger.NewActor("user", ""), orchestratorActor: agentledger.NewActor("orchestrator", "agentd"),
+	}
 }
 
 func (l *EventLog) Append(ctx context.Context, sessionID string, event ManagedEvent) error {
@@ -33,13 +41,17 @@ func (l *EventLog) Append(ctx context.Context, sessionID string, event ManagedEv
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	stream := agentledger.EventStream{SessionID: sessionID, StreamID: managedEventStream}
-	expected := int64(-1)
-	for stored, loadErr := range l.store.Load(ctx, stream, -1) {
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: l.store, SessionID: sessionID, RunID: managedEventRun,
+		LaneName: managedEventLane, Actor: l.actorFor(cloned),
+	})
+	if err != nil {
+		return fmt.Errorf("open managed event recorder: %w", err)
+	}
+	for stored, loadErr := range l.store.LoadLane(ctx, recorder.Lane().ID, 0) {
 		if loadErr != nil {
-			return fmt.Errorf("load managed event stream: %w", loadErr)
+			return fmt.Errorf("load managed event lane: %w", loadErr)
 		}
-		expected = stored.StreamVersion
 		if eventID, _ := cloned["id"].(string); eventID != "" {
 			raw, ok := stored.Payload["event"]
 			if !ok {
@@ -54,13 +66,9 @@ func (l *EventLog) Append(ctx context.Context, sessionID string, event ManagedEv
 			}
 		}
 	}
-	record := agentledger.NewEvent("managed.api_event", sessionID, "managed-control", actorFor(cloned))
-	record.Payload = map[string]any{"event": map[string]any(cloned)}
-	appendID, _ := cloned["id"].(string)
-	if appendID == "" {
-		appendID = agentledger.NewID()
-	}
-	if _, err := l.store.Append(ctx, stream, expected, "api/"+appendID, record); err != nil {
+	if _, err := recorder.Record(ctx, "lane.managed.api_event", recorder.Lane().ID, map[string]any{
+		"event": map[string]any(cloned),
+	}, ""); err != nil {
 		return fmt.Errorf("append managed event: %w", err)
 	}
 	if cloned["type"] != "managed.event_processed" {
@@ -81,10 +89,16 @@ func (l *EventLog) MarkProcessed(ctx context.Context, sessionID, eventID string)
 }
 
 func (l *EventLog) List(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
-	stream := agentledger.EventStream{SessionID: sessionID, StreamID: managedEventStream}
+	lane, exists, err := l.store.FindLane(ctx, sessionID, managedEventRun, managedEventLane)
+	if err != nil {
+		return nil, fmt.Errorf("find managed event lane: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
 	var events []ManagedEvent
 	processed := make(map[string]string)
-	for stored, err := range l.store.Load(ctx, stream, -1) {
+	for stored, err := range l.store.LoadLane(ctx, lane.ID, 0) {
 		if err != nil {
 			return nil, fmt.Errorf("list managed events: %w", err)
 		}
@@ -158,12 +172,12 @@ func NewTurnEvent(inputID, eventType string, fields map[string]any) ManagedEvent
 	return event
 }
 
-func actorFor(event ManagedEvent) agentledger.Actor {
+func (l *EventLog) actorFor(event ManagedEvent) agentledger.Actor {
 	eventType, _ := event["type"].(string)
 	if strings.HasPrefix(eventType, "user.") {
-		return agentledger.Actor{Type: "human", ID: "api-client"}
+		return l.userActor
 	}
-	return agentledger.Actor{Type: "orchestrator", ID: "agentd"}
+	return l.orchestratorActor
 }
 
 func mapEvent(value any) (ManagedEvent, error) {

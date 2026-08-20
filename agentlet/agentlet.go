@@ -52,7 +52,7 @@ func Run(logger *slog.Logger) error {
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: os.Getenv("ANTHROPIC_API_KEY"), BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
 		RequestTimeout: config.modelRequestTimeout, OperationTimeout: config.ledgerOperationTimeout,
-		ToolTimeout: config.toolTimeout, Ledger: storage.Ledger, State: storage.HarnessStates, Sandbox: sandboxEngine,
+		ToolTimeout: config.toolTimeout, Ledger: storage.Ledger, Checkpoints: storage.Checkpoints, Sandbox: sandboxEngine,
 	})
 	if err != nil {
 		return err

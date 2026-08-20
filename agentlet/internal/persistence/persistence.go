@@ -6,9 +6,8 @@ import (
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
+	ledgergorm "github.com/compforge/agent-ledger/go/stores/gorm"
 	"github.com/compforge/agentd/agentlet/internal/app"
-	harnessstate "github.com/compforge/agentd/agentlet/internal/harness/state"
-	ledgerstore "github.com/compforge/agentd/agentlet/internal/ledger/store"
 	"github.com/compforge/agentd/agentlet/internal/store"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
@@ -24,10 +23,10 @@ type Config struct {
 }
 
 type Backend struct {
-	Resources     app.Repository
-	HarnessStates harnessstate.Store
-	Ledger        agentledger.EventStore
-	close         func() error
+	Resources   app.Repository
+	Ledger      agentledger.EventStore
+	Checkpoints agentledger.CheckpointStore
+	close       func() error
 }
 
 func OpenMySQL(ctx context.Context, config Config) (*Backend, error) {
@@ -83,18 +82,17 @@ func OpenMySQL(ctx context.Context, config Config) (*Backend, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	harnessStates, err := harnessstate.NewGORM(db.WithContext(ctx))
+	ledger, err := ledgergorm.New(db, config.OperationTimeout)
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	ledger, err := ledgerstore.NewGORM(db.WithContext(ctx))
-	if err != nil {
+	if err := ledger.Initialize(ctx); err != nil {
 		_ = sqlDB.Close()
-		return nil, err
+		return nil, fmt.Errorf("initialize Agent Ledger store: %w", err)
 	}
 	return &Backend{
-		Resources: resources, HarnessStates: harnessStates, Ledger: ledger,
+		Resources: resources, Ledger: ledger, Checkpoints: ledger,
 		close: func() error { return sqlDB.Close() },
 	}, nil
 }

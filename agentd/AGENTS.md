@@ -12,7 +12,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
   runtime；它上报 observed state，不拥有全局 Control State。
 - AgentGo 只拥有 Agent Loop 与原生会话状态，不感知 HTTP API 或 Hostel。
 - Hostel 只拥有 Bed、Executor 和 Execution；一个 Session 对应一个 Bed。
-- Agent Ledger 只记录规范化执行事实，不拥有 Harness State，也不做调度或自动重放决策。
+- Agent Ledger 记录规范化执行事实并保存不透明 Checkpoint，不解释 Harness State，也不做调度或自动重放决策。
 
 ## 代码地图与核心模块
 
@@ -33,10 +33,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
     │   ├── api/               # 执行侧 Claude 兼容 HTTP/SSE 协议适配
     │   ├── app/               # Session Run 生命周期
     │   ├── execution/         # App 与 Harness 之间的执行契约
-    │   ├── harness/           # Harness adapter；AgentGo 是首个实现
-    │   │   └── state/         # Harness-specific opaque state 与 GORM Store
-    │   ├── ledger/store/      # Agent Ledger EventStore 的 GORM 实现
-    │   ├── persistence/       # Agentlet MySQL/GORM Provider
+    │   ├── harness/           # Harness adapter；AgentGo 是首个实现，持有原生 Checkpoint codec
+    │   ├── persistence/       # Agentlet MySQL/GORM Provider 与 Agent Ledger Store 组装
     │   ├── sandbox/           # Harness 工具适配
     │   │   ├── engine/        # Sandbox Engine 能力契约
     │   │   └── hostel/        # Hostel Engine 实现
@@ -57,7 +55,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 3. agentd 根据 Agentlet 能力及 `capacity / allocatable / reserved / active` 调度，并通过
    Assignment generation、lease 和 fencing 维护全局归属；Agentlet 只接受有效 Assignment，
    其 observed state 由 agentd 校验后提交为 Control State。
-4. 进程恢复由 Control State 中的精确 ResumeRef 定位 Harness State，并结合 Ledger 未决 Attempt
+4. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。
 5. AgentGo 运行在 Agentlet 进程。Hostel 作为可替换的独立

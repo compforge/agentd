@@ -22,10 +22,11 @@ type Agent struct {
 // Session is the minimal execution context derived from agentd Control State.
 // Agentlets receive it with an assignment and do not load or mutate Control State.
 type Session struct {
-	ID            string
-	Agent         Agent
-	EnvironmentID string
-	ResumeRef     string
+	ID             string
+	Agent          Agent
+	EnvironmentID  string
+	ResumeRef      string
+	ResumeRevision int64
 }
 
 type TurnInput struct {
@@ -34,6 +35,7 @@ type TurnInput struct {
 }
 
 type TurnResult struct {
+	ResumeRef      string
 	ResumeRevision int64
 }
 

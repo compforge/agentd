@@ -197,7 +197,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	}
 	if session.Control.Status != "idle" || session.Control.Harness != "recording" ||
 		session.Control.HarnessVersion != "test" || session.Control.ResumeRef != "recording/"+session.ID ||
-		session.Control.ResumeRevision != -1 {
+		session.Control.ResumeRevision != 0 {
 		t.Fatalf("control state = %#v", session.Control)
 	}
 	session.Control.Status = "running"
@@ -241,7 +241,8 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		if pendingErr != nil {
 			t.Fatal(pendingErr)
 		}
-		if current.Control.Status == "idle" && current.Control.ResumeRevision == 7 && len(pending) == 0 {
+		if current.Control.Status == "idle" && current.Control.ResumeRef == "checkpoint-7" &&
+			current.Control.ResumeRevision == 7 && len(pending) == 0 {
 			recovered.mu.Lock()
 			activeWorkers := len(recovered.workers)
 			recovered.mu.Unlock()
@@ -285,7 +286,7 @@ func (h recordingHarness) Run(
 	err := emit(NewTurnEvent(input.ID, "agent.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "done"}},
 	}))
-	return TurnResult{ResumeRevision: 7}, err
+	return TurnResult{ResumeRef: "checkpoint-7", ResumeRevision: 7}, err
 }
 
 func (recordingHarness) Interrupt(string) {}
@@ -320,21 +321,21 @@ type failOnceEventStore struct {
 
 func (s *failOnceEventStore) Append(
 	ctx context.Context,
-	stream agentledger.EventStream,
-	expectedVersion int64,
+	laneID string,
+	expectedLastSeq int64,
 	appendID string,
 	events ...agentledger.ProposedEvent,
-) (agentledger.CommitReceipt, error) {
+) (agentledger.AppendReceipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, event := range events {
 		managed, _ := event.Payload["event"].(map[string]any)
 		if managed["type"] == s.eventType && !s.failed {
 			s.failed = true
-			return agentledger.CommitReceipt{}, fmt.Errorf("injected %s append failure", s.eventType)
+			return agentledger.AppendReceipt{}, fmt.Errorf("injected %s append failure", s.eventType)
 		}
 	}
-	return s.EventStore.Append(ctx, stream, expectedVersion, appendID, events...)
+	return s.EventStore.Append(ctx, laneID, expectedLastSeq, appendID, events...)
 }
 
 type memoryRepository struct {
