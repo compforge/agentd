@@ -11,39 +11,11 @@ import (
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/compforge/agentd/agentd/internal/connector"
-	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/service"
+	"github.com/compforge/agentd/agentd/internal/session/connector"
 )
 
 const maxConnectorResponseBody = 2 << 20
-
-func (s *Server) syncSession(ctx context.Context, session model.Session) model.Session {
-	if session.AssignmentID == "" {
-		return session
-	}
-	target, err := s.service.CurrentExecution(ctx, session.ID)
-	if err != nil {
-		s.logger.Warn("resolve Agentlet Session state", "session_id", session.ID, "error", err)
-		return session
-	}
-	connectorTarget := connector.Target{Endpoint: target.Endpoint, Work: target.Work}
-	if err := s.connector.Ensure(ctx, connectorTarget); err != nil {
-		s.logger.Warn("prepare Agentlet Session state", "session_id", session.ID, "error", err)
-		return session
-	}
-	state, err := s.connector.SessionState(ctx, connectorTarget)
-	if err != nil {
-		s.logger.Warn("read Agentlet Session state", "session_id", session.ID, "error", err)
-		return session
-	}
-	observed, err := s.service.ObserveExecutionState(ctx, session.ID, state)
-	if err != nil {
-		s.logger.Warn("commit Agentlet Session state", "session_id", session.ID, "error", err)
-		return session
-	}
-	return observed
-}
 
 func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContext) {
 	target, err := s.service.PrepareExecution(ctx, request.Param("session_id"))

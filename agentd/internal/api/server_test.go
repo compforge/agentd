@@ -20,10 +20,11 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
-	"github.com/compforge/agentd/agentd/internal/connector"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	"github.com/compforge/agentd/agentd/internal/service"
+	"github.com/compforge/agentd/agentd/internal/session/connector"
+	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
 	"github.com/compforge/agentd/internal/executionapi"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -161,21 +162,6 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatalf("listed Events = %#v", page.Data)
 	}
 
-	current, err := client.Beta.Sessions.Get(ctx, session.ID, anthropic.BetaSessionGetParams{})
-	if err != nil {
-		t.Fatalf("sync Session state from assigned Agentlet: %v", err)
-	}
-	if current.Status != anthropic.BetaManagedAgentsSessionStatusIdle {
-		t.Fatalf("Session status = %q, want idle", current.Status)
-	}
-	stored, err := repository.GetSession(ctx, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.ResumeRef != "checkpoint-7" || stored.ResumeRevision != 7 {
-		t.Fatalf("persisted observed state = %#v", stored)
-	}
-
 	streamCtx, cancelStream := context.WithTimeout(ctx, 2*time.Second)
 	stream := client.Beta.Sessions.Events.StreamEvents(
 		streamCtx, session.ID, anthropic.BetaSessionEventStreamParams{},
@@ -193,6 +179,35 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatal(err)
 	}
 	cancelStream()
+
+	source, err := sessionobserver.NewAgentletSource(controlService, agentletConnector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionObserver, err := sessionobserver.New(source, controlService, sessionobserver.Config{
+		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionObserver.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err := client.Beta.Sessions.Get(ctx, session.ID, anthropic.BetaSessionGetParams{})
+	if err != nil {
+		t.Fatalf("read Session after background observation: %v", err)
+	}
+	if current.Status != anthropic.BetaManagedAgentsSessionStatusIdle {
+		t.Fatalf("Session status = %q, want idle", current.Status)
+	}
+	stored, err := repository.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ResumeRef != "checkpoint-7" || stored.ResumeRevision != 7 ||
+		stored.AssignmentID != "" || len(stored.ObserverStatus) == 0 {
+		t.Fatalf("persisted observed state = %#v", stored)
+	}
 }
 
 type fakeAgentlet struct {

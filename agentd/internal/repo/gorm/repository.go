@@ -73,6 +73,7 @@ type sessionRow struct {
 	HarnessVersion string  `gorm:"size:64"`
 	ResumeRef      string  `gorm:"size:191"`
 	ResumeRevision int64   `gorm:"not null"`
+	ObserverStatus []byte  `gorm:"type:json"`
 	AssignmentID   *string `gorm:"size:64"`
 	WorkerID       *string `gorm:"size:64;index"`
 	AssignedAt     *time.Time
@@ -417,7 +418,8 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 		Status: string(session.Status), Revision: session.Revision,
 		Harness: session.Harness, HarnessVersion: session.HarnessVersion,
 		ResumeRef: session.ResumeRef, ResumeRevision: session.ResumeRevision,
-		AssignmentID: optionalString(session.AssignmentID), WorkerID: optionalString(session.WorkerID),
+		ObserverStatus: session.ObserverStatus,
+		AssignmentID:   optionalString(session.AssignmentID), WorkerID: optionalString(session.WorkerID),
 		AssignedAt: session.AssignedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 	}, nil
 }
@@ -429,7 +431,8 @@ func (r sessionRow) session() (model.Session, error) {
 		Status: model.SessionStatus(r.Status), Revision: r.Revision,
 		Harness: r.Harness, HarnessVersion: r.HarnessVersion,
 		ResumeRef: r.ResumeRef, ResumeRevision: r.ResumeRevision,
-		AssignmentID: stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID),
+		ObserverStatus: r.ObserverStatus,
+		AssignmentID:   stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID),
 		AssignedAt: r.AssignedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if err := json.Unmarshal(r.Metadata, &value.Metadata); err != nil {

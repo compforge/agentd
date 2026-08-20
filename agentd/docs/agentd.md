@@ -7,11 +7,11 @@ agentd 是 Managed Agent 的 Control Plane，负责全局资源、执行时机�
 
 ![agentd Managed Agent 架构](architecture.svg)
 
-## 四个 Control Plane 角色
+## 四类 Control Plane 角色
 
 | 角色 | 回答的问题 | 唯一写权 |
 |---|---|---|
-| Observer | Worker 现在是否存在、Ready，endpoint 是什么 | `worker.observer_status` |
+| Observer | Worker 是否可用；Assignment 对应的 Session 执行到了哪里 | `worker.observer_status`、`session.observer_status` |
 | Scheduler | 当前 Session 应分配给哪个可用 Worker | 无；只返回纯决策 |
 | Lifecycler | 应创建、drain 或回收哪些 Worker | Worker lifecycle phase 和运行资源动作 |
 | Connector | 已分配 Worker 的 Agent API 如何触达 | 无；只走数据面 |
@@ -36,7 +36,12 @@ Worker 只持久化稳定身份、`capacity`、lifecycle phase 和 Observer fact
 
 `sessions` 是持久化需求和当前绑定的唯一事实表：`rescheduling` 且 `worker_id` 为空表示等待容量；
 `worker_id` 非空表示当前计算位置。`assignment_id` 随每次重新绑定生成，作为 Agentlet 请求的 fence。
-Assignment 仍是 API 和运行时中的值对象，但不再单独建表。
+Assignment 仍是 API 和执行协议中的值对象，但不再单独建表。
+
+Session 除身份、Agent/Environment 版本、公开 `status`、当前 Assignment 和安全恢复点外，还保存
+`observer_status`。它记录某个 Assignment 最近一次成功观测的 `observed_at`、`exists`、执行状态和
+ResumeRef；其中携带的 `assignment_id` 是观测 fence。公开 `status` 是 Control Plane 根据该事实生成的
+读模型，不由 Agentlet 直接覆盖。
 
 Worker 已用容量由当前绑定的 Session 数计算，不在 Worker 或 observation 中冗余保存：
 
@@ -49,10 +54,15 @@ available = worker.capacity - count(sessions where worker_id = worker.id)
 Go 代码中，稳定对象定义在 `internal/model`，持久化契约定义在 `internal/repo/repository.go`，GORM
 表映射和查询放在 `internal/repo/gorm`；`internal/service` 只编排业务事务，不暴露 GORM model。
 
-## Observer
+## Observers
+
+Worker 和 Session 有独立 Observer。两者只采集事实，不做 placement；源访问失败时保留上一次成功事实，
+不能把超时或连接错误解释成对象不存在。
+
+### Worker Observer
 
 agentd 创建的 Worker Pod 必须同时带有 `agentd.compforge.dev/managed=true` 和
-`agentd.compforge.dev/worker-id=<worker UUID>`。Observer 通过 `agentd/internal/k8s` 周期性列出这些
+`agentd.compforge.dev/worker-id=<worker UUID>`。Observer 通过 `agentd/internal/worker/k8s` 周期性列出这些
 Pod，并把事实写入 Worker。Agentlet 不主动注册或发送 heartbeat，也不存在外部 Worker 写入 API。
 
 Worker identity 不等于 Pod UID。Pod 名、UID、IP 和 Ready 都是 `observer_status` 中的外部事实。
@@ -63,9 +73,20 @@ Scheduler 只消费 observation 足够新、`exists=true`、`ready=true` 且具�
 Observer status 与 lifecycle phase 正交：前者描述 Kubernetes 里的外部事实，后者描述 agentd 正在
 采取的动作。Kubernetes substrate 只提供 `PodSnapshot`，不能成为第二个事实写入者。
 
+### Session Observer
+
+Session Observer 只轮询数据库中仍有有效 Assignment 的 Session，通过 Worker 最新 endpoint 读取
+Agentlet `/state`，再把结果提交给 Control State。它不调用 `Ensure`；观察不能创建 Work，也不能因为
+读取行为改变执行状态。
+
+每次提交同时受两个 fence 保护：`assignment_id` 必须仍匹配当前绑定，`observed_at` 不能早于已经保存的
+事实。通过 fence 后，ResumeRevision 只能单调前进。idle 或 terminated 表示该 Assignment 已不再占用
+执行容量，Session observation、公开状态、ResumeRef 和 Assignment 释放在同一数据库事务内提交；最后
+一个绑定释放后，Worker 才开始计算 idle TTL。多个 agentd 副本可以并行观察，较旧响应不会覆盖新事实。
+
 ## Scheduler
 
-Service 在数据库事务中锁定 Worker，加载 Observer facts 和绑定 Session 数，再把 typed candidates
+Service 在数据库事务中锁定 Worker，加载 DB 中的 Worker observation、当前 Session binding 和绑定数，再把 typed candidates
 交给 Scheduler。Scheduler 是无 I/O 的纯 placement 策略：
 
 1. 保留仍可调度的既有 Assignment；
@@ -202,7 +223,7 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 ## 部署边界
 
 - agentd Lifecycler 管理 Worker 数量和生命周期；
-- agentd Deployment 可以多副本运行；每个副本都运行 API、Scheduler、Connector 和周期控制器，
+- agentd Deployment 可以多副本运行；每个副本都运行 API、Scheduler、Connector、Session Observer 和周期控制器，
   通过 DB lease、phase CAS 与幂等动作协调；
 - Kubernetes 管理已创建 Worker Pod 的健壮性和重建；
 - SRE 通过 workload 模板管理镜像、资源、placement 约束、故障域和集群容量；
@@ -211,9 +232,10 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 Helm 部署形态、Worker 双容器模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
-启用 Kubernetes Worker source 后，每个 agentd 副本同时运行 Observer、Lifecycler 和 Pod GC；Record GC
-作为独立数据库维护循环始终运行。
+Session Observer 与 Record GC 始终运行。启用 Kubernetes Worker source 后，每个 agentd 副本还运行
+Worker Observer、Lifecycler 和 Pod GC。
 无容量的调度结果先持久化为待分配 Session，再唤醒 Lifecycler；Provisioner 根据缺口创建 Worker Pod，
 Observer 确认 Ready 后，后续请求即可完成 Assignment 并由 Connector 转发到 Agentlet。Pod GC 同时收敛
-空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Assignment 主动释放与跨 Worker 恢复尚未
-接通；它们属于 Control State 和 Ledger 恢复链路，不混入 Worker 供给控制器。
+空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Session Observer 在执行进入 idle 或
+terminated 后释放 Assignment；跨 Worker 恢复仍由 Control State 和 Ledger 的恢复判断负责，不混入
+Worker 供给控制器。

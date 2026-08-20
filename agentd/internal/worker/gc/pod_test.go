@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
 	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
+	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

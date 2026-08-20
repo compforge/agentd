@@ -10,7 +10,7 @@ import (
 	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
-	"github.com/compforge/agentd/agentd/internal/scheduler"
+	"github.com/compforge/agentd/agentd/internal/session/scheduler"
 )
 
 type Service struct {
@@ -238,38 +238,55 @@ func (a *Service) Release(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("%w: session id is required", ErrInvalid)
 	}
 	return a.repository.Transaction(ctx, func(repository repo.Repository) error {
-		session, err := repository.GetSessionForUpdate(ctx, sessionID)
+		current, err := repository.GetSession(ctx, sessionID)
 		if err != nil && err != repo.ErrNotFound {
 			return fmt.Errorf("load session %q: %w", sessionID, err)
 		}
-		if err == nil {
-			workerID := session.WorkerID
-			worker, workerErr := repository.GetWorkerForUpdate(ctx, workerID)
+		if err == repo.ErrNotFound {
+			return nil
+		}
+		workerID := current.WorkerID
+		assignmentID := current.AssignmentID
+		var (
+			worker       model.Worker
+			workerLocked bool
+		)
+		if workerID != "" {
+			worker, err = repository.GetWorkerForUpdate(ctx, workerID)
+			workerErr := err
 			if workerErr != nil && workerErr != repo.ErrNotFound {
 				return workerErr
 			}
-			now := time.Now().UTC()
-			session.Status = model.SessionStatusIdle
-			session.AssignmentID = ""
-			session.WorkerID = ""
-			session.AssignedAt = nil
-			session.UpdatedAt = now
-			if err := repository.PutSession(ctx, session); err != nil {
-				return fmt.Errorf("release session %q: %w", sessionID, err)
-			}
-			if workerID == "" {
-				return nil
-			}
-			remaining, err := repository.CountWorkerSessions(ctx, workerID)
-			if err != nil {
+			workerLocked = workerErr == nil
+		}
+		session, err := repository.GetSessionForUpdate(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if session.WorkerID != workerID || session.AssignmentID != assignmentID {
+			return fmt.Errorf("%w: Session %q Assignment changed", ErrConflict, sessionID)
+		}
+		now := time.Now().UTC()
+		session.Status = model.SessionStatusIdle
+		session.AssignmentID = ""
+		session.WorkerID = ""
+		session.AssignedAt = nil
+		session.UpdatedAt = now
+		if err := repository.PutSession(ctx, session); err != nil {
+			return fmt.Errorf("release session %q: %w", sessionID, err)
+		}
+		if workerID == "" {
+			return nil
+		}
+		remaining, err := repository.CountWorkerSessions(ctx, workerID)
+		if err != nil {
+			return err
+		}
+		if remaining == 0 && workerLocked {
+			worker.IdleSince = &now
+			worker.UpdatedAt = now
+			if err := repository.PutWorker(ctx, worker); err != nil {
 				return err
-			}
-			if remaining == 0 && workerErr == nil {
-				worker.IdleSince = &now
-				worker.UpdatedAt = now
-				if err := repository.PutWorker(ctx, worker); err != nil {
-					return err
-				}
 			}
 		}
 		return nil

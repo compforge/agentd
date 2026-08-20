@@ -7,8 +7,8 @@ import (
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
-	"github.com/compforge/agentd/agentd/internal/connector"
 	"github.com/compforge/agentd/agentd/internal/service"
+	"github.com/compforge/agentd/agentd/internal/session/connector"
 )
 
 type Server struct {

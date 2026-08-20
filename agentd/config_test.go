@@ -40,6 +40,9 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("AGENTD_WORKER_RECORD_GC_REQUEST_TIMEOUT", "45s")
 	t.Setenv("AGENTD_WORKER_RECORD_RETENTION", "336h")
 	t.Setenv("AGENTD_WORKER_RECORD_GC_BATCH_SIZE", "25")
+	t.Setenv("AGENTD_SESSION_OBSERVER_INTERVAL", "9s")
+	t.Setenv("AGENTD_SESSION_OBSERVER_REQUEST_TIMEOUT", "4s")
+	t.Setenv("AGENTD_SESSION_OBSERVER_CONCURRENCY", "6")
 
 	config, err := loadConfig()
 	if err != nil {
@@ -61,6 +64,10 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 		config.workerRecordGCTimeout != 45*time.Second ||
 		config.workerRecordRetention != 14*24*time.Hour || config.workerRecordGCBatchSize != 25 {
 		t.Fatalf("worker record GC config = %+v", config)
+	}
+	if config.sessionObserverInterval != 9*time.Second ||
+		config.sessionObserverTimeout != 4*time.Second || config.sessionObserverConcurrency != 6 {
+		t.Fatalf("Session Observer config = %+v", config)
 	}
 }
 

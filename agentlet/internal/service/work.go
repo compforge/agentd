@@ -96,6 +96,9 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 	return session, nil
 }
 
+// ValidateAssignment uses the persisted local Session as the fence. A settled
+// Work may already be evicted from memory while its Assignment remains valid
+// long enough for agentd to observe the final state.
 func (a *Service) ValidateAssignment(ctx context.Context, sessionID, workerID, assignmentID string) error {
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
@@ -104,12 +107,14 @@ func (a *Service) ValidateAssignment(ctx context.Context, sessionID, workerID, a
 	if session.Control.AssignmentID == "" && workerID == "" && assignmentID == "" {
 		return nil
 	}
+	if session.Control.AssignmentID != assignmentID || session.Control.WorkerID != workerID {
+		return fmt.Errorf("%w: Session %q Assignment fence does not match", ErrConflict, sessionID)
+	}
 	work, err := a.works.Snapshot(sessionID)
-	if err != nil {
+	if err != nil && !errors.Is(err, sessionwork.ErrNotFound) {
 		return translateWorkError(sessionID, err)
 	}
-	if work.Spec.AssignmentID != assignmentID || session.Control.AssignmentID != assignmentID ||
-		session.Control.WorkerID != workerID {
+	if err == nil && work.Spec.AssignmentID != assignmentID {
 		return fmt.Errorf("%w: Session %q Assignment fence does not match", ErrConflict, sessionID)
 	}
 	return nil
@@ -132,7 +137,7 @@ func (a *Service) ExecutionState(ctx context.Context, sessionID string) (executi
 		state.ResumeRevision = work.Spec.Session.ResumeRevision
 	}
 	if err != nil {
-		if !errors.Is(err, sessionwork.ErrNotFound) || session.Control.AssignmentID != "" {
+		if !errors.Is(err, sessionwork.ErrNotFound) {
 			return executionapi.SessionState{}, translateWorkError(sessionID, err)
 		}
 	}

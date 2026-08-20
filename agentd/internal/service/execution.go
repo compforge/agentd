@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -76,51 +77,138 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 	}, nil
 }
 
-// ObserveExecutionState conditionally advances Control State using the
-// Assignment fence. A delayed Agentlet response cannot mutate a rescheduled
-// Session, and an older ResumePoint cannot rewind a newer checkpoint.
+// ObserveSession persists one Agentlet observation and projects its safe facts
+// into Control State. Idle and terminal observations release the Assignment in
+// the same transaction, so Worker capacity is not held by inactive Sessions.
 //
-// +spec=`Agentlet execution state updates apply only to the current Assignment and ResumeRevision never decreases`
-// +link=agentd/docs/agentlet.md
-func (a *Service) ObserveExecutionState(
+// +spec=`Session observations apply only to the current Assignment; stale observations cannot rewind ResumeRevision; idle or terminal observations atomically release placement`
+// +link=agentd/docs/agentd.md
+func (a *Service) ObserveSession(
 	ctx context.Context,
 	sessionID string,
-	state executionapi.SessionState,
+	status model.SessionObserverStatus,
 ) (model.Session, error) {
-	if strings.TrimSpace(state.AssignmentID) == "" {
+	if strings.TrimSpace(status.AssignmentID) == "" {
 		return model.Session{}, fmt.Errorf("%w: assignment id is required", ErrInvalid)
 	}
-	if !validSessionStatus(model.SessionStatus(state.Status)) {
-		return model.Session{}, fmt.Errorf("%w: invalid Session status %q", ErrInvalid, state.Status)
+	if status.ObservedAt.IsZero() {
+		return model.Session{}, fmt.Errorf("%w: observed_at is required", ErrInvalid)
 	}
-	var observed model.Session
-	err := a.repository.Transaction(ctx, func(repository repo.Repository) error {
+	if status.ResumeRevision < 0 {
+		return model.Session{}, fmt.Errorf("%w: resume revision must not be negative", ErrInvalid)
+	}
+	if status.Exists && !validSessionStatus(status.Status) {
+		return model.Session{}, fmt.Errorf("%w: invalid Session status %q", ErrInvalid, status.Status)
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return model.Session{}, fmt.Errorf("encode Session %q observation: %w", sessionID, err)
+	}
+	release := !status.Exists || status.Status == model.SessionStatusIdle ||
+		status.Status == model.SessionStatusTerminated
+	var (
+		observed   model.Session
+		wakeDemand bool
+	)
+	err = a.repository.Transaction(ctx, func(repository repo.Repository) error {
+		var (
+			lockedWorker model.Worker
+			workerLocked bool
+		)
+		if release {
+			current, err := repository.GetSession(ctx, sessionID)
+			if err != nil {
+				return err
+			}
+			if current.AssignmentID != status.AssignmentID {
+				return fmt.Errorf("%w: Session %q Assignment changed", ErrConflict, sessionID)
+			}
+			if current.WorkerID != "" {
+				// Scheduler locks Worker before Session. Keep the same order here so
+				// an idle observation cannot deadlock a concurrent placement.
+				lockedWorker, err = repository.GetWorkerForUpdate(ctx, current.WorkerID)
+				if err != nil && err != repo.ErrNotFound {
+					return err
+				}
+				workerLocked = err == nil
+			}
+		}
 		session, err := repository.GetSessionForUpdate(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if session.AssignmentID != state.AssignmentID {
+		if session.AssignmentID != status.AssignmentID {
 			return fmt.Errorf("%w: Session %q Assignment changed", ErrConflict, sessionID)
 		}
-		changed := session.Status != model.SessionStatus(state.Status)
-		session.Status = model.SessionStatus(state.Status)
-		if state.ResumeRevision > session.ResumeRevision ||
-			(state.ResumeRevision == session.ResumeRevision && session.ResumeRef == "" && state.ResumeRef != "") {
-			session.ResumeRef = state.ResumeRef
-			session.ResumeRevision = state.ResumeRevision
+		if current, parseErr := parseSessionObserverStatus(session.ObserverStatus); parseErr == nil &&
+			current.ObservedAt.After(status.ObservedAt) {
+			observed = session
+			return nil
+		}
+
+		now := time.Now().UTC()
+		session.ObserverStatus = raw
+		projectedStatus := status.Status
+		if !status.Exists {
+			projectedStatus = model.SessionStatusRescheduling
+		}
+		changed := session.Status != projectedStatus
+		session.Status = projectedStatus
+		if status.ResumeRevision > session.ResumeRevision ||
+			(status.ResumeRevision == session.ResumeRevision && session.ResumeRef == "" && status.ResumeRef != "") {
+			session.ResumeRef = status.ResumeRef
+			session.ResumeRevision = status.ResumeRevision
 			changed = true
+		}
+
+		workerID := session.WorkerID
+		if release {
+			session.AssignmentID = ""
+			session.WorkerID = ""
+			session.AssignedAt = nil
+			changed = true
+			wakeDemand = !status.Exists
 		}
 		if changed {
 			session.Revision++
-			session.UpdatedAt = time.Now().UTC()
-			if err := repository.PutSession(ctx, session); err != nil {
-				return fmt.Errorf("persist Session %q execution state: %w", sessionID, err)
+		}
+		session.UpdatedAt = now
+		if err := repository.PutSession(ctx, session); err != nil {
+			return fmt.Errorf("persist Session %q observation: %w", sessionID, err)
+		}
+		if release && workerID != "" {
+			remaining, err := repository.CountWorkerSessions(ctx, workerID)
+			if err != nil {
+				return err
+			}
+			if remaining == 0 {
+				if workerLocked && lockedWorker.ID == workerID {
+					lockedWorker.IdleSince = &now
+					lockedWorker.UpdatedAt = now
+					if err := repository.PutWorker(ctx, lockedWorker); err != nil {
+						return fmt.Errorf("mark Worker %q idle: %w", workerID, err)
+					}
+				}
 			}
 		}
 		observed = session
 		return nil
 	})
+	if err == nil && wakeDemand && a.demandNotifier != nil {
+		a.demandNotifier.NotifyDemand()
+	}
 	return observed, err
+}
+
+func parseSessionObserverStatus(raw json.RawMessage) (model.SessionObserverStatus, error) {
+	var status model.SessionObserverStatus
+	if len(raw) == 0 {
+		return status, fmt.Errorf("is required")
+	}
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return status, err
+	}
+	return status, nil
 }
 
 func validSessionStatus(status model.SessionStatus) bool {

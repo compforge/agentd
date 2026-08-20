@@ -9,11 +9,11 @@ import (
 	"sort"
 	"time"
 
-	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
-	controllifecycle "github.com/compforge/agentd/agentd/internal/lifecycle"
 	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
+	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
+	controllifecycle "github.com/compforge/agentd/agentd/internal/worker/lifecycle"
 )
 
 const workerPoolLock = "worker-pool:capacity"
