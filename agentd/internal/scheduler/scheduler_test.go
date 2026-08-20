@@ -41,9 +41,9 @@ func TestScheduleSkipsUnavailableWorkers(t *testing.T) {
 	}
 }
 
-func readyCandidate(workerID string, observedAt time.Time, assignedRuns int64, maxRuns int) Candidate {
+func readyCandidate(workerID string, observedAt time.Time, assignedCount int64, capacity int) Candidate {
 	return Candidate{
-		WorkerID: workerID, MaxRuns: maxRuns, AssignedRuns: assignedRuns,
+		WorkerID: workerID, Capacity: capacity, AssignedCount: assignedCount,
 		Observation: Observation{
 			ObservedAt: observedAt, Exists: true, Ready: true, Endpoint: "http://" + workerID,
 		},

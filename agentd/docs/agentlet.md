@@ -12,7 +12,7 @@ agentd Connector
   ▼
 Agentlet
   ├─ API adapter
-  ├─ Session Run application
+  ├─ Work Manager
   ├─ Harness Adapter ── AgentGo / future harness
   ├─ Persistence ────── Checkpoint / Agent Ledger
   └─ Sandbox Adapter ── local sidecar / remote engine
@@ -41,8 +41,12 @@ validate Assignment
 ```
 
 Harness Loop、模型调用、工具调用、compact 和原生上下文语义属于 Harness Adapter，详见
-[harness.md](harness.md)。Agentlet application 只编排一次 Run 生命周期，不复制某个 Harness 的
+[harness.md](harness.md)。Agentlet application 只编排 Work 生命周期，不复制某个 Harness 的
 消息模型或 checkpoint 格式。
+
+Work 是 Agentlet 中可冻结、迁移和恢复的长期逻辑对象；它不等于一次连续占用进程的调用。Worker
+只是 Work 当前的执行载体，迁移前后 Work 身份保持不变。Harness 的 `Run` 是执行动作；Agent Ledger
+中的 Run 是独立的记录层概念，agentd 不规定它与 Work 的映射关系。
 
 ## Checkpoint 与 Ledger
 
@@ -52,6 +56,10 @@ Agentlet 通过 Agent Ledger 提供的两个独立能力保存执行材料：
   Harness；Agentlet 与 agentd 只传递精确的 `ResumeRef`，不解释内容。
 - **Ledger** 追加跨 Harness 的规范化执行事实。Harness recording adapter 负责把原生 hook 翻译为
   Run、Lane、Turn、Action 和 Attempt；模型与工具调用遵守 write-before-execute。
+
+Ledger 保留 `Session → Run → Lane` 层级。Run 的最低契约是在 Session 下聚合一个或多个 Lane，
+agentd 不规定其业务来源和生命周期。Harness 可以并行驱动多个 Lane，每个 Lane 表达一个串行的
+Agent Loop。
 
 Ledger 的对象模型、事件协议、append-only 约束、Checkpoint envelope 和存储实现由
 [Agent Ledger](https://github.com/compforge/agent-ledger) 定义。agentd 仓只拥有使用顺序与恢复策略，
@@ -89,11 +97,11 @@ Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不�
 
 ## 进程与容量
 
-- 一个 Agentlet 可以在 `max_runs` 范围内执行多个 Session；容量归 Assignment 计数，不由 Agentlet
+- 一个 Agentlet 可以在容量边界内执行多个 Work；容量归 Assignment 计数，不由 Agentlet
   heartbeat 上报。
 - Kubernetes 负责容器重启和 Pod 替换；不设计 Agentlet 原地恢复同一个 Worker identity。
 - 外部 HTTP、模型、Sandbox 和存储调用必须有显式超时与容量上限。
-- 进程关闭先停止接收新 Run，再让执行到达安全 checkpoint；不能安全冻结的 Run 必须留下可诊断状态。
+- 进程关闭先停止接收新 Work，再让执行到达安全 checkpoint；不能安全冻结的 Work 必须留下可诊断状态。
 
 ## 边界
 

@@ -23,7 +23,7 @@ func TestLoadConfigDefaultsToSQLite(t *testing.T) {
 }
 
 func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
-	t.Setenv("AGENTD_WORKER_MAX_RUNS", "8")
+	t.Setenv("AGENTD_WORKER_CAPACITY", "8")
 	t.Setenv("AGENTD_WORKER_MIN_IDLE", "2")
 	t.Setenv("AGENTD_WORKER_IDLE_TTL", "20m")
 	t.Setenv("AGENTD_WORKER_CREATE_BATCH_SIZE", "3")
@@ -33,7 +33,7 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.workerMaxRuns != 8 || config.workerMinIdle != 2 || config.workerCreateBatchSize != 3 {
+	if config.workerCapacity != 8 || config.workerMinIdle != 2 || config.workerCreateBatchSize != 3 {
 		t.Fatalf("worker capacity config = %+v", config)
 	}
 	if config.workerIdleTTL != 20*time.Minute || config.workerPodTemplateFile != "/tmp/worker.yaml" {

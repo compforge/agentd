@@ -2,18 +2,34 @@ package api
 
 import (
 	"context"
+	"log/slog"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
+	"github.com/compforge/agentd/agentd/internal/app"
 )
 
-type Server struct{}
+type Server struct {
+	app    *app.App
+	logger *slog.Logger
+}
 
-func New() *Server { return &Server{} }
+func New(application *app.App, logger *slog.Logger) *Server {
+	return &Server{app: application, logger: logger}
+}
 
 func (s *Server) Register(engine *route.Engine) {
 	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
 		request.JSON(consts.StatusOK, map[string]any{"ok": true})
 	})
+	engine.POST("/v1/agents", s.createAgent)
+	engine.GET("/v1/agents", s.listAgents)
+	engine.GET("/v1/agents/:agent_id", s.getAgent)
+	engine.POST("/v1/environments", s.createEnvironment)
+	engine.GET("/v1/environments", s.listEnvironments)
+	engine.GET("/v1/environments/:environment_id", s.getEnvironment)
+	engine.POST("/v1/sessions", s.createSession)
+	engine.GET("/v1/sessions", s.listSessions)
+	engine.GET("/v1/sessions/:session_id", s.getSession)
 }

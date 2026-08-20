@@ -18,7 +18,7 @@ const (
 type Worker struct {
 	ID             string
 	Name           string
-	MaxRuns        int
+	Capacity       int
 	Phase          WorkerPhase
 	ObserverStatus json.RawMessage
 	IdleSince      *time.Time

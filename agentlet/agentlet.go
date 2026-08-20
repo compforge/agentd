@@ -37,7 +37,7 @@ func Run(logger *slog.Logger) error {
 	}
 	defer storage.Close()
 	if storage.Provider == "sqlite" {
-		logger.Warn("agentlet uses local SQLite; replacing the Worker Pod loses Session state, Ledger, and Checkpoints")
+		logger.Warn("agentlet uses local SQLite; replacing the Worker Pod loses Ledger and Checkpoints")
 	}
 
 	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{

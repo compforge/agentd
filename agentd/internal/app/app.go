@@ -32,8 +32,8 @@ func (a *App) ObserveWorker(ctx context.Context, worker model.Worker) (model.Wor
 	if strings.TrimSpace(worker.ID) == "" || strings.TrimSpace(worker.Name) == "" {
 		return model.Worker{}, fmt.Errorf("%w: worker id and name are required", ErrInvalid)
 	}
-	if worker.MaxRuns <= 0 {
-		return model.Worker{}, fmt.Errorf("%w: worker %q max_runs must be positive", ErrInvalid, worker.ID)
+	if worker.Capacity <= 0 {
+		return model.Worker{}, fmt.Errorf("%w: worker %q capacity must be positive", ErrInvalid, worker.ID)
 	}
 	status, err := parseWorkerObserverStatus(worker.ObserverStatus)
 	if err != nil {
@@ -99,10 +99,10 @@ func (a *App) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 }
 
 // Assign returns the live Assignment for a Session or selects a Worker with
-// free Run capacity. The transaction locks the schedulable Worker set so two
+// free Work capacity. The transaction locks the schedulable Worker set so two
 // concurrent schedulers cannot consume the same final slot.
 //
-// +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below max_runs`
+// +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below capacity`
 // +link=agentd/docs/agentd.md
 func (a *App) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
 	if strings.TrimSpace(sessionID) == "" {
@@ -119,15 +119,8 @@ func (a *App) Assign(ctx context.Context, sessionID string) (model.Assignment, e
 			return fmt.Errorf("list workers: %w", err)
 		}
 		session, err := repository.GetSessionForUpdate(ctx, sessionID)
-		hasExisting := err == nil
-		if err != nil && err != repo.ErrNotFound {
+		if err != nil {
 			return fmt.Errorf("load session %q: %w", sessionID, err)
-		}
-		if !hasExisting {
-			session = model.Session{
-				ID: sessionID, Status: model.SessionStatusRescheduling,
-				CreatedAt: now, UpdatedAt: now,
-			}
 		}
 
 		candidates := make([]scheduler.Candidate, 0, len(workers))
@@ -193,9 +186,9 @@ func assignmentFromSession(session model.Session) model.Assignment {
 	}
 }
 
-func schedulingCandidate(worker model.Worker, assignedRuns int64) scheduler.Candidate {
+func schedulingCandidate(worker model.Worker, assignedCount int64) scheduler.Candidate {
 	candidate := scheduler.Candidate{
-		WorkerID: worker.ID, MaxRuns: worker.MaxRuns, AssignedRuns: assignedRuns,
+		WorkerID: worker.ID, Capacity: worker.Capacity, AssignedCount: assignedCount,
 	}
 	if worker.Phase != model.WorkerPhaseActive {
 		return candidate

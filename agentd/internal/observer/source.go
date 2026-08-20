@@ -17,7 +17,7 @@ type WorkerSnapshot struct {
 	PodPhase      string
 	Ready         bool
 	Unschedulable bool
-	MaxRuns       int
+	Capacity      int
 }
 
 type Source interface {
@@ -29,22 +29,22 @@ type podSource interface {
 }
 
 type KubernetesSource struct {
-	pods    podSource
-	port    int
-	maxRuns int
+	pods     podSource
+	port     int
+	capacity int
 }
 
-func NewKubernetesSource(pods podSource, port, maxRuns int) (*KubernetesSource, error) {
+func NewKubernetesSource(pods podSource, port, capacity int) (*KubernetesSource, error) {
 	if pods == nil {
 		return nil, fmt.Errorf("create Kubernetes Worker source: Pod source is required")
 	}
 	if port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("create Kubernetes Worker source: port must be between 1 and 65535")
 	}
-	if maxRuns <= 0 {
-		return nil, fmt.Errorf("create Kubernetes Worker source: max runs must be positive")
+	if capacity <= 0 {
+		return nil, fmt.Errorf("create Kubernetes Worker source: capacity must be positive")
 	}
-	return &KubernetesSource{pods: pods, port: port, maxRuns: maxRuns}, nil
+	return &KubernetesSource{pods: pods, port: port, capacity: capacity}, nil
 }
 
 func (s *KubernetesSource) ListWorkers(ctx context.Context) ([]WorkerSnapshot, error) {
@@ -64,7 +64,7 @@ func (s *KubernetesSource) ListWorkers(ctx context.Context) ([]WorkerSnapshot, e
 		workers = append(workers, WorkerSnapshot{
 			ID: pod.ID, PodUID: pod.UID, Name: pod.Name, Endpoint: endpoint,
 			PodPhase: string(pod.Phase), Ready: pod.Ready && endpoint != "",
-			Unschedulable: pod.Unschedulable, MaxRuns: s.maxRuns,
+			Unschedulable: pod.Unschedulable, Capacity: s.capacity,
 		})
 	}
 	return workers, nil

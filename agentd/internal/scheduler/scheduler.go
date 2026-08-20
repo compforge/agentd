@@ -22,10 +22,10 @@ type Observation struct {
 }
 
 type Candidate struct {
-	WorkerID     string
-	MaxRuns      int
-	AssignedRuns int64
-	Observation  Observation
+	WorkerID      string
+	Capacity      int
+	AssignedCount int64
+	Observation   Observation
 }
 
 type Decision struct {
@@ -55,17 +55,17 @@ func (s *Scheduler) Schedule(now time.Time, existingWorkerID string, candidates 
 		}
 	}
 
-	best := Candidate{AssignedRuns: -1}
+	best := Candidate{AssignedCount: -1}
 	for _, candidate := range candidates {
-		if !s.schedulable(now, candidate) || candidate.AssignedRuns >= int64(candidate.MaxRuns) {
+		if !s.schedulable(now, candidate) || candidate.AssignedCount >= int64(candidate.Capacity) {
 			continue
 		}
-		if best.AssignedRuns < 0 || candidate.AssignedRuns < best.AssignedRuns ||
-			(candidate.AssignedRuns == best.AssignedRuns && candidate.WorkerID < best.WorkerID) {
+		if best.AssignedCount < 0 || candidate.AssignedCount < best.AssignedCount ||
+			(candidate.AssignedCount == best.AssignedCount && candidate.WorkerID < best.WorkerID) {
 			best = candidate
 		}
 	}
-	if best.AssignedRuns < 0 {
+	if best.AssignedCount < 0 {
 		return Decision{Reason: ReasonNoCapacity}
 	}
 	return Decision{WorkerID: best.WorkerID, Reason: ReasonAvailable}

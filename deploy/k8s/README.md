@@ -79,7 +79,7 @@ Lifecycler 每轮从数据库重新计算缺口：待分配需求减去 active W
 
 ### Pod GC
 
-Worker 同时满足零绑定 Session、零执行中 Run 且超过 idle TTL 后才可回收。回收顺序固定为：
+Worker 同时满足零绑定 Session、零执行中 Work 且超过 idle TTL 后才可回收。回收顺序固定为：
 
 ```text
 active
@@ -180,7 +180,7 @@ worker:
 ```yaml
 agentd:
   extraEnv:
-    - name: AGENTD_WORKER_MAX_RUNS
+    - name: AGENTD_WORKER_CAPACITY
       value: "4"
     - name: AGENTD_WORKER_MIN_IDLE
       value: "1"

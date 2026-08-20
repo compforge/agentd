@@ -36,12 +36,12 @@ agentd
 Worker 是 agentd 的容量和调度单位，一个 Worker 对应一个 Agentlet Pod。Agentlet 是普通 Kubernetes
 workload，不对应 Node，也不要求每个物理节点运行一个实例。
 
-Worker 只持久化稳定身份、`max_runs`、lifecycle phase 和 Observer facts：
+Worker 只持久化稳定身份、`capacity`、lifecycle phase 和 Observer facts：
 
 - `id`：agentd 生成的 Worker 唯一身份，同时写入 Pod 的
   `agentd.compforge.dev/worker-id` label；
 - `name`：便于运维识别的 Pod 名称；
-- `max_runs`：最大并发 Session 数；
+- `capacity`：最大并发 Work 数；
 - lifecycle phase：`creating / active / draining / retired`；
 - `observer_status`：最近观测的 `observed_at`、`exists`、`ready` 和可选 `endpoint`。
 
@@ -52,7 +52,7 @@ Assignment 仍是 API 和运行时中的值对象，但不再单独建表。
 Worker 已用容量由当前绑定的 Session 数计算，不在 Worker 或 observation 中冗余保存：
 
 ```text
-available = worker.max_runs - count(sessions where worker_id = worker.id)
+available = worker.capacity - count(sessions where worker_id = worker.id)
 ```
 
 控制面当前只需要三个持久化主体：`workers` 保存容量与观测事实，`sessions` 保存需求和绑定，
@@ -115,7 +115,7 @@ Lifecycler 与 Kubernetes 操作分两层：
 预热不使用独立 controller，而是和 durable demand 共用一次容量计算：
 
 1. active Worker 的空闲 slot 先满足尚未绑定 Worker 的 Session；
-2. creating Worker 按 `max_runs` 计入即将到来的容量，避免重复创建；
+2. creating Worker 按 `capacity` 计入即将到来的容量，避免重复创建；
 3. 再补足配置的 `minIdleWorkers`，它只统计零绑定 Session 的通用 Worker；
 4. 创建数量同时受 `createBatchSize` 限制；
 5. 任一受管 Worker Pod 仍 Pending 或 Unschedulable 时，本轮停止继续扩容。
@@ -158,13 +158,13 @@ GC 是独立维护面，分成运行资源与数据库记录两类。两者使�
 ### Pod GC
 
 Pod GC 负责回收 Worker Pod，同时保留 Worker 终态记录用于诊断。Worker 同时满足零绑定 Session、
-没有执行中 Run 且超过 idle TTL 后，按以下顺序回收：
+没有执行中 Work 且超过 idle TTL 后，按以下顺序回收：
 
 ```text
 active
   → zero-assignment/live precheck
   → CAS draining
-  → final run/checkpoint safety check
+  → final Work/checkpoint safety check
   → CAS retired
   → Provisioner.Destroy
   → Observer confirms absent
