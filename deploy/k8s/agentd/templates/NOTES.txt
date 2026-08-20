@@ -11,5 +11,5 @@ Agentlet uses ephemeral SQLite. Deleting its Worker Pod loses Session state, Led
 
 Health endpoint:
 
-  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "agentd.fullname" . }} 8082:{{ .Values.service.port }}
-  curl http://127.0.0.1:8082/healthz
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "agentd.fullname" . }} 8020:{{ .Values.service.port }}
+  curl http://127.0.0.1:8020/healthz

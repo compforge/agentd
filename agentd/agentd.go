@@ -11,10 +11,10 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentd/internal/api"
-	control "github.com/compforge/agentd/agentd/internal/app"
 	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
 	"github.com/compforge/agentd/agentd/internal/observer"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
+	control "github.com/compforge/agentd/agentd/internal/service"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	gormsqlite "gorm.io/driver/sqlite"
@@ -35,11 +35,11 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	application, err := control.New(repository, config.observationTimeout)
+	controlService, err := control.New(repository, config.observationTimeout)
 	if err != nil {
 		return err
 	}
-	workerObserver, err := buildWorkerObserver(config, application, logger)
+	workerObserver, err := buildWorkerObserver(config, controlService, logger)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithIdleTimeout(config.idleTimeout),
 		hertzserver.WithMaxRequestBodySize(1<<20),
 	)
-	api.New(application, logger).Register(httpServer.Engine)
+	api.New(controlService, logger).Register(httpServer.Engine)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -80,7 +80,7 @@ func Run(logger *slog.Logger) error {
 	}
 }
 
-func buildWorkerObserver(config config, application *control.App, logger *slog.Logger) (*observer.Observer, error) {
+func buildWorkerObserver(config config, controlService *control.Service, logger *slog.Logger) (*observer.Observer, error) {
 	if config.workerSource == "" {
 		return nil, nil
 	}
@@ -95,7 +95,7 @@ func buildWorkerObserver(config config, application *control.App, logger *slog.L
 	if err != nil {
 		return nil, err
 	}
-	return observer.New(source, application, observer.Config{
+	return observer.New(source, controlService, observer.Config{
 		Interval: config.observerInterval, RequestTimeout: config.observerTimeout, Logger: logger,
 	})
 }

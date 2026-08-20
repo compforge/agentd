@@ -1,4 +1,4 @@
-package app
+package service
 
 import (
 	"context"
@@ -13,22 +13,22 @@ import (
 	"github.com/compforge/agentd/agentd/internal/scheduler"
 )
 
-type App struct {
+type Service struct {
 	repository repo.Repository
 	scheduler  *scheduler.Scheduler
 }
 
-func New(repository repo.Repository, observationTimeout time.Duration) (*App, error) {
+func New(repository repo.Repository, observationTimeout time.Duration) (*Service, error) {
 	if repository == nil {
 		return nil, fmt.Errorf("create control plane: repository is required")
 	}
 	if observationTimeout <= 0 {
 		return nil, fmt.Errorf("create control plane: observation timeout must be positive")
 	}
-	return &App{repository: repository, scheduler: scheduler.New(observationTimeout)}, nil
+	return &Service{repository: repository, scheduler: scheduler.New(observationTimeout)}, nil
 }
 
-func (a *App) ObserveWorker(ctx context.Context, worker model.Worker) (model.Worker, error) {
+func (a *Service) ObserveWorker(ctx context.Context, worker model.Worker) (model.Worker, error) {
 	if strings.TrimSpace(worker.ID) == "" || strings.TrimSpace(worker.Name) == "" {
 		return model.Worker{}, fmt.Errorf("%w: worker id and name are required", ErrInvalid)
 	}
@@ -90,7 +90,7 @@ func (a *App) ObserveWorker(ctx context.Context, worker model.Worker) (model.Wor
 	return observed, nil
 }
 
-func (a *App) ListWorkers(ctx context.Context) ([]model.Worker, error) {
+func (a *Service) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 	workers, err := a.repository.ListWorkers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
@@ -104,7 +104,7 @@ func (a *App) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 //
 // +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below capacity`
 // +link=agentd/docs/agentd.md
-func (a *App) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
+func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return model.Assignment{}, fmt.Errorf("%w: session id is required", ErrInvalid)
 	}
@@ -217,7 +217,7 @@ func parseWorkerObserverStatus(raw json.RawMessage) (model.WorkerObserverStatus,
 	return status, nil
 }
 
-func (a *App) Release(ctx context.Context, sessionID string) error {
+func (a *Service) Release(ctx context.Context, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("%w: session id is required", ErrInvalid)
 	}

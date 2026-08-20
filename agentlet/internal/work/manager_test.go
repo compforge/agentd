@@ -4,12 +4,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/compforge/agentd/agentlet/internal/execution"
+	"github.com/compforge/agentd/agentlet/internal/harness"
 )
 
 func TestManagerFencesAssignmentsAndCoalescesWake(t *testing.T) {
 	manager := NewManager(1)
-	spec := Spec{AssignmentID: "assignment-1", Session: execution.Session{ID: "session-1"}}
+	spec := Spec{AssignmentID: "assignment-1", Session: harness.Session{ID: "session-1"}}
 	resident, created, err := manager.Ensure(spec)
 	if err != nil || !created {
 		t.Fatalf("Ensure() = created %t, err %v", created, err)
@@ -36,12 +36,12 @@ func TestManagerFencesAssignmentsAndCoalescesWake(t *testing.T) {
 
 func TestManagerCapacityAndResumeRevision(t *testing.T) {
 	manager := NewManager(1)
-	spec := Spec{AssignmentID: "assignment-1", Session: execution.Session{ID: "session-1", ResumeRevision: 2}}
+	spec := Spec{AssignmentID: "assignment-1", Session: harness.Session{ID: "session-1", ResumeRevision: 2}}
 	resident, _, err := manager.Ensure(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := manager.Ensure(Spec{AssignmentID: "assignment-2", Session: execution.Session{ID: "session-2"}}); !errors.Is(err, ErrCapacity) {
+	if _, _, err := manager.Ensure(Spec{AssignmentID: "assignment-2", Session: harness.Session{ID: "session-2"}}); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("Ensure(over capacity) error = %v", err)
 	}
 	if err := resident.UpdateResume(spec.AssignmentID, "checkpoint-3", 3); err != nil {

@@ -44,7 +44,7 @@ func loadConfig() (config, error) {
 		workerSource = "kubernetes"
 	}
 	value := config{
-		address:               envOr("AGENTD_CONTROL_ADDRESS", "0.0.0.0:8082"),
+		address:               envOr("AGENTD_CONTROL_ADDRESS", "0.0.0.0:8020"),
 		mysqlDSN:              os.Getenv("AGENTD_MYSQL_DSN"),
 		sqlitePath:            envOr("AGENTD_SQLITE_PATH", "agentd.db"),
 		maxOpenConns:          32,
@@ -55,7 +55,7 @@ func loadConfig() (config, error) {
 		workerSource:          envOr("AGENTD_WORKER_SOURCE", workerSource),
 		workerNamespace:       envOr("AGENTD_WORKER_NAMESPACE", envOr("POD_NAMESPACE", inClusterNamespace)),
 		workerSelector:        envOr("AGENTD_WORKER_LABEL_SELECTOR", "app.kubernetes.io/name=agentlet"),
-		workerPort:            8081,
+		workerPort:            8019,
 		workerCapacity:        1,
 		workerMinIdle:         0,
 		workerIdleTTL:         10 * time.Minute,

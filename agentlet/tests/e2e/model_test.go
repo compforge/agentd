@@ -19,9 +19,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	agentledger "github.com/compforge/agent-ledger/go"
-	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/sandbox/engine"
+	"github.com/compforge/agentd/agentlet/internal/service"
 )
 
 func TestManagedAgentAnswersThroughModel(t *testing.T) {
@@ -119,7 +119,9 @@ func startAgentGoModelE2EWithKey(
 	requestTimeout time.Duration,
 ) (*sqliteE2EBackend, anthropic.Client) {
 	t.Helper()
-	backend := openSQLiteE2EBackend(t, filepath.Join(t.TempDir(), "agentd-model-e2e.db"))
+	backend := openSQLiteE2EBackend(
+		t, filepath.Join(t.TempDir(), "agentd-model-e2e.db"), service.NewMemoryRepository(),
+	)
 	t.Cleanup(func() { backend.close(t) })
 	runner, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: apiKey, BaseURL: modelURL, RequestTimeout: requestTimeout,
@@ -129,8 +131,8 @@ func startAgentGoModelE2EWithKey(
 	if err != nil {
 		t.Fatalf("create AgentGo E2E runner: %v", err)
 	}
-	application := app.New(backend.resources, app.NewEventLog(backend.ledger), runner)
-	_, client := startSQLiteE2EServer(t, application)
+	executionService := service.New(backend.resources, service.NewEventLog(backend.ledger), runner)
+	_, client := startSQLiteE2EServer(t, executionService)
 	return backend, client
 }
 

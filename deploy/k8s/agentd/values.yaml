@@ -19,7 +19,7 @@ rbac:
 
 service:
   type: ClusterIP
-  port: 8082
+  port: 8020
 
 model:
   apiKey: ""

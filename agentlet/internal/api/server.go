@@ -14,35 +14,34 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
 	"github.com/cloudwego/hertz/pkg/route"
-	"github.com/compforge/agentd/agentlet/internal/app"
+	"github.com/compforge/agentd/agentlet/internal/service"
 )
 
 type Server struct {
-	app    *app.App
-	logger *slog.Logger
+	service *service.Service
+	logger  *slog.Logger
 }
 
-func New(application *app.App, logger *slog.Logger) *Server {
-	return &Server{app: application, logger: logger}
+func New(executionService *service.Service, logger *slog.Logger) *Server {
+	return &Server{service: executionService, logger: logger}
 }
 
 func (s *Server) Register(engine *route.Engine) {
-	engine.Use(s.requestMetadata())
 	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
 		writeJSON(request, consts.StatusOK, map[string]any{"ok": true})
 	})
-	engine.POST("/v1/agents", s.createAgent)
-	engine.GET("/v1/agents", s.listAgents)
-	engine.GET("/v1/agents/:agent_id", s.getAgent)
-	engine.POST("/v1/environments", s.createEnvironment)
-	engine.GET("/v1/environments", s.listEnvironments)
-	engine.GET("/v1/environments/:environment_id", s.getEnvironment)
-	engine.POST("/v1/sessions", s.createSession)
-	engine.GET("/v1/sessions", s.listSessions)
-	engine.GET("/v1/sessions/:session_id", s.getSession)
-	engine.POST("/v1/sessions/:session_id/events", s.sendEvents)
-	engine.GET("/v1/sessions/:session_id/events", s.listEvents)
-	engine.GET("/v1/sessions/:session_id/events/stream", s.streamEvents)
+	engine.POST("/internal/v1/agents", s.createAgent)
+	engine.GET("/internal/v1/agents", s.listAgents)
+	engine.GET("/internal/v1/agents/:agent_id", s.getAgent)
+	engine.POST("/internal/v1/environments", s.createEnvironment)
+	engine.GET("/internal/v1/environments", s.listEnvironments)
+	engine.GET("/internal/v1/environments/:environment_id", s.getEnvironment)
+	engine.POST("/internal/v1/sessions", s.createSession)
+	engine.GET("/internal/v1/sessions", s.listSessions)
+	engine.GET("/internal/v1/sessions/:session_id", s.getSession)
+	engine.POST("/internal/v1/sessions/:session_id/events", s.sendEvents)
+	engine.GET("/internal/v1/sessions/:session_id/events", s.listEvents)
+	engine.GET("/internal/v1/sessions/:session_id/events/stream", s.streamEvents)
 }
 
 func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) {
@@ -61,7 +60,7 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 		return
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
-		s.writeError(ctx, request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", app.ErrUnsupported))
+		s.writeError(ctx, request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported))
 		return
 	}
 	modelID, err := parseModel(input.Model)
@@ -71,17 +70,17 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 	}
 	for _, tool := range input.Tools {
 		if tool["type"] != "agent_toolset_20260401" {
-			s.writeError(ctx, request, fmt.Errorf("%w: agent tool type %q", app.ErrUnsupported, tool["type"]))
+			s.writeError(ctx, request, fmt.Errorf("%w: agent tool type %q", service.ErrUnsupported, tool["type"]))
 			return
 		}
 		if defaultConfig, ok := tool["default_config"].(map[string]any); ok {
 			if policy, ok := defaultConfig["permission_policy"].(map[string]any); ok && policy["type"] == "always_ask" {
-				s.writeError(ctx, request, fmt.Errorf("%w: always_ask tool confirmation", app.ErrUnsupported))
+				s.writeError(ctx, request, fmt.Errorf("%w: always_ask tool confirmation", service.ErrUnsupported))
 				return
 			}
 		}
 	}
-	created, err := s.app.CreateAgent(ctx, app.Agent{
+	created, err := s.service.CreateAgent(ctx, service.Agent{
 		Name: input.Name, Description: input.Description, ModelID: modelID, System: input.System,
 		Tools: input.Tools, Metadata: input.Metadata,
 	})
@@ -93,7 +92,7 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 }
 
 func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetAgent(ctx, request.Param("agent_id"))
+	value, err := s.service.GetAgent(ctx, request.Param("agent_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -102,7 +101,7 @@ func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext)
 }
 
 func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListAgents(ctx)
+	values, err := s.service.ListAgents(ctx)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -125,14 +124,14 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 		return
 	}
 	if input.Config["type"] != "cloud" {
-		s.writeError(ctx, request, fmt.Errorf("%w: environment type %q", app.ErrUnsupported, input.Config["type"]))
+		s.writeError(ctx, request, fmt.Errorf("%w: environment type %q", service.ErrUnsupported, input.Config["type"]))
 		return
 	}
 	if networking, ok := input.Config["networking"].(map[string]any); ok && networking["type"] != nil && networking["type"] != "unrestricted" {
-		s.writeError(ctx, request, fmt.Errorf("%w: sandbox network policy %q", app.ErrUnsupported, networking["type"]))
+		s.writeError(ctx, request, fmt.Errorf("%w: sandbox network policy %q", service.ErrUnsupported, networking["type"]))
 		return
 	}
-	created, err := s.app.CreateEnvironment(ctx, app.Environment{
+	created, err := s.service.CreateEnvironment(ctx, service.Environment{
 		Name: input.Name, Description: input.Description, Config: input.Config, Metadata: input.Metadata,
 	})
 	if err != nil {
@@ -143,7 +142,7 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 }
 
 func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetEnvironment(ctx, request.Param("environment_id"))
+	value, err := s.service.GetEnvironment(ctx, request.Param("environment_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -152,7 +151,7 @@ func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestCo
 }
 
 func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListEnvironments(ctx)
+	values, err := s.service.ListEnvironments(ctx)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -179,7 +178,7 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		return
 	}
 	if present(input.Budget) || len(input.Resources) > 0 || len(input.VaultIDs) > 0 {
-		s.writeError(ctx, request, fmt.Errorf("%w: session budgets, resources, or vaults", app.ErrUnsupported))
+		s.writeError(ctx, request, fmt.Errorf("%w: session budgets, resources, or vaults", service.ErrUnsupported))
 		return
 	}
 	agentID, version, err := parseAgentReference(input.Agent)
@@ -192,23 +191,23 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(ctx, request, err)
 		return
 	}
-	created, err := s.app.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
+	created, err := s.service.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
 	}
 	if len(initial) > 0 {
-		if _, err := s.app.SendEvents(ctx, created.ID, initial); err != nil {
+		if _, err := s.service.SendEvents(ctx, created.ID, initial); err != nil {
 			s.writeError(ctx, request, err)
 			return
 		}
-		created, _ = s.app.GetSession(ctx, created.ID)
+		created, _ = s.service.GetSession(ctx, created.ID)
 	}
 	writeJSON(request, consts.StatusOK, sessionResponse(created))
 }
 
 func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetSession(ctx, request.Param("session_id"))
+	value, err := s.service.GetSession(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -217,7 +216,7 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListSessions(ctx)
+	values, err := s.service.ListSessions(ctx)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -241,7 +240,7 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(ctx, request, err)
 		return
 	}
-	accepted, err := s.app.SendEvents(ctx, request.Param("session_id"), events)
+	accepted, err := s.service.SendEvents(ctx, request.Param("session_id"), events)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -250,7 +249,7 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	events, err := s.app.ListEvents(ctx, request.Param("session_id"))
+	events, err := s.service.ListEvents(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -260,17 +259,17 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 
 func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
 	if len(request.QueryArgs().PeekAll("event_deltas[]")) > 0 || len(request.QueryArgs().PeekAll("event_deltas")) > 0 {
-		s.writeError(ctx, request, fmt.Errorf("%w: streaming event deltas", app.ErrUnsupported))
+		s.writeError(ctx, request, fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported))
 		return
 	}
 	sessionID := request.Param("session_id")
-	if _, err := s.app.GetSession(ctx, sessionID); err != nil {
+	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
 		s.writeError(ctx, request, err)
 		return
 	}
-	channel, cancel := s.app.Subscribe(sessionID)
+	channel, cancel := s.service.Subscribe(sessionID)
 	defer cancel()
-	history, err := s.app.ListEvents(ctx, sessionID)
+	history, err := s.service.ListEvents(ctx, sessionID)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -305,23 +304,15 @@ func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestCont
 	}
 }
 
-func (s *Server) requestMetadata() hertzapp.HandlerFunc {
-	return func(ctx context.Context, request *hertzapp.RequestContext) {
-		request.Header("anthropic-beta", "managed-agents-2026-04-01")
-		request.Header("request-id", "req-"+fmt.Sprint(time.Now().UnixNano()))
-		request.Next(ctx)
-	}
-}
-
 func (s *Server) writeError(_ context.Context, request *hertzapp.RequestContext, err error) {
 	status := consts.StatusInternalServerError
 	errorType := "api_error"
 	switch {
-	case errors.Is(err, app.ErrNotFound):
+	case errors.Is(err, service.ErrNotFound):
 		status, errorType = consts.StatusNotFound, "not_found_error"
-	case errors.Is(err, app.ErrUnsupported):
+	case errors.Is(err, service.ErrUnsupported):
 		status, errorType = consts.StatusBadRequest, "unsupported_feature"
-	case errors.Is(err, app.ErrConflict):
+	case errors.Is(err, service.ErrConflict):
 		status, errorType = consts.StatusBadRequest, "invalid_request_error"
 	}
 	if status >= 500 {
@@ -342,7 +333,7 @@ func parseModel(raw json.RawMessage) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &model); err != nil || model.ID == "" {
-		return "", fmt.Errorf("%w: model must be an ID string or object", app.ErrConflict)
+		return "", fmt.Errorf("%w: model must be an ID string or object", service.ErrConflict)
 	}
 	return model.ID, nil
 }
@@ -354,40 +345,40 @@ func parseAgentReference(raw json.RawMessage) (string, int64, error) {
 	}
 	var reference map[string]any
 	if err := json.Unmarshal(raw, &reference); err != nil {
-		return "", 0, fmt.Errorf("%w: invalid agent reference", app.ErrConflict)
+		return "", 0, fmt.Errorf("%w: invalid agent reference", service.ErrConflict)
 	}
 	id, _ = reference["id"].(string)
 	if id == "" {
-		return "", 0, fmt.Errorf("%w: agent reference id is required", app.ErrConflict)
+		return "", 0, fmt.Errorf("%w: agent reference id is required", service.ErrConflict)
 	}
 	for key := range reference {
 		if key != "id" && key != "type" && key != "version" {
-			return "", 0, fmt.Errorf("%w: per-session agent overrides", app.ErrUnsupported)
+			return "", 0, fmt.Errorf("%w: per-session agent overrides", service.ErrUnsupported)
 		}
 	}
 	version, _ := reference["version"].(float64)
 	return id, int64(version), nil
 }
 
-func parseEvents(rawEvents []json.RawMessage) ([]app.IncomingEvent, error) {
+func parseEvents(rawEvents []json.RawMessage) ([]service.IncomingEvent, error) {
 	if len(rawEvents) > 50 {
-		return nil, fmt.Errorf("%w: at most 50 events may be sent at once", app.ErrConflict)
+		return nil, fmt.Errorf("%w: at most 50 events may be sent at once", service.ErrConflict)
 	}
-	events := make([]app.IncomingEvent, 0, len(rawEvents))
+	events := make([]service.IncomingEvent, 0, len(rawEvents))
 	for _, raw := range rawEvents {
 		var event struct {
 			Type    string           `json:"type"`
 			Content []map[string]any `json:"content"`
 		}
 		if err := json.Unmarshal(raw, &event); err != nil {
-			return nil, fmt.Errorf("%w: decode session event: %v", app.ErrConflict, err)
+			return nil, fmt.Errorf("%w: decode session event: %v", service.ErrConflict, err)
 		}
-		events = append(events, app.IncomingEvent{Type: event.Type, Content: event.Content})
+		events = append(events, service.IncomingEvent{Type: event.Type, Content: event.Content})
 	}
 	return events, nil
 }
 
-func agentResponse(value app.Agent) map[string]any {
+func agentResponse(value service.Agent) map[string]any {
 	tools := make([]map[string]any, 0, len(value.Tools))
 	for _, tool := range value.Tools {
 		copy := make(map[string]any, len(tool)+2)
@@ -411,7 +402,7 @@ func agentResponse(value app.Agent) map[string]any {
 	}
 }
 
-func environmentResponse(value app.Environment) map[string]any {
+func environmentResponse(value service.Environment) map[string]any {
 	config := make(map[string]any, len(value.Config)+2)
 	for key, item := range value.Config {
 		config[key] = item
@@ -429,7 +420,7 @@ func environmentResponse(value app.Environment) map[string]any {
 	}
 }
 
-func sessionResponse(value app.Session) map[string]any {
+func sessionResponse(value service.Session) map[string]any {
 	agent := agentResponse(value.Agent)
 	delete(agent, "metadata")
 	delete(agent, "created_at")
@@ -467,7 +458,7 @@ func writeJSON(request *hertzapp.RequestContext, status int, value any) {
 	request.JSON(status, value)
 }
 
-func writeSSE(writer *sse.Writer, event app.ManagedEvent) error {
+func writeSSE(writer *sse.Writer, event service.ManagedEvent) error {
 	eventType, _ := event["type"].(string)
 	encoded, err := json.Marshal(event)
 	if err != nil {

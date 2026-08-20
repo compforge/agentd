@@ -1,4 +1,4 @@
-package app
+package service
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/compforge/agentd/agentd/internal/model"
 )
 
-func (a *App) CreateAgent(ctx context.Context, value model.Agent) (model.Agent, error) {
+func (a *Service) CreateAgent(ctx context.Context, value model.Agent) (model.Agent, error) {
 	if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.ModelID) == "" {
 		return model.Agent{}, fmt.Errorf("%w: agent name and model are required", ErrInvalid)
 	}
@@ -32,15 +32,15 @@ func (a *App) CreateAgent(ctx context.Context, value model.Agent) (model.Agent, 
 	return value, nil
 }
 
-func (a *App) GetAgent(ctx context.Context, id string) (model.Agent, error) {
+func (a *Service) GetAgent(ctx context.Context, id string) (model.Agent, error) {
 	return a.repository.GetAgent(ctx, id)
 }
 
-func (a *App) ListAgents(ctx context.Context) ([]model.Agent, error) {
+func (a *Service) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	return a.repository.ListAgents(ctx)
 }
 
-func (a *App) CreateEnvironment(ctx context.Context, value model.Environment) (model.Environment, error) {
+func (a *Service) CreateEnvironment(ctx context.Context, value model.Environment) (model.Environment, error) {
 	if strings.TrimSpace(value.Name) == "" {
 		return model.Environment{}, fmt.Errorf("%w: environment name is required", ErrInvalid)
 	}
@@ -60,15 +60,15 @@ func (a *App) CreateEnvironment(ctx context.Context, value model.Environment) (m
 	return value, nil
 }
 
-func (a *App) GetEnvironment(ctx context.Context, id string) (model.Environment, error) {
+func (a *Service) GetEnvironment(ctx context.Context, id string) (model.Environment, error) {
 	return a.repository.GetEnvironment(ctx, id)
 }
 
-func (a *App) ListEnvironments(ctx context.Context) ([]model.Environment, error) {
+func (a *Service) ListEnvironments(ctx context.Context) ([]model.Environment, error) {
 	return a.repository.ListEnvironments(ctx)
 }
 
-func (a *App) CreateSession(
+func (a *Service) CreateSession(
 	ctx context.Context,
 	agentID string,
 	agentVersion int64,
@@ -101,11 +101,11 @@ func (a *App) CreateSession(
 	return session, nil
 }
 
-func (a *App) GetSession(ctx context.Context, id string) (model.Session, error) {
+func (a *Service) GetSession(ctx context.Context, id string) (model.Session, error) {
 	return a.repository.GetSession(ctx, id)
 }
 
-func (a *App) ListSessions(ctx context.Context) ([]model.Session, error) {
+func (a *Service) ListSessions(ctx context.Context) ([]model.Session, error) {
 	return a.repository.ListSessions(ctx)
 }
 

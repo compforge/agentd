@@ -17,8 +17,11 @@ func TestLoadConfigDefaultsToSQLite(t *testing.T) {
 	if config.mysqlDSN != "" || config.sqlitePath != "agentd.db" {
 		t.Fatalf("storage config = mysql %q, sqlite %q", config.mysqlDSN, config.sqlitePath)
 	}
-	if config.address != "0.0.0.0:8082" {
+	if config.address != "0.0.0.0:8020" {
 		t.Fatalf("address = %q", config.address)
+	}
+	if config.workerPort != 8019 {
+		t.Fatalf("worker port = %d", config.workerPort)
 	}
 }
 

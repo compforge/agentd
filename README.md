@@ -6,8 +6,8 @@
 It exposes the core Claude Managed Agents resources—Agent, Environment, Session, and Event—while
 running the agent harness and sandbox on infrastructure you control. The API transport uses Hertz.
 The architecture separates the `agentd` control plane from per-Pod Agentlet instances. `agentd`
-accepts the Managed Agents API, schedules or locates a Session, and forwards the same API request;
-each Agentlet implements its execution semantics and manages multiple assigned harness runtimes.
+owns the Managed Agents API and schedules each Session; Agentlet exposes only an internal execution
+API and manages assigned harness runtimes.
 
 ## Core capabilities
 
@@ -31,15 +31,15 @@ single-process trial, but deleting the process filesystem loses state, Ledger, a
 Set separate external MySQL DSNs for robust deployments; the two services do not share tables.
 The controller, harness, and ledger integration use storage interfaces rather than GORM types.
 
-`make run` starts the Agentlet directly on `127.0.0.1:8081`. `make run-agentd` starts the Control
-Plane on `0.0.0.0:8082`; it uses local SQLite unless `AGENTD_MYSQL_DSN` is set. When running in a
+`make run` starts the Agentlet directly on `127.0.0.1:8019`. `make run-agentd` starts the Control
+Plane on `0.0.0.0:8020`; it uses local SQLite unless `AGENTD_MYSQL_DSN` is set. When running in a
 Kubernetes Pod, agentd discovers the namespace from its ServiceAccount and enables the Kubernetes
 Worker source by default. Outside Kubernetes, `AGENTD_WORKER_SOURCE=kubernetes` enables it explicitly.
 The Worker Observer periodically
 lists Agentlet Pods and persists observations for capacity-aware Session Assignment. Agentlet does
 not register or heartbeat with agentd. Kubernetes owns Worker Pod health and replacement; agentd
-only uses fresh Pod observations for placement. The Claude-compatible resource API remains on
-Agentlet while those global resources and routing are moved into agentd.
+only uses fresh Pod observations for placement. The Claude-compatible API is exposed only by agentd;
+Agentlet serves agentd under `/internal/v1`.
 
 ```bash
 export AGENTD_WORKER_SOURCE=kubernetes

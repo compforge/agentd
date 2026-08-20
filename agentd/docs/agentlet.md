@@ -8,10 +8,10 @@ Session placement 或跨 Worker 恢复决策。
 
 ```text
 agentd Connector
-  │ Agent API + Assignment metadata
+  │ internal execution API + Assignment
   ▼
 Agentlet
-  ├─ API adapter
+  ├─ Internal API adapter
   ├─ Work Manager
   ├─ Harness Adapter ── AgentGo / future harness
   ├─ Persistence ────── Checkpoint / Agent Ledger
@@ -22,6 +22,10 @@ Agentlet
 
 Agentlet 执行请求必须携带 agentd 生成的 Assignment 身份和 fence。Agentlet 只接受目标 Worker 与自身
 一致、尚未失效的 Assignment；它不接受 Session 自行注册，也不在多个 Worker 之间抢占任务。
+
+Agentlet 的 HTTP 面只供 agentd 调用，统一位于 `/internal/v1`；Claude Managed Agents 的公开路径、
+资源 envelope 和兼容性测试都由 agentd 拥有。内部协议承载执行所需的资源快照、Event、Assignment
+与 ResumePoint，不成为第二套产品 API。
 
 Assignment 是 Control Plane 的路由权威，Agentlet 的进程内 runtime 只是缓存。进程重启后，Agentlet
 不得从本地内存猜测归属；它根据请求携带的 Assignment 和精确 `ResumeRef` 重建执行现场。
@@ -41,7 +45,7 @@ validate Assignment
 ```
 
 Harness Loop、模型调用、工具调用、compact 和原生上下文语义属于 Harness Adapter，详见
-[harness.md](harness.md)。Agentlet application 只编排 Work 生命周期，不复制某个 Harness 的
+[harness.md](harness.md)。Agentlet Service 只编排 Work 生命周期，不复制某个 Harness 的
 消息模型或 checkpoint 格式。
 
 Work 是 Agentlet 中可冻结、迁移和恢复的长期逻辑对象；它不等于一次连续占用进程的调用。Worker

@@ -31,7 +31,7 @@ data:
           imagePullPolicy: {{ .Values.worker.agentlet.image.pullPolicy }}
           env:
             - name: AGENTD_ADDRESS
-              value: 0.0.0.0:8081
+              value: 0.0.0.0:8019
             {{- if .Values.agentlet.database.dsn }}
             - name: AGENTD_MYSQL_DSN
               value: {{ .Values.agentlet.database.dsn | quote }}
@@ -48,7 +48,7 @@ data:
             {{- end }}
           ports:
             - name: agentlet-http
-              containerPort: 8081
+              containerPort: 8019
           readinessProbe:
             httpGet:
               path: /healthz

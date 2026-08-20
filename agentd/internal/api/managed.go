@@ -11,9 +11,9 @@ import (
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/compforge/agentd/agentd/internal/app"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
+	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) {
@@ -32,7 +32,7 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 		return
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
-		s.writeError(request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", app.ErrUnsupported))
+		s.writeError(request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported))
 		return
 	}
 	modelID, err := parseModel(input.Model)
@@ -40,7 +40,7 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 		s.writeError(request, err)
 		return
 	}
-	created, err := s.app.CreateAgent(ctx, model.Agent{
+	created, err := s.service.CreateAgent(ctx, model.Agent{
 		Name: input.Name, Description: input.Description, ModelID: modelID, System: input.System,
 		Tools: input.Tools, Metadata: input.Metadata,
 	})
@@ -52,7 +52,7 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 }
 
 func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetAgent(ctx, request.Param("agent_id"))
+	value, err := s.service.GetAgent(ctx, request.Param("agent_id"))
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -61,7 +61,7 @@ func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext)
 }
 
 func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListAgents(ctx)
+	values, err := s.service.ListAgents(ctx)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -84,10 +84,10 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 		return
 	}
 	if input.Config["type"] != "cloud" {
-		s.writeError(request, fmt.Errorf("%w: environment type %q", app.ErrUnsupported, input.Config["type"]))
+		s.writeError(request, fmt.Errorf("%w: environment type %q", service.ErrUnsupported, input.Config["type"]))
 		return
 	}
-	created, err := s.app.CreateEnvironment(ctx, model.Environment{
+	created, err := s.service.CreateEnvironment(ctx, model.Environment{
 		Name: input.Name, Description: input.Description, Config: input.Config, Metadata: input.Metadata,
 	})
 	if err != nil {
@@ -98,7 +98,7 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 }
 
 func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetEnvironment(ctx, request.Param("environment_id"))
+	value, err := s.service.GetEnvironment(ctx, request.Param("environment_id"))
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -107,7 +107,7 @@ func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestCo
 }
 
 func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListEnvironments(ctx)
+	values, err := s.service.ListEnvironments(ctx)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -134,7 +134,7 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		return
 	}
 	if len(input.InitialEvents) > 0 || present(input.Budget) || len(input.Resources) > 0 || len(input.VaultIDs) > 0 {
-		s.writeError(request, fmt.Errorf("%w: initial events, budgets, resources, or vaults", app.ErrUnsupported))
+		s.writeError(request, fmt.Errorf("%w: initial events, budgets, resources, or vaults", service.ErrUnsupported))
 		return
 	}
 	agentID, version, err := parseAgentReference(input.Agent)
@@ -142,12 +142,12 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	created, err := s.app.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
+	created, err := s.service.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	agent, err := s.app.GetAgent(ctx, created.AgentID)
+	agent, err := s.service.GetAgent(ctx, created.AgentID)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -156,12 +156,12 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 }
 
 func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.app.GetSession(ctx, request.Param("session_id"))
+	value, err := s.service.GetSession(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	agent, err := s.app.GetAgent(ctx, value.AgentID)
+	agent, err := s.service.GetAgent(ctx, value.AgentID)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -170,14 +170,14 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.app.ListSessions(ctx)
+	values, err := s.service.ListSessions(ctx)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
 	data := make([]map[string]any, 0, len(values))
 	for _, value := range values {
-		agent, err := s.app.GetAgent(ctx, value.AgentID)
+		agent, err := s.service.GetAgent(ctx, value.AgentID)
 		if err != nil {
 			s.writeError(request, err)
 			return
@@ -193,9 +193,9 @@ func (s *Server) writeError(request *hertzapp.RequestContext, err error) {
 	switch {
 	case errors.Is(err, repo.ErrNotFound):
 		status, errorType = consts.StatusNotFound, "not_found_error"
-	case errors.Is(err, app.ErrUnsupported):
+	case errors.Is(err, service.ErrUnsupported):
 		status, errorType = consts.StatusBadRequest, "unsupported_feature"
-	case errors.Is(err, app.ErrInvalid), errors.Is(err, app.ErrConflict):
+	case errors.Is(err, service.ErrInvalid), errors.Is(err, service.ErrConflict):
 		status, errorType = consts.StatusBadRequest, "invalid_request_error"
 	}
 	if status >= 500 {
@@ -215,7 +215,7 @@ func parseModel(raw json.RawMessage) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &value); err != nil || value.ID == "" {
-		return "", fmt.Errorf("%w: model must be an ID string or object", app.ErrConflict)
+		return "", fmt.Errorf("%w: model must be an ID string or object", service.ErrConflict)
 	}
 	return value.ID, nil
 }
@@ -227,15 +227,15 @@ func parseAgentReference(raw json.RawMessage) (string, int64, error) {
 	}
 	var reference map[string]any
 	if err := json.Unmarshal(raw, &reference); err != nil {
-		return "", 0, fmt.Errorf("%w: invalid agent reference", app.ErrConflict)
+		return "", 0, fmt.Errorf("%w: invalid agent reference", service.ErrConflict)
 	}
 	id, _ = reference["id"].(string)
 	if id == "" {
-		return "", 0, fmt.Errorf("%w: agent reference id is required", app.ErrConflict)
+		return "", 0, fmt.Errorf("%w: agent reference id is required", service.ErrConflict)
 	}
 	for key := range reference {
 		if key != "id" && key != "type" && key != "version" {
-			return "", 0, fmt.Errorf("%w: per-session agent overrides", app.ErrUnsupported)
+			return "", 0, fmt.Errorf("%w: per-session agent overrides", service.ErrUnsupported)
 		}
 	}
 	version, _ := reference["version"].(float64)

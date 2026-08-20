@@ -1,4 +1,4 @@
-package app_test
+package service_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compforge/agentd/agentd/internal/app"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
+	"github.com/compforge/agentd/agentd/internal/service"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -42,7 +42,7 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 			t.Fatalf("Assign(%q).WorkerID = %q, want %q", want.sessionID, assignment.WorkerID, want.workerID)
 		}
 	}
-	if _, err := application.Assign(ctx, "session-4"); !errors.Is(err, app.ErrNoCapacity) {
+	if _, err := application.Assign(ctx, "session-4"); !errors.Is(err, service.ErrNoCapacity) {
 		t.Fatalf("Assign() error = %v, want ErrNoCapacity", err)
 	}
 
@@ -99,7 +99,7 @@ func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
 	putSession(t, repository, "session-pending")
-	if _, err := application.Assign(ctx, "session-pending"); !errors.Is(err, app.ErrNoCapacity) {
+	if _, err := application.Assign(ctx, "session-pending"); !errors.Is(err, service.ErrNoCapacity) {
 		t.Fatalf("Assign() error = %v, want ErrNoCapacity", err)
 	}
 	session, err := repository.GetSession(ctx, "session-pending")
@@ -135,7 +135,7 @@ func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
 	}
 }
 
-func newTestApp(t *testing.T) *app.App {
+func newTestService(t *testing.T) *service.Service {
 	application, _ := newTestControl(t)
 	return application
 }
@@ -151,7 +151,7 @@ func putSession(t *testing.T, repository *gormrepo.GORMRepository, id string) {
 	}
 }
 
-func newTestControl(t *testing.T) (*app.App, *gormrepo.GORMRepository) {
+func newTestControl(t *testing.T) (*service.Service, *gormrepo.GORMRepository) {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -163,18 +163,18 @@ func newTestControl(t *testing.T) (*app.App, *gormrepo.GORMRepository) {
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
-	application, err := app.New(repository, time.Minute)
+	application, err := service.New(repository, time.Minute)
 	if err != nil {
-		t.Fatalf("create app: %v", err)
+		t.Fatalf("create service: %v", err)
 	}
 	return application, repository
 }
 
-func observeReadyWorker(t *testing.T, application *app.App, id string, capacity int, observedAt time.Time) {
+func observeReadyWorker(t *testing.T, application *service.Service, id string, capacity int, observedAt time.Time) {
 	observeWorker(t, application, id, capacity, observedAt, true)
 }
 
-func observeWorker(t *testing.T, application *app.App, id string, capacity int, observedAt time.Time, ready bool) {
+func observeWorker(t *testing.T, application *service.Service, id string, capacity int, observedAt time.Time, ready bool) {
 	t.Helper()
 	observerStatus, err := json.Marshal(model.WorkerObserverStatus{
 		ObservedAt: observedAt,

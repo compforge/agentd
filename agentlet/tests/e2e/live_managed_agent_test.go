@@ -11,10 +11,10 @@ import (
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
-	"github.com/compforge/agentd/agentlet/internal/app"
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/persistence"
 	"github.com/compforge/agentd/agentlet/internal/sandbox"
+	"github.com/compforge/agentd/agentlet/internal/service"
 )
 
 func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
@@ -60,13 +60,14 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	application := app.New(storage.Resources, app.NewEventLog(storage.Ledger), agentHarness)
+	resources := service.NewMemoryRepository()
+	executionService := service.New(resources, service.NewEventLog(storage.Ledger), agentHarness)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = application.Shutdown(shutdownCtx)
+		_ = executionService.Shutdown(shutdownCtx)
 	})
-	agent, err := application.CreateAgent(ctx, app.Agent{
+	agent, err := executionService.CreateAgent(ctx, service.Agent{
 		Name: "integration-" + time.Now().UTC().Format("20060102150405.000000000"), ModelID: "claude-sonnet-4-6",
 		System: "For every request, call the bash tool with command pwd exactly once, then answer the user.",
 		Tools:  []map[string]any{{"type": "agent_toolset_20260401"}},
@@ -74,37 +75,37 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment, err := application.CreateEnvironment(ctx, app.Environment{Name: "integration"})
+	environment, err := executionService.CreateEnvironment(ctx, service.Environment{Name: "integration"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := application.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
+	session, err := executionService.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.SendEvents(ctx, session.ID, []app.IncomingEvent{{
+	if _, err := executionService.SendEvents(ctx, session.ID, []service.IncomingEvent{{
 		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "Reply with READY."}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	waitForIdle(t, ctx, application, session.ID)
-	firstMessages := assistantMessageCount(t, ctx, application, session.ID)
+	waitForIdle(t, ctx, executionService, session.ID)
+	firstMessages := assistantMessageCount(t, ctx, executionService, session.ID)
 	if firstMessages == 0 {
 		t.Fatal("first turn produced no assistant message")
 	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	if err := application.Shutdown(shutdownCtx); err != nil {
+	if err := executionService.Shutdown(shutdownCtx); err != nil {
 		t.Fatal(err)
 	}
 
-	restarted := app.New(storage.Resources, app.NewEventLog(storage.Ledger), agentHarness)
+	restarted := service.New(resources, service.NewEventLog(storage.Ledger), agentHarness)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = restarted.Shutdown(shutdownCtx)
 	})
-	if _, err := restarted.SendEvents(ctx, session.ID, []app.IncomingEvent{{
+	if _, err := restarted.SendEvents(ctx, session.ID, []service.IncomingEvent{{
 		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "Reply with RESUMED."}},
 	}}); err != nil {
 		t.Fatal(err)
@@ -170,12 +171,12 @@ func integrationEnv(t *testing.T, name string) string {
 	return ""
 }
 
-func waitForIdle(t *testing.T, ctx context.Context, application *app.App, sessionID string) {
+func waitForIdle(t *testing.T, ctx context.Context, executionService *service.Service, sessionID string) {
 	t.Helper()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		session, err := application.GetSession(ctx, sessionID)
+		session, err := executionService.GetSession(ctx, sessionID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,9 +194,9 @@ func waitForIdle(t *testing.T, ctx context.Context, application *app.App, sessio
 	}
 }
 
-func assistantMessageCount(t *testing.T, ctx context.Context, application *app.App, sessionID string) int {
+func assistantMessageCount(t *testing.T, ctx context.Context, executionService *service.Service, sessionID string) int {
 	t.Helper()
-	events, err := application.ListEvents(ctx, sessionID)
+	events, err := executionService.ListEvents(ctx, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}

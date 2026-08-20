@@ -8,7 +8,6 @@ import (
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
-	"github.com/compforge/agentd/agentlet/internal/execution"
 	"github.com/compforge/agentgo"
 )
 
@@ -137,7 +136,7 @@ func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
 	_, err = runner.resumeAction(
 		context.Background(), "session-1", []agentgo.AgentMessage{input, toolCall}, "input-1",
 	)
-	if !errors.Is(err, execution.ErrUnsafeRecovery) {
+	if !errors.Is(err, ErrUnsafeRecovery) {
 		t.Fatalf("error = %v, want ErrUnsafeRecovery", err)
 	}
 }
@@ -153,11 +152,11 @@ func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	currentOutput := agentgo.Message{
 		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("current output")},
 	}
-	var projected []execution.ManagedEvent
+	var projected []ManagedEvent
 	err := projectAssistantMessages(
 		[]agentgo.AgentMessage{oldInput, oldOutput, currentInput, currentOutput},
 		"input-2",
-		func(event execution.ManagedEvent) error {
+		func(event ManagedEvent) error {
 			projected = append(projected, event)
 			return nil
 		},
