@@ -169,8 +169,9 @@ Worker 行必须先于 Pod 创建提交，因此 zombie 不存在合法的“Pod
 ### DB Record GC
 
 DB Record GC 只处理已经 `retired`、Observer 已确认 Pod 不存在且超过记录保留期的 Worker 行。它按
-`updated_at, id` 小批选择，并在删除时再次检查 phase、截止时间以及不存在绑定 Session。Record GC
-不访问 Kubernetes，也不修改 active/draining Worker；失败后下一轮重试即可。
+`absent_at, id` 小批选择，并在删除时再次检查 phase、截止时间以及不存在绑定 Session。Record GC
+不访问 Kubernetes，也不修改 active/draining Worker；它独立于 Worker source 常驻运行，失败后下一轮
+重试即可。
 
 ## Connector
 
@@ -210,7 +211,8 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 Helm 部署形态、Worker 双容器模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
-启用 Kubernetes Worker source 后，每个 agentd 副本同时运行 Observer、Lifecycler 和 Pod GC。
+启用 Kubernetes Worker source 后，每个 agentd 副本同时运行 Observer、Lifecycler 和 Pod GC；Record GC
+作为独立数据库维护循环始终运行。
 无容量的调度结果先持久化为待分配 Session，再唤醒 Lifecycler；Provisioner 根据缺口创建 Worker Pod，
 Observer 确认 Ready 后，后续请求即可完成 Assignment 并由 Connector 转发到 Agentlet。Pod GC 同时收敛
 空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Assignment 主动释放与跨 Worker 恢复尚未

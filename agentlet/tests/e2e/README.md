@@ -3,6 +3,9 @@
 The local suite exercises the public Claude-compatible API through the official SDK and keeps every
 external dependency deterministic. Run it with `make test-e2e`.
 
+E2E is a user-triggered, concentrated agentd system assessment. It is not part of routine
+development checks such as `make test`, `make lint`, or `make build`.
+
 | Case | Boundary | Dependency |
 |---|---|---|
 | committed input recovery | process replacement across Control State, Harness State, and Ledger | SQLite |

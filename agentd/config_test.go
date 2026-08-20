@@ -36,6 +36,10 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("AGENTD_WORKER_CONTROLLER_LEASE_TTL", "40s")
 	t.Setenv("AGENTD_WORKER_GC_INTERVAL", "2m")
 	t.Setenv("AGENTD_WORKER_GC_DELETE_BATCH_SIZE", "12")
+	t.Setenv("AGENTD_WORKER_RECORD_GC_INTERVAL", "3h")
+	t.Setenv("AGENTD_WORKER_RECORD_GC_REQUEST_TIMEOUT", "45s")
+	t.Setenv("AGENTD_WORKER_RECORD_RETENTION", "336h")
+	t.Setenv("AGENTD_WORKER_RECORD_GC_BATCH_SIZE", "25")
 
 	config, err := loadConfig()
 	if err != nil {
@@ -52,6 +56,11 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 		config.workerControllerLeaseTTL != 40*time.Second ||
 		config.workerGCInterval != 2*time.Minute || config.workerGCDeleteBatchSize != 12 {
 		t.Fatalf("worker controller config = %+v", config)
+	}
+	if config.workerRecordGCInterval != 3*time.Hour ||
+		config.workerRecordGCTimeout != 45*time.Second ||
+		config.workerRecordRetention != 14*24*time.Hour || config.workerRecordGCBatchSize != 25 {
+		t.Fatalf("worker record GC config = %+v", config)
 	}
 }
 

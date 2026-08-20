@@ -58,7 +58,7 @@ directly.
 
 The default Helm values install one agentd replica backed by ephemeral SQLite. Production and
 multi-replica deployments require external MySQL storage. The Helm topology is currently a preview
-while Worker lifecycle runtime wiring is being completed. See
+while Assignment release and cross-Worker recovery are being completed. See
 [`deploy/k8s/README.md`](deploy/k8s/README.md) for the topology, persistence options, image settings,
 and current limitations.
 

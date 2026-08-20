@@ -288,14 +288,19 @@ func (r *GORMRepository) CountWorkerSessions(ctx context.Context, workerID strin
 	return count, nil
 }
 
+// DeleteRetiredWorkersBefore removes one bounded metadata batch without
+// treating record deletion as Worker Pod deletion.
+//
+// +spec=`Only retired Worker rows whose Pod absence predates the cutoff and which have no bound Session are deleted`
+// +link=agentd/docs/agentd.md
 func (r *GORMRepository) DeleteRetiredWorkersBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
 	var rows []workerRow
 	if err := r.db.WithContext(ctx).
-		Where("phase = ? AND absent_at IS NOT NULL AND updated_at <= ?", model.WorkerPhaseRetired, cutoff).
-		Order("updated_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		Where("phase = ? AND absent_at IS NOT NULL AND absent_at <= ?", model.WorkerPhaseRetired, cutoff).
+		Order("absent_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
 		return 0, fmt.Errorf("list retired Workers for record GC: %w", err)
 	}
 	var deleted int64
@@ -309,7 +314,7 @@ func (r *GORMRepository) DeleteRetiredWorkersBefore(ctx context.Context, cutoff 
 				return nil
 			}
 			result := tx.Where(
-				"id = ? AND phase = ? AND absent_at IS NOT NULL AND updated_at <= ?",
+				"id = ? AND phase = ? AND absent_at IS NOT NULL AND absent_at <= ?",
 				row.ID, model.WorkerPhaseRetired, cutoff,
 			).Delete(&workerRow{})
 			if result.Error != nil {
