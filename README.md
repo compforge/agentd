@@ -23,15 +23,19 @@ each Agentlet implements its execution semantics and manages multiple assigned h
 ```bash
 export ANTHROPIC_API_KEY=your-key
 export AGENTD_SANDBOX_ENDPOINT=http://127.0.0.1:8080
-export AGENTD_MYSQL_DSN='agentd:password@tcp(127.0.0.1:3306)/agentd'
 make run
 ```
 
-MySQL/GORM is the initial persistence provider. The controller, harness, and ledger integration use
-storage interfaces rather than GORM types, so another provider can be added without changing them.
+agentd and Agentlet use local SQLite when `AGENTD_MYSQL_DSN` is empty. This is convenient for a
+single-process trial, but deleting the process filesystem loses state, Ledger, and Checkpoints.
+Set separate external MySQL DSNs for robust deployments; the two services do not share tables.
+The controller, harness, and ledger integration use storage interfaces rather than GORM types.
 
 `make run` starts the Agentlet directly on `127.0.0.1:8081`. `make run-agentd` starts the Control
-Plane on `127.0.0.1:8082`. When `AGENTD_WORKER_SOURCE=kubernetes`, its Worker Observer periodically
+Plane on `0.0.0.0:8082`; it uses local SQLite unless `AGENTD_MYSQL_DSN` is set. When running in a
+Kubernetes Pod, agentd discovers the namespace from its ServiceAccount and enables the Kubernetes
+Worker source by default. Outside Kubernetes, `AGENTD_WORKER_SOURCE=kubernetes` enables it explicitly.
+The Worker Observer periodically
 lists Agentlet Pods and persists observations for capacity-aware Session Assignment. Agentlet does
 not register or heartbeat with agentd. Kubernetes owns Worker Pod health and replacement; agentd
 only uses fresh Pod observations for placement. The Claude-compatible resource API remains on
@@ -47,13 +51,14 @@ The API uses the Claude Managed Agents beta paths and accepts
 `anthropic-beta: managed-agents-2026-04-01`.
 
 The stable product boundary, supported surface, and component flow are defined in
-[`agentd/docs/kernel.md`](agentd/docs/kernel.md). The Control Plane, Agentlet, scheduling, capacity,
-and Control State model are defined in
-[`agentd/docs/control-plane.md`](agentd/docs/control-plane.md). Harness execution and adapter
-boundaries are defined in [`agentd/docs/harness.md`](agentd/docs/harness.md). Harness State, Ledger,
-recovery, audit, and trajectory boundaries are defined in
-[`agentd/docs/state-ledger.md`](agentd/docs/state-ledger.md). Sandbox capabilities and isolation
+[`agentd/docs/kernel.md`](agentd/docs/kernel.md). Control Plane scheduling, Worker lifecycle, routing,
+and Control State are defined in [`agentd/docs/agentd.md`](agentd/docs/agentd.md). Agentlet execution,
+Checkpoint/Ledger integration, and recovery ordering are defined in
+[`agentd/docs/agentlet.md`](agentd/docs/agentlet.md). Harness execution and adapter boundaries are
+defined in [`agentd/docs/harness.md`](agentd/docs/harness.md). Sandbox capabilities and isolation
 boundaries are defined in [`agentd/docs/sandbox-engine.md`](agentd/docs/sandbox-engine.md).
+The target Helm topology and Worker elasticity model are described in
+[`deploy/k8s/README.md`](deploy/k8s/README.md).
 
 ## Development
 

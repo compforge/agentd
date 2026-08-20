@@ -11,11 +11,13 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/store"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
+	gormsqlite "gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 type Config struct {
 	MySQLDSN         string
+	SQLitePath       string
 	OperationTimeout time.Duration
 	MaxOpenConns     int
 	MaxIdleConns     int
@@ -23,10 +25,18 @@ type Config struct {
 }
 
 type Backend struct {
+	Provider    string
 	Resources   app.Repository
 	Ledger      agentledger.EventStore
 	Checkpoints agentledger.CheckpointStore
 	close       func() error
+}
+
+func Open(ctx context.Context, config Config) (*Backend, error) {
+	if config.MySQLDSN != "" {
+		return OpenMySQL(ctx, config)
+	}
+	return openSQLite(ctx, config)
 }
 
 func OpenMySQL(ctx context.Context, config Config) (*Backend, error) {
@@ -77,23 +87,64 @@ func OpenMySQL(ctx context.Context, config Config) (*Backend, error) {
 		return nil, fmt.Errorf("ping MySQL storage: %w", err)
 	}
 
+	return initializeBackend(ctx, "mysql", db, sqlDB.Close, config.OperationTimeout)
+}
+
+func openSQLite(ctx context.Context, config Config) (*Backend, error) {
+	if config.OperationTimeout <= 0 {
+		return nil, fmt.Errorf("storage operation timeout must be positive")
+	}
+	if config.SQLitePath == "" {
+		return nil, fmt.Errorf("SQLite path is required when AGENTD_MYSQL_DSN is not set")
+	}
+	db, err := gorm.Open(gormsqlite.Open(config.SQLitePath), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open SQLite storage %q: %w", config.SQLitePath, err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("resolve SQLite connection pool: %w", err)
+	}
+	// The fallback belongs to one Worker Pod. Serializing its DB access avoids
+	// lock contention without pretending that local SQLite is shared storage.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	pingCtx, cancel := context.WithTimeout(ctx, config.OperationTimeout)
+	defer cancel()
+	if err := sqlDB.PingContext(pingCtx); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("ping SQLite storage %q: %w", config.SQLitePath, err)
+	}
+	return initializeBackend(ctx, "sqlite", db, sqlDB.Close, config.OperationTimeout)
+}
+
+func initializeBackend(
+	ctx context.Context,
+	provider string,
+	db *gorm.DB,
+	closeDatabase func() error,
+	operationTimeout time.Duration,
+) (*Backend, error) {
 	resources, err := store.NewGORM(db.WithContext(ctx))
 	if err != nil {
-		_ = sqlDB.Close()
+		_ = closeDatabase()
 		return nil, err
 	}
-	ledger, err := ledgergorm.New(db, config.OperationTimeout)
+	ledger, err := ledgergorm.New(db, operationTimeout)
 	if err != nil {
-		_ = sqlDB.Close()
+		_ = closeDatabase()
 		return nil, err
 	}
 	if err := ledger.Initialize(ctx); err != nil {
-		_ = sqlDB.Close()
+		_ = closeDatabase()
 		return nil, fmt.Errorf("initialize Agent Ledger store: %w", err)
 	}
 	return &Backend{
+		Provider:  provider,
 		Resources: resources, Ledger: ledger, Checkpoints: ledger,
-		close: func() error { return sqlDB.Close() },
+		close: closeDatabase,
 	}, nil
 }
 

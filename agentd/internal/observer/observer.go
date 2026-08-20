@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"time"
 
-	control "github.com/compforge/agentd/agentd/internal/app"
+	"github.com/compforge/agentd/agentd/internal/model"
 )
 
 type Sink interface {
-	ListWorkers(context.Context) ([]control.Worker, error)
-	ObserveWorker(context.Context, control.Worker) (control.Worker, error)
+	ListWorkers(context.Context) ([]model.Worker, error)
+	ObserveWorker(context.Context, model.Worker) (model.Worker, error)
 }
 
 type Config struct {
@@ -65,6 +65,10 @@ func (o *Observer) Run(ctx context.Context) {
 }
 
 func (o *Observer) Reconcile(ctx context.Context) error {
+	// Timestamp the snapshot before issuing the list. If two replicas overlap,
+	// a slower response from the earlier list cannot overwrite a later-started
+	// observation in the sink.
+	observedAt := time.Now().UTC()
 	snapshots, err := o.source.ListWorkers(ctx)
 	if err != nil {
 		return fmt.Errorf("list Worker source: %w", err)
@@ -74,15 +78,15 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	observedAt := time.Now().UTC()
 	seen := make(map[string]struct{}, len(snapshots))
 	var reconcileErrors []error
 	for _, snapshot := range snapshots {
 		seen[snapshot.ID] = struct{}{}
-		if err := o.observe(ctx, control.Worker{
+		if err := o.observe(ctx, model.Worker{
 			ID: snapshot.ID, Name: snapshot.Name, MaxRuns: snapshot.MaxRuns,
-		}, control.WorkerObserverStatus{
+		}, model.WorkerObserverStatus{
 			ObservedAt: observedAt, Exists: true, Ready: snapshot.Ready, Endpoint: snapshot.Endpoint,
+			PodUID: snapshot.PodUID, PodPhase: snapshot.PodPhase, Unschedulable: snapshot.Unschedulable,
 		}); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
 		}
@@ -91,16 +95,16 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 		if _, ok := seen[worker.ID]; ok {
 			continue
 		}
-		if err := o.observe(ctx, control.Worker{
+		if err := o.observe(ctx, model.Worker{
 			ID: worker.ID, Name: worker.Name, MaxRuns: worker.MaxRuns,
-		}, control.WorkerObserverStatus{ObservedAt: observedAt, Exists: false}); err != nil {
+		}, model.WorkerObserverStatus{ObservedAt: observedAt, Exists: false}); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
 		}
 	}
 	return errors.Join(reconcileErrors...)
 }
 
-func (o *Observer) observe(ctx context.Context, worker control.Worker, status control.WorkerObserverStatus) error {
+func (o *Observer) observe(ctx context.Context, worker model.Worker, status model.WorkerObserverStatus) error {
 	raw, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("encode observation for Worker %q: %w", worker.ID, err)

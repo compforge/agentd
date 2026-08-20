@@ -2,12 +2,9 @@ package agentd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -17,9 +14,10 @@ import (
 	control "github.com/compforge/agentd/agentd/internal/app"
 	controlk8s "github.com/compforge/agentd/agentd/internal/k8s"
 	"github.com/compforge/agentd/agentd/internal/observer"
-	"github.com/compforge/agentd/agentd/internal/store"
+	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	drivermysql "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
+	gormsqlite "gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -28,12 +26,12 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	database, closeDatabase, err := openMySQL(config)
+	database, closeDatabase, err := openDatabase(config)
 	if err != nil {
 		return err
 	}
 	defer closeDatabase()
-	repository, err := store.NewGORM(database)
+	repository, err := gormrepo.NewGORM(database)
 	if err != nil {
 		return err
 	}
@@ -80,102 +78,6 @@ func Run(logger *slog.Logger) error {
 		}
 		return nil
 	}
-}
-
-type config struct {
-	address            string
-	mysqlDSN           string
-	maxOpenConns       int
-	maxIdleConns       int
-	connMaxLifetime    time.Duration
-	storageTimeout     time.Duration
-	observationTimeout time.Duration
-	workerSource       string
-	workerNamespace    string
-	workerSelector     string
-	workerPort         int
-	workerMaxRuns      int
-	observerInterval   time.Duration
-	observerTimeout    time.Duration
-	readTimeout        time.Duration
-	writeTimeout       time.Duration
-	idleTimeout        time.Duration
-	shutdownTimeout    time.Duration
-}
-
-func loadConfig() (config, error) {
-	value := config{
-		address:      envOr("AGENTD_CONTROL_ADDRESS", "127.0.0.1:8082"),
-		mysqlDSN:     os.Getenv("AGENTD_MYSQL_DSN"),
-		maxOpenConns: 32, maxIdleConns: 8,
-		connMaxLifetime: 30 * time.Minute, storageTimeout: 5 * time.Second,
-		observationTimeout: 15 * time.Second,
-		workerSource:       os.Getenv("AGENTD_WORKER_SOURCE"),
-		workerNamespace:    envOr("AGENTD_WORKER_NAMESPACE", envOr("POD_NAMESPACE", "default")),
-		workerSelector:     os.Getenv("AGENTD_WORKER_LABEL_SELECTOR"),
-		workerPort:         8081,
-		workerMaxRuns:      4,
-		observerInterval:   5 * time.Second,
-		observerTimeout:    5 * time.Second,
-		readTimeout:        30 * time.Second, writeTimeout: 30 * time.Second,
-		idleTimeout: 2 * time.Minute, shutdownTimeout: 15 * time.Second,
-	}
-	if value.mysqlDSN == "" {
-		return config{}, errors.New("AGENTD_MYSQL_DSN is required")
-	}
-	var err error
-	if value.maxOpenConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_OPEN_CONNS", value.maxOpenConns); err != nil {
-		return config{}, err
-	}
-	if value.maxIdleConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_IDLE_CONNS", value.maxIdleConns); err != nil {
-		return config{}, err
-	}
-	if value.maxIdleConns > value.maxOpenConns {
-		return config{}, errors.New("AGENTD_MYSQL_MAX_IDLE_CONNS must not exceed AGENTD_MYSQL_MAX_OPEN_CONNS")
-	}
-	if value.workerPort, err = positiveIntEnv("AGENTD_WORKER_PORT", value.workerPort); err != nil {
-		return config{}, err
-	}
-	if value.workerPort > 65535 {
-		return config{}, errors.New("AGENTD_WORKER_PORT must not exceed 65535")
-	}
-	if value.workerMaxRuns, err = positiveIntEnv("AGENTD_WORKER_MAX_RUNS", value.workerMaxRuns); err != nil {
-		return config{}, err
-	}
-	durations := []struct {
-		name  string
-		value *time.Duration
-	}{
-		{"AGENTD_MYSQL_CONN_MAX_LIFETIME", &value.connMaxLifetime},
-		{"AGENTD_STORAGE_OPERATION_TIMEOUT", &value.storageTimeout},
-		{"AGENTD_WORKER_OBSERVATION_TIMEOUT", &value.observationTimeout},
-		{"AGENTD_WORKER_OBSERVER_INTERVAL", &value.observerInterval},
-		{"AGENTD_WORKER_OBSERVER_REQUEST_TIMEOUT", &value.observerTimeout},
-		{"AGENTD_HTTP_READ_TIMEOUT", &value.readTimeout},
-		{"AGENTD_HTTP_WRITE_TIMEOUT", &value.writeTimeout},
-		{"AGENTD_HTTP_IDLE_TIMEOUT", &value.idleTimeout},
-		{"AGENTD_SHUTDOWN_TIMEOUT", &value.shutdownTimeout},
-	}
-	for _, item := range durations {
-		parsed, err := durationEnv(item.name, *item.value)
-		if err != nil {
-			return config{}, err
-		}
-		*item.value = parsed
-	}
-	switch value.workerSource {
-	case "":
-	case "kubernetes":
-		if value.workerSelector == "" {
-			return config{}, errors.New("AGENTD_WORKER_LABEL_SELECTOR is required for the Kubernetes Worker source")
-		}
-		if value.observationTimeout <= value.observerInterval {
-			return config{}, errors.New("AGENTD_WORKER_OBSERVATION_TIMEOUT must exceed AGENTD_WORKER_OBSERVER_INTERVAL")
-		}
-	default:
-		return config{}, fmt.Errorf("unsupported AGENTD_WORKER_SOURCE %q", value.workerSource)
-	}
-	return value, nil
 }
 
 func buildWorkerObserver(config config, application *control.App, logger *slog.Logger) (*observer.Observer, error) {
@@ -236,33 +138,29 @@ func openMySQL(config config) (*gorm.DB, func() error, error) {
 	return database, sqlDatabase.Close, nil
 }
 
-func positiveIntEnv(name string, fallback int) (int, error) {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback, nil
+func openDatabase(config config) (*gorm.DB, func() error, error) {
+	if config.mysqlDSN != "" {
+		return openMySQL(config)
 	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer", name)
+	database, err := gorm.Open(gormsqlite.Open(config.sqlitePath), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("open SQLite storage %q: %w", config.sqlitePath, err)
 	}
-	return value, nil
-}
-
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback, nil
+	sqlDatabase, err := database.DB()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve SQLite connection pool: %w", err)
 	}
-	value, err := time.ParseDuration(raw)
-	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
+	// SQLite is the single-replica fallback. One connection keeps transactions
+	// serialized instead of surfacing avoidable database-locked failures.
+	sqlDatabase.SetMaxOpenConns(1)
+	sqlDatabase.SetMaxIdleConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), config.storageTimeout)
+	defer cancel()
+	if err := sqlDatabase.PingContext(ctx); err != nil {
+		_ = sqlDatabase.Close()
+		return nil, nil, fmt.Errorf("ping SQLite storage %q: %w", config.sqlitePath, err)
 	}
-	return value, nil
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
+	return database, sqlDatabase.Close, nil
 }

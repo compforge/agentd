@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	control "github.com/compforge/agentd/agentd/internal/app"
+	"github.com/compforge/agentd/agentd/internal/model"
 )
 
 type fakeSource struct {
@@ -16,24 +16,24 @@ type fakeSource struct {
 func (f fakeSource) ListWorkers(context.Context) ([]WorkerSnapshot, error) { return f.workers, nil }
 
 type fakeSink struct {
-	workers map[string]control.Worker
+	workers map[string]model.Worker
 }
 
-func (f *fakeSink) ListWorkers(context.Context) ([]control.Worker, error) {
-	workers := make([]control.Worker, 0, len(f.workers))
+func (f *fakeSink) ListWorkers(context.Context) ([]model.Worker, error) {
+	workers := make([]model.Worker, 0, len(f.workers))
 	for _, worker := range f.workers {
 		workers = append(workers, worker)
 	}
 	return workers, nil
 }
 
-func (f *fakeSink) ObserveWorker(_ context.Context, worker control.Worker) (control.Worker, error) {
+func (f *fakeSink) ObserveWorker(_ context.Context, worker model.Worker) (model.Worker, error) {
 	f.workers[worker.ID] = worker
 	return worker, nil
 }
 
 func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
-	sink := &fakeSink{workers: map[string]control.Worker{
+	sink := &fakeSink{workers: map[string]model.Worker{
 		"uid-old": {ID: "uid-old", Name: "old", MaxRuns: 2},
 	}}
 	controller, err := New(fakeSource{workers: []WorkerSnapshot{{
@@ -50,9 +50,9 @@ func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 	assertStatus(t, sink.workers["uid-old"], false, false)
 }
 
-func assertStatus(t *testing.T, worker control.Worker, exists, ready bool) {
+func assertStatus(t *testing.T, worker model.Worker, exists, ready bool) {
 	t.Helper()
-	var status control.WorkerObserverStatus
+	var status model.WorkerObserverStatus
 	if err := json.Unmarshal(worker.ObserverStatus, &status); err != nil {
 		t.Fatal(err)
 	}

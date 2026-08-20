@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/compforge/agentd/agentd/internal/app"
-	"github.com/compforge/agentd/agentd/internal/store"
+	"github.com/compforge/agentd/agentd/internal/model"
+	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -66,7 +67,7 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	}
 }
 
-func TestAssignReplacesBindingToStaleWorker(t *testing.T) {
+func TestAssignReplacesBindingToUnavailableWorker(t *testing.T) {
 	application := newTestApp(t)
 	ctx := context.Background()
 	observeReadyWorker(t, application, "worker-a", 1, time.Now().UTC())
@@ -75,7 +76,7 @@ func TestAssignReplacesBindingToStaleWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Assign(): %v", err)
 	}
-	observeReadyWorker(t, application, "worker-a", 1, time.Now().UTC().Add(-time.Hour))
+	observeWorker(t, application, "worker-a", 1, time.Now().UTC(), false)
 	observeReadyWorker(t, application, "worker-b", 1, time.Now().UTC())
 
 	replacement, err := application.Assign(ctx, "session-1")
@@ -90,7 +91,51 @@ func TestAssignReplacesBindingToStaleWorker(t *testing.T) {
 	}
 }
 
+func TestAssignPersistsPendingSessionUntilRelease(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	if _, err := application.Assign(ctx, "session-pending"); !errors.Is(err, app.ErrNoCapacity) {
+		t.Fatalf("Assign() error = %v, want ErrNoCapacity", err)
+	}
+	session, err := repository.GetSession(ctx, "session-pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != model.SessionStatusRescheduling || session.WorkerID != "" {
+		t.Fatalf("pending session = %+v", session)
+	}
+	count, err := repository.CountPendingSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("pending sessions = %d, want 1", count)
+	}
+	if err := application.Release(ctx, "session-pending"); err != nil {
+		t.Fatal(err)
+	}
+	count, err = repository.CountPendingSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("pending sessions after release = %d, want 0", count)
+	}
+	session, err = repository.GetSession(ctx, "session-pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != model.SessionStatusIdle || session.WorkerID != "" || session.AssignmentID != "" {
+		t.Fatalf("released session = %+v", session)
+	}
+}
+
 func newTestApp(t *testing.T) *app.App {
+	application, _ := newTestControl(t)
+	return application
+}
+
+func newTestControl(t *testing.T) (*app.App, *gormrepo.GORMRepository) {
 	t.Helper()
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -98,7 +143,7 @@ func newTestApp(t *testing.T) *app.App {
 	if err != nil {
 		t.Fatalf("open SQLite: %v", err)
 	}
-	repository, err := store.NewGORM(database)
+	repository, err := gormrepo.NewGORM(database)
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
@@ -106,21 +151,25 @@ func newTestApp(t *testing.T) *app.App {
 	if err != nil {
 		t.Fatalf("create app: %v", err)
 	}
-	return application
+	return application, repository
 }
 
 func observeReadyWorker(t *testing.T, application *app.App, id string, maxRuns int, observedAt time.Time) {
+	observeWorker(t, application, id, maxRuns, observedAt, true)
+}
+
+func observeWorker(t *testing.T, application *app.App, id string, maxRuns int, observedAt time.Time, ready bool) {
 	t.Helper()
-	observerStatus, err := json.Marshal(app.WorkerObserverStatus{
+	observerStatus, err := json.Marshal(model.WorkerObserverStatus{
 		ObservedAt: observedAt,
 		Exists:     true,
-		Ready:      true,
+		Ready:      ready,
 		Endpoint:   "http://" + id,
 	})
 	if err != nil {
 		t.Fatalf("marshal observer status: %v", err)
 	}
-	_, err = application.ObserveWorker(context.Background(), app.Worker{
+	_, err = application.ObserveWorker(context.Background(), model.Worker{
 		ID: id, Name: id, MaxRuns: maxRuns, ObserverStatus: observerStatus,
 	})
 	if err != nil {

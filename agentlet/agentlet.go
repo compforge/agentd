@@ -26,8 +26,9 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	storage, err := persistence.OpenMySQL(context.Background(), persistence.Config{
+	storage, err := persistence.Open(context.Background(), persistence.Config{
 		MySQLDSN:         config.mysqlDSN,
+		SQLitePath:       config.sqlitePath,
 		OperationTimeout: config.storageTimeout, MaxOpenConns: config.mysqlMaxOpenConns,
 		MaxIdleConns: config.mysqlMaxIdleConns, ConnMaxLifetime: config.mysqlConnMaxLifetime,
 	})
@@ -35,6 +36,9 @@ func Run(logger *slog.Logger) error {
 		return err
 	}
 	defer storage.Close()
+	if storage.Provider == "sqlite" {
+		logger.Warn("agentlet uses local SQLite; replacing the Worker Pod loses Session state, Ledger, and Checkpoints")
+	}
 
 	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{
 		Endpoint:       config.sandboxEndpoint,
@@ -81,7 +85,7 @@ func Run(logger *slog.Logger) error {
 	api.New(application, logger).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("agentlet listening", "address", config.address, "storage_provider", "mysql",
+		logger.Info("agentlet listening", "address", config.address, "storage_provider", storage.Provider,
 			"sandbox_engine", sandboxEngine.Name(), "harness", agentHarness.Name())
 		serveErr <- httpServer.Run()
 	}()
@@ -113,6 +117,7 @@ func Run(logger *slog.Logger) error {
 type config struct {
 	address                string
 	mysqlDSN               string
+	sqlitePath             string
 	mysqlMaxOpenConns      int
 	mysqlMaxIdleConns      int
 	mysqlConnMaxLifetime   time.Duration
@@ -133,6 +138,7 @@ func loadConfig() (config, error) {
 	value := config{
 		address:              envOr("AGENTD_ADDRESS", "127.0.0.1:8081"),
 		mysqlDSN:             os.Getenv("AGENTD_MYSQL_DSN"),
+		sqlitePath:           envOr("AGENTD_SQLITE_PATH", "agentlet.db"),
 		mysqlMaxOpenConns:    32,
 		mysqlMaxIdleConns:    8,
 		mysqlConnMaxLifetime: 30 * time.Minute,

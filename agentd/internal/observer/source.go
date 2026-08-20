@@ -10,11 +10,14 @@ import (
 )
 
 type WorkerSnapshot struct {
-	ID       string
-	Name     string
-	Endpoint string
-	Ready    bool
-	MaxRuns  int
+	ID            string
+	PodUID        string
+	Name          string
+	Endpoint      string
+	PodPhase      string
+	Ready         bool
+	Unschedulable bool
+	MaxRuns       int
 }
 
 type Source interface {
@@ -51,13 +54,17 @@ func (s *KubernetesSource) ListWorkers(ctx context.Context) ([]WorkerSnapshot, e
 	}
 	workers := make([]WorkerSnapshot, 0, len(pods))
 	for _, pod := range pods {
+		if pod.ID == "" {
+			continue
+		}
 		endpoint := ""
 		if pod.IP != "" {
 			endpoint = "http://" + net.JoinHostPort(pod.IP, strconv.Itoa(s.port))
 		}
 		workers = append(workers, WorkerSnapshot{
-			ID: pod.ID, Name: pod.Name, Endpoint: endpoint,
-			Ready: pod.Ready && endpoint != "", MaxRuns: s.maxRuns,
+			ID: pod.ID, PodUID: pod.UID, Name: pod.Name, Endpoint: endpoint,
+			PodPhase: string(pod.Phase), Ready: pod.Ready && endpoint != "",
+			Unschedulable: pod.Unschedulable, MaxRuns: s.maxRuns,
 		})
 	}
 	return workers, nil

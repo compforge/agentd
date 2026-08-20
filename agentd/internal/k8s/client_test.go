@@ -13,8 +13,12 @@ import (
 
 func TestListAgentletPods(t *testing.T) {
 	client := fake.NewClientset(
-		pod("worker-b", "uid-b", "10.0.0.2", true, map[string]string{"app": "agentlet"}),
-		pod("worker-a", "uid-a", "10.0.0.1", false, map[string]string{"app": "agentlet"}),
+		pod("worker-b", "uid-b", "10.0.0.2", true, map[string]string{
+			"app": "agentlet", ManagedLabel: "true", WorkerIDLabel: "worker-b",
+		}),
+		pod("worker-a", "uid-a", "10.0.0.1", false, map[string]string{
+			"app": "agentlet", ManagedLabel: "true", WorkerIDLabel: "worker-a",
+		}),
 		pod("other", "uid-other", "10.0.0.3", true, map[string]string{"app": "other"}),
 	)
 	substrate, err := New(client, Config{
@@ -29,8 +33,8 @@ func TestListAgentletPods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshots) != 2 || snapshots[0].ID != "uid-a" || snapshots[0].Ready ||
-		snapshots[1].ID != "uid-b" || !snapshots[1].Ready {
+	if len(snapshots) != 2 || snapshots[0].ID != "worker-a" || snapshots[0].UID != "uid-a" || snapshots[0].Ready ||
+		snapshots[1].ID != "worker-b" || snapshots[1].UID != "uid-b" || !snapshots[1].Ready {
 		t.Fatalf("ListAgentletPods() = %+v", snapshots)
 	}
 }

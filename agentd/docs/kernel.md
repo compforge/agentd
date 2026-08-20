@@ -40,9 +40,10 @@ Claude-compatible API / Baton / scheduled trigger
   其它 Harness；执行边界与适配契约见 `harness.md`。
 - **具体业务工作流** 是导演：决定任务目标、步骤和验收方式，由 Agent、Skill 或更上层的
   业务编排提供，不进入 agentd 内核。
-- **agentd** 是 Control Plane 的代码与服务边界，做全局资源、placement 和请求路由；
-  **Agentlet** 只执行分配到本实例的 Session。两者复用 Managed Agents API，详细边界见
-  `control-plane.md`。
+- **agentd** 是 Control Plane 的代码与服务边界，做全局资源、placement 和请求路由；详细边界见
+  `agentd.md`。
+- **Agentlet** 只执行分配到本实例的 Session，拥有 Harness、Checkpoint、Ledger 与 Sandbox 的执行侧
+  编排；详细边界见 `agentlet.md`。
 - **Sandbox Engine** 提供隔离的文件、进程和资源生命周期，可以接入本地或远端引擎；能力和资源
   边界见 `sandbox-engine.md`。
 - **Agent Ledger** 记录不可变的执行事实和副作用边界。它帮助恢复判断、审计和追踪，但不保存
@@ -57,7 +58,8 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
 - **Run**：Session 的一次实际执行。Run 可以中断、迁移或恢复，但不能与某个进程绑定。
 - **Event**：用户和 Session 之间的持久化输入输出，也是唤醒 Session 的依据。
-- **Worker**：一个被 Worker Observer 发现的 Agentlet Pod，也是 agentd 的调度和容量单位。
+- **Worker**：一个由 Lifecycler 管理、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
+  容量单位。
 - **Assignment**：Session 当前所在 Worker 的临时执行归属，不是产品身份。
 
 Session 是产品身份，Run 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
@@ -68,14 +70,14 @@ Session 是产品身份，Run 是执行身份，Harness runtime 和 Sandbox inst
 1. 应用通过 agentd 创建可版本化的 Agent 和 Environment，再创建锁定两者具体版本的
    Session；
 2. 用户 Event 持久化后才确认接收，Controller 生成待执行意图；
-3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例，并持久化
-   Assignment；Worker Pod 的健壮性由 Kubernetes 保证；
-4. agentd 转发原始 Managed Agents API 请求和内部 Assignment 元数据；Agentlet 接受后通过
+3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
+   Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
+4. Connector 转发原始 Managed Agents API 请求和内部 Assignment 元数据；Agentlet 接受后通过
    Harness Adapter 创建或恢复短命 runtime；
 5. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
 6. Harness 输出投影为持久化 Event，并提交最新恢复点；
 7. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收，agentd
-   释放或更新 Assignment。
+   释放或更新 Assignment；Lifecycler 最终回收超过 idle TTL 的空 Worker。
 
 agentd 拥有期望状态、全局归属和执行时机，Agentlet 只拥有有效 Assignment 内可丢弃的本地执行状态，
 Harness Adapter 拥有模型循环和原生会话语义，Sandbox Engine 拥有隔离资源生命周期。组件都可以
@@ -97,9 +99,9 @@ Webhook 不属于当前服务边界。无法提供语义保证的能力返回明
 
 ## 持久化、恢复与审计
 
-Control State 拥有 Worker、Assignment 和 Session 当前决策，其模型与调度规则定义在
-`control-plane.md`。Harness State 和 Ledger 分别拥有 Harness 原生恢复材料和规范化执行事实，定义
-在 `state-ledger.md`。三者的权威来源独立，Kernel 不重复展开。
+Control State 拥有 Worker、Assignment 和 Session 当前决策，其模型与调度规则定义在 `agentd.md`。
+Agentlet 对 Harness Checkpoint 和 Agent Ledger 的使用顺序定义在 `agentlet.md`；Ledger 对象模型、
+协议和存储规范由 Agent Ledger 项目拥有。三者的权威来源独立，Kernel 不重复展开。
 
 ## 扩展边界
 

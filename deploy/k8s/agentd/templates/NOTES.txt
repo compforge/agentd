@@ -1,0 +1,15 @@
+{{- if .Values.agentd.database.dsn }}
+agentd uses the configured external MySQL database.
+{{- else }}
+agentd uses ephemeral SQLite at /tmp/agentd.db. This mode supports one agentd replica only.
+{{- end }}
+{{- if .Values.agentlet.database.dsn }}
+Agentlet uses the configured external MySQL database.
+{{- else }}
+Agentlet uses ephemeral SQLite. Deleting its Worker Pod loses Session state, Ledger, and Checkpoints.
+{{- end }}
+
+Health endpoint:
+
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "agentd.fullname" . }} 8082:{{ .Values.service.port }}
+  curl http://127.0.0.1:8082/healthz

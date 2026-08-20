@@ -8,7 +8,7 @@ import (
 )
 
 // MemoryRepository is a test repository. Production persistence is provided
-// by the MySQL/GORM provider.
+// by the GORM persistence provider.
 type MemoryRepository struct {
 	mu           sync.RWMutex
 	agents       map[string]app.Agent

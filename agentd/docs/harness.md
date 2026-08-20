@@ -79,8 +79,8 @@ Adapter 恢复同一 input 时必须保证：
 4. 无法证明结果的 Tool Attempt 不自动重放，而是返回 `ErrUnsafeRecovery`，由 Agentlet 上报并交给
    agentd 终止和对账。
 
-状态的数据所有权、提交顺序和失败窗口统一见 [state-ledger.md](state-ledger.md)。`Interrupt` 只停止
-活跃执行；能否释放 runtime 取决于 Adapter 是否已到达可恢复的持久化边界。
+Checkpoint、Ledger 的使用顺序和失败窗口见 [agentlet.md](agentlet.md)。`Interrupt` 只停止活跃执行；
+能否释放 runtime 取决于 Adapter 是否已到达可恢复的持久化边界。
 
 ## Ledger 与 Sandbox 集成
 

@@ -1,0 +1,68 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/compforge/agentd
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+service:
+  type: ClusterIP
+  port: 8082
+
+model:
+  apiKey: ""
+  baseURL: ""
+
+agentlet:
+  database:
+    dsn: ""
+
+agentd:
+  database:
+    dsn: ""
+  # Defaults come from agentd/config.go. Add only intentional overrides here.
+  extraEnv: []
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  agentlet:
+    image:
+      repository: ghcr.io/compforge/agentlet
+      tag: latest
+      pullPolicy: IfNotPresent
+    resources: {}
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+  sandboxEngine:
+    image:
+      repository: ghcr.io/compforge/hostel
+      tag: latest
+      pullPolicy: IfNotPresent
+    resources: {}
+    securityContext: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  terminationGracePeriodSeconds: 30

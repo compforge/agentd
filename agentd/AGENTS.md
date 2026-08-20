@@ -20,20 +20,24 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ├── cmd/
 │   ├── agentd/                # Control Plane 二进制入口
 │   └── agentlet/              # 节点执行二进制入口
-├── agentd/                    # Worker 观测、Assignment 与调度
+├── deploy/
+│   ├── docker/                 # agentd 与 agentlet 多阶段镜像构建
+│   └── k8s/                    # Helm Chart、Worker 双容器模板与弹性设计
+├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
 │   │   ├── api/               # Control Plane HTTP 适配
-│   │   ├── app/               # 事务、数据加载与 Assignment 持久化
+│   │   ├── app/               # 控制面事务与 Session placement 编排
+│   │   ├── model/             # Worker、Session 与 Assignment 领域模型
+│   │   ├── repo/              # Repository 契约及 GORM 实现、表映射与 resource lock
 │   │   ├── k8s/               # Kubernetes Client 与 PodSnapshot substrate
 │   │   ├── observer/          # 周期拉取 Worker Pod 事实并持久化 observation
 │   │   ├── scheduler/         # 无 I/O 的 Session → Worker placement 策略
-│   │   └── store/             # GORM Store
 │   └── docs/
 │       ├── kernel.md          # 稳定定位、核心模型、API 与组件主流程
-│       ├── control-plane.md   # Control Plane、Agentlet、调度、容量与 Control State
+│       ├── agentd.md          # Control Plane、Worker 弹性、调度、转发与 Control State
+│       ├── agentlet.md        # 执行节点、Checkpoint、Ledger 与恢复编排
 │       ├── harness.md         # Harness 执行边界、适配契约与 AgentGo 实现
-│       ├── sandbox-engine.md  # Sandbox Engine 能力、生命周期与隔离边界
-│       └── state-ledger.md    # Harness State、Ledger、恢复、审计与轨迹边界
+│       └── sandbox-engine.md  # Sandbox Engine 能力、生命周期与隔离边界
 └── agentlet/
     ├── agentlet.go            # Agentlet 依赖组装与服务生命周期
     ├── internal/
@@ -41,7 +45,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
     │   ├── app/               # Session Run 生命周期
     │   ├── execution/         # App 与 Harness 之间的执行契约
     │   ├── harness/           # Harness adapter；AgentGo 是首个实现，持有原生 Checkpoint codec
-    │   ├── persistence/       # Agentlet MySQL/GORM Provider 与 Agent Ledger Store 组装
+    │   ├── persistence/       # Agentlet GORM Provider（SQLite/MySQL）与 Agent Ledger Store 组装
     │   ├── sandbox/           # Sandbox Engine 能力契约与默认 Adapter
     │   └── store/             # 当前执行侧资源 Store
     └── tests/e2e/             # 显式 e2e build tag；恢复契约与 live 组件联调
@@ -56,11 +60,11 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    未实现能力明确返回 `unsupported_feature`，不静默降级。
 2. 用户 Event 先持久化再确认接收；模型和工具调用必须通过 Agent Ledger AgentGo
    Adapter 的 write-before-execute 边界。
-3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、`max_runs` 和当前
-   Assignment 数调度；Agentlet 不主动注册或发心跳，Pod 健壮性与 placement 由 Kubernetes 和 SRE
-   负责。
-4. Worker Observer 是 Worker 运行事实的唯一写入者；Kubernetes substrate 只提供 PodSnapshot，
-   Scheduler 只消费已持久化 facts，二者都不越权管理 Pod 生命周期。
+3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、`max_runs` 和当前绑定
+   Session 数调度；Agentlet 不主动注册或发心跳。
+4. Worker Observer 是运行事实的唯一写入者，Scheduler 只做无 I/O 的 placement，Lifecycler 管理
+   Worker 供给，Connector 只转发已分配流量；Kubernetes 管理已创建 Pod 的健壮性，SRE 管理 workload
+   模板和集群容量。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。
@@ -72,10 +76,11 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ## References
 
 - `docs/kernel.md` — agentd 稳定定位、核心模型、API 边界与组件主流程
-- `docs/control-plane.md` — Control Plane / Agentlet 拓扑、调度容量和 Control State
+- `docs/agentd.md` — Control Plane、Worker 弹性、调度、转发与 Control State
+- `docs/agentlet.md` — Agentlet 执行、Checkpoint / Ledger 接入与恢复顺序
 - `docs/harness.md` — Harness 执行边界、适配契约、恢复语义与 AgentGo 实现
 - `docs/sandbox-engine.md` — Sandbox Engine 能力契约、资源生命周期与隔离要求
-- `docs/state-ledger.md` — Harness State、Ledger、恢复、审计和轨迹的数据所有权与一致性边界
+- `../deploy/k8s/README.md` — Helm 部署形态、Worker 双容器模板与扩缩容流程
 - `https://platform.claude.com/docs/en/managed-agents/overview` — 上游 API 概念与行为基线
 - `https://github.com/opensandbox-group/OpenSandbox/tree/main/specs` — Sandbox Lifecycle 与 Execd 设计参考
 - `https://github.com/compforge/agent-ledger/tree/main/spec` — Ledger 事件、追加与 Adapter 契约
