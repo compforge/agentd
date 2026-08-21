@@ -6,18 +6,26 @@ import (
 	"time"
 )
 
-// Engine is the runtime boundary between Agentlet and an isolated workspace.
-// Implementations may manage a local process or call a remote sandbox service.
+// SandboxKey is the caller-defined logical identity used to prepare and access
+// one sandbox. It is a model so the Engine contract can add grouping or scope
+// without changing every operation signature.
+type SandboxKey struct {
+	Value string
+}
+
+// Engine is the boundary between Agentlet and an isolated workspace.
+// SandboxKey values are supplied and interpreted by the caller; implementations
+// must treat them as opaque lookup keys for local or remote sandbox resources.
 type Engine interface {
 	Name() string
 	Start(context.Context) error
-	Ensure(context.Context, string) error
-	Stat(context.Context, string, string) (FileInfo, error)
-	ReadFile(context.Context, string, string) ([]byte, error)
-	ReadDir(context.Context, string, string) ([]DirEntry, error)
-	WriteFile(context.Context, string, string, []byte, fs.FileMode) error
-	MkdirAll(context.Context, string, string, fs.FileMode) error
-	Execute(context.Context, string, Command) (CommandResult, error)
+	Ensure(ctx context.Context, sandboxKey SandboxKey) error
+	Stat(ctx context.Context, sandboxKey SandboxKey, path string) (FileInfo, error)
+	ReadFile(ctx context.Context, sandboxKey SandboxKey, path string) ([]byte, error)
+	ReadDir(ctx context.Context, sandboxKey SandboxKey, path string) ([]DirEntry, error)
+	WriteFile(ctx context.Context, sandboxKey SandboxKey, path string, data []byte, mode fs.FileMode) error
+	MkdirAll(ctx context.Context, sandboxKey SandboxKey, path string, mode fs.FileMode) error
+	Execute(ctx context.Context, sandboxKey SandboxKey, command Command) (CommandResult, error)
 }
 
 type Command struct {

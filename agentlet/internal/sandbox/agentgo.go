@@ -15,28 +15,32 @@ import (
 	"github.com/compforge/agentgo/tools"
 )
 
-func NewAgentGoToolset(sandboxEngine engine.Engine, sandboxID string, defaultTimeout time.Duration) []agentgo.Tool {
-	workspace := &agentGoWorkspace{engine: sandboxEngine, sandboxID: sandboxID}
+func NewAgentGoToolset(
+	sandboxEngine engine.Engine,
+	sandboxKey engine.SandboxKey,
+	defaultTimeout time.Duration,
+) []agentgo.Tool {
+	workspace := &agentGoWorkspace{engine: sandboxEngine, sandboxKey: sandboxKey}
 	readState := tools.NewFileReadState()
 	return []agentgo.Tool{
-		newBashTool(sandboxEngine, sandboxID, defaultTimeout),
+		newBashTool(sandboxEngine, sandboxKey, defaultTimeout),
 		tools.NewRead("/workspace", readState, tools.WithFS(workspace)),
 		tools.NewWrite("/workspace", readState, tools.WithFS(workspace)),
 		tools.NewEdit("/workspace", readState, tools.WithFS(workspace)),
-		newGlobTool(sandboxEngine, sandboxID, defaultTimeout),
-		newGrepTool(sandboxEngine, sandboxID, defaultTimeout),
+		newGlobTool(sandboxEngine, sandboxKey, defaultTimeout),
+		newGrepTool(sandboxEngine, sandboxKey, defaultTimeout),
 	}
 }
 
 type agentGoWorkspace struct {
-	engine    engine.Engine
-	sandboxID string
+	engine     engine.Engine
+	sandboxKey engine.SandboxKey
 }
 
 var _ tools.WorkspaceFS = (*agentGoWorkspace)(nil)
 
 func (w *agentGoWorkspace) Stat(ctx context.Context, filePath string) (tools.FileInfo, error) {
-	value, err := w.engine.Stat(ctx, w.sandboxID, filePath)
+	value, err := w.engine.Stat(ctx, w.sandboxKey, filePath)
 	if err != nil {
 		return tools.FileInfo{}, err
 	}
@@ -55,11 +59,11 @@ func (w *agentGoWorkspace) Open(ctx context.Context, filePath string) (io.ReadCl
 }
 
 func (w *agentGoWorkspace) ReadFile(ctx context.Context, filePath string) ([]byte, error) {
-	return w.engine.ReadFile(ctx, w.sandboxID, filePath)
+	return w.engine.ReadFile(ctx, w.sandboxKey, filePath)
 }
 
 func (w *agentGoWorkspace) ReadDir(ctx context.Context, directory string) ([]tools.DirEntry, error) {
-	values, err := w.engine.ReadDir(ctx, w.sandboxID, directory)
+	values, err := w.engine.ReadDir(ctx, w.sandboxKey, directory)
 	if err != nil {
 		return nil, err
 	}
@@ -71,14 +75,14 @@ func (w *agentGoWorkspace) ReadDir(ctx context.Context, directory string) ([]too
 }
 
 func (w *agentGoWorkspace) WriteFile(ctx context.Context, filePath string, data []byte, mode fs.FileMode) error {
-	return w.engine.WriteFile(ctx, w.sandboxID, filePath, data, mode)
+	return w.engine.WriteFile(ctx, w.sandboxKey, filePath, data, mode)
 }
 
 func (w *agentGoWorkspace) MkdirAll(ctx context.Context, directory string, mode fs.FileMode) error {
-	return w.engine.MkdirAll(ctx, w.sandboxID, directory, mode)
+	return w.engine.MkdirAll(ctx, w.sandboxKey, directory, mode)
 }
 
-func newBashTool(sandboxEngine engine.Engine, sandboxID string, defaultTimeout time.Duration) agentgo.Tool {
+func newBashTool(sandboxEngine engine.Engine, sandboxKey engine.SandboxKey, defaultTimeout time.Duration) agentgo.Tool {
 	return agentgo.NewFuncTool("bash", "Execute a shell command in the isolated session workspace.", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -105,7 +109,7 @@ func newBashTool(sandboxEngine engine.Engine, sandboxID string, defaultTimeout t
 		if input.TimeoutMS > 0 {
 			timeout = time.Duration(input.TimeoutMS) * time.Millisecond
 		}
-		result, err := sandboxEngine.Execute(ctx, sandboxID, engine.Command{Command: input.Command, Cwd: "/workspace", Timeout: timeout})
+		result, err := sandboxEngine.Execute(ctx, sandboxKey, engine.Command{Command: input.Command, Cwd: "/workspace", Timeout: timeout})
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +117,7 @@ func newBashTool(sandboxEngine engine.Engine, sandboxID string, defaultTimeout t
 	})
 }
 
-func newGlobTool(sandboxEngine engine.Engine, sandboxID string, timeout time.Duration) agentgo.Tool {
+func newGlobTool(sandboxEngine engine.Engine, sandboxKey engine.SandboxKey, timeout time.Duration) agentgo.Tool {
 	return agentgo.NewFuncTool("glob", "Find files in the isolated session workspace by glob pattern.", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -134,7 +138,7 @@ func newGlobTool(sandboxEngine engine.Engine, sandboxID string, timeout time.Dur
 			root = "/workspace"
 		}
 		command := "rg --files --hidden --no-require-git --glob " + shellQuote(input.Pattern) + " " + shellQuote(root)
-		result, err := sandboxEngine.Execute(ctx, sandboxID, engine.Command{Command: command, Cwd: "/workspace", Timeout: timeout})
+		result, err := sandboxEngine.Execute(ctx, sandboxKey, engine.Command{Command: command, Cwd: "/workspace", Timeout: timeout})
 		if err != nil {
 			return nil, err
 		}
@@ -142,7 +146,7 @@ func newGlobTool(sandboxEngine engine.Engine, sandboxID string, timeout time.Dur
 	})
 }
 
-func newGrepTool(sandboxEngine engine.Engine, sandboxID string, timeout time.Duration) agentgo.Tool {
+func newGrepTool(sandboxEngine engine.Engine, sandboxKey engine.SandboxKey, timeout time.Duration) agentgo.Tool {
 	return agentgo.NewFuncTool("grep", "Search file contents in the isolated session workspace.", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -179,7 +183,7 @@ func newGrepTool(sandboxEngine engine.Engine, sandboxID string, timeout time.Dur
 			args = append(args, "--glob", shellQuote(input.Glob))
 		}
 		args = append(args, shellQuote(input.Pattern), shellQuote(root))
-		result, err := sandboxEngine.Execute(ctx, sandboxID, engine.Command{Command: strings.Join(args, " "), Cwd: "/workspace", Timeout: timeout})
+		result, err := sandboxEngine.Execute(ctx, sandboxKey, engine.Command{Command: strings.Join(args, " "), Cwd: "/workspace", Timeout: timeout})
 		if err != nil {
 			return nil, err
 		}

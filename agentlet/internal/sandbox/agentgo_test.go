@@ -13,7 +13,7 @@ import (
 func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 	t.Parallel()
 	sandboxEngine := &recordingEngine{}
-	toolset := NewAgentGoToolset(sandboxEngine, "session_123", time.Second)
+	toolset := NewAgentGoToolset(sandboxEngine, engine.SandboxKey{Value: "session_123"}, time.Second)
 	var bashIndex = -1
 	for index, tool := range toolset {
 		if tool.Name() == "bash" {
@@ -28,8 +28,8 @@ func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sandboxEngine.sandboxID != "session_123" {
-		t.Fatalf("sandbox id = %q, want session_123", sandboxEngine.sandboxID)
+	if sandboxEngine.sandboxKey.Value != "session_123" {
+		t.Fatalf("sandbox key = %#v, want session_123", sandboxEngine.sandboxKey)
 	}
 	if sandboxEngine.command.Command != "pwd" || sandboxEngine.command.Cwd != "/workspace" || sandboxEngine.command.Timeout != 42*time.Millisecond {
 		t.Fatalf("unexpected command: %#v", sandboxEngine.command)
@@ -44,36 +44,40 @@ func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 }
 
 type recordingEngine struct {
-	sandboxID string
-	command   engine.Command
+	sandboxKey engine.SandboxKey
+	command    engine.Command
 }
 
-func (*recordingEngine) Name() string                         { return "recording" }
-func (*recordingEngine) Start(context.Context) error          { return nil }
-func (*recordingEngine) Ensure(context.Context, string) error { return nil }
+func (*recordingEngine) Name() string                                    { return "recording" }
+func (*recordingEngine) Start(context.Context) error                     { return nil }
+func (*recordingEngine) Ensure(context.Context, engine.SandboxKey) error { return nil }
 
-func (*recordingEngine) Stat(context.Context, string, string) (engine.FileInfo, error) {
+func (*recordingEngine) Stat(context.Context, engine.SandboxKey, string) (engine.FileInfo, error) {
 	return engine.FileInfo{}, fs.ErrNotExist
 }
 
-func (*recordingEngine) ReadFile(context.Context, string, string) ([]byte, error) {
+func (*recordingEngine) ReadFile(context.Context, engine.SandboxKey, string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (*recordingEngine) ReadDir(context.Context, string, string) ([]engine.DirEntry, error) {
+func (*recordingEngine) ReadDir(context.Context, engine.SandboxKey, string) ([]engine.DirEntry, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (*recordingEngine) WriteFile(context.Context, string, string, []byte, fs.FileMode) error {
+func (*recordingEngine) WriteFile(context.Context, engine.SandboxKey, string, []byte, fs.FileMode) error {
 	return nil
 }
 
-func (*recordingEngine) MkdirAll(context.Context, string, string, fs.FileMode) error {
+func (*recordingEngine) MkdirAll(context.Context, engine.SandboxKey, string, fs.FileMode) error {
 	return nil
 }
 
-func (e *recordingEngine) Execute(_ context.Context, sandboxID string, command engine.Command) (engine.CommandResult, error) {
-	e.sandboxID = sandboxID
+func (e *recordingEngine) Execute(
+	_ context.Context,
+	sandboxKey engine.SandboxKey,
+	command engine.Command,
+) (engine.CommandResult, error) {
+	e.sandboxKey = sandboxKey
 	e.command = command
 	return engine.CommandResult{Output: "ok"}, nil
 }

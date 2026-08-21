@@ -350,20 +350,24 @@ func managedEventText(event service.ManagedEvent) []string {
 
 type noopSandbox struct{}
 
-func (noopSandbox) Name() string                         { return "noop" }
-func (noopSandbox) Start(context.Context) error          { return nil }
-func (noopSandbox) Ensure(context.Context, string) error { return nil }
-func (noopSandbox) Stat(context.Context, string, string) (engine.FileInfo, error) {
+func (noopSandbox) Name() string                                    { return "noop" }
+func (noopSandbox) Start(context.Context) error                     { return nil }
+func (noopSandbox) Ensure(context.Context, engine.SandboxKey) error { return nil }
+func (noopSandbox) Stat(context.Context, engine.SandboxKey, string) (engine.FileInfo, error) {
 	return engine.FileInfo{}, fs.ErrNotExist
 }
-func (noopSandbox) ReadFile(context.Context, string, string) ([]byte, error) {
+func (noopSandbox) ReadFile(context.Context, engine.SandboxKey, string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
-func (noopSandbox) ReadDir(context.Context, string, string) ([]engine.DirEntry, error) {
+func (noopSandbox) ReadDir(context.Context, engine.SandboxKey, string) ([]engine.DirEntry, error) {
 	return nil, fs.ErrNotExist
 }
-func (noopSandbox) WriteFile(context.Context, string, string, []byte, fs.FileMode) error { return nil }
-func (noopSandbox) MkdirAll(context.Context, string, string, fs.FileMode) error          { return nil }
-func (noopSandbox) Execute(context.Context, string, engine.Command) (engine.CommandResult, error) {
+func (noopSandbox) WriteFile(context.Context, engine.SandboxKey, string, []byte, fs.FileMode) error {
+	return nil
+}
+func (noopSandbox) MkdirAll(context.Context, engine.SandboxKey, string, fs.FileMode) error {
+	return nil
+}
+func (noopSandbox) Execute(context.Context, engine.SandboxKey, engine.Command) (engine.CommandResult, error) {
 	return engine.CommandResult{}, fmt.Errorf("noop sandbox does not execute commands")
 }

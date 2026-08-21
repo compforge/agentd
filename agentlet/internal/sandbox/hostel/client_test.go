@@ -42,7 +42,7 @@ func TestRemoteEngineExecutesInSessionBed(t *testing.T) {
 	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	result, err := engine.Execute(context.Background(), "session_123", sandboxengine.Command{
+	result, err := engine.Execute(context.Background(), sandboxengine.SandboxKey{Value: "session_123"}, sandboxengine.Command{
 		Command: "printf hello", Cwd: "/workspace", Timeout: time.Second,
 	})
 	if err != nil {

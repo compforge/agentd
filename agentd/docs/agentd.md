@@ -7,17 +7,19 @@ agentd 是 Managed Agent 的 Control Plane，负责全局资源、执行时机�
 
 ![agentd Managed Agent 架构](architecture.svg)
 
-## 四类 Control Plane 角色
+## 五类 Control Plane 角色
 
 | 角色 | 回答的问题 | 唯一写权 |
 |---|---|---|
 | Observer | Worker 是否可用；Assignment 对应的 Session 执行到了哪里 | `worker.observer_status`、`session.observer_status` |
 | Scheduler | 当前 Session 应分配给哪个可用 Worker | 无；只返回纯决策 |
 | Lifecycler | 应创建、drain 或回收哪些 Worker | Worker lifecycle phase 和运行资源动作 |
+| Session Reconciler | 哪些持久输入尚待执行，如何收敛为 Assignment 和 wake | 无；通过 Service 更新 Control State，通过 Connector 走数据面 |
 | Connector | 带 Assignment 的执行意图如何触达 Agentlet | 无；只走数据面 |
 
 动作、事实、决策和数据面不能合并成一个大 Driver：Lifecycler 创建成功不代表 Ready，Observer 不因
-看到空闲容量而创建 Worker，Scheduler 不访问数据库或 Kubernetes，Connector 不修改 Assignment。
+看到空闲容量而创建 Worker，Scheduler 不访问数据库或 Kubernetes，Session Reconciler 不修改 Ledger
+执行事实，Connector 不修改 Assignment。
 
 ## Worker、Session 与 Assignment
 
@@ -83,6 +85,27 @@ Agentlet `/state`，再把结果提交给 Control State。它不调用 `Ensure`�
 事实。通过 fence 后，ResumeRevision 只能单调前进。idle 或 terminated 表示该 Assignment 已不再占用
 执行容量，Session observation、公开状态、ResumeRef 和 Assignment 释放在同一数据库事务内提交；最后
 一个绑定释放后，Worker 才开始计算 idle TTL。多个 agentd 副本可以并行观察，较旧响应不会覆盖新事实。
+
+## Session Reconciler
+
+公开 Event API 先把 `user.message` 写入共享 Ledger，再确认接收；接收成功不依赖当前是否存在 Worker、
+Assignment 或健康 Agentlet。未标记 processed 的 `user.message` 就是 Session 的 durable execution
+demand，不另建一份 Work queue 或待执行表。
+
+Session Reconciler 收到 API 的进程内通知时立即运行，同时周期扫描所有非终态 Session，因此通知丢失
+或 agentd 重启不会丢失执行需求。每轮按以下顺序收敛：
+
+1. 从 Ledger 读取 Session 的未处理 `user.message`；没有输入则不做动作；
+2. Session 尚未绑定 Worker 时，通过 Service 调用 Scheduler 创建 Assignment；无容量时由现有流程把
+   Session 标记为 `rescheduling` 并唤醒 Lifecycler；
+3. Session 已有 Assignment 时只解析当前执行目标，不因一次 Connector 失败自行迁移；
+4. Connector 幂等 `Ensure` 当前 WorkSpec，再发送可合并的 `wake`；
+5. Agentlet 完成输入后写入执行 Event 并标记原输入 processed，下一轮扫描自然停止唤醒。
+
+Event 是 durable demand，内存 notification 只降低延迟。多个 agentd 副本可以同时扫描并重复
+`Ensure`/`wake`：Assignment 由数据库事务和 fence 保护，Agentlet 对相同 Assignment 的 Work 安装与
+唤醒保持幂等。Worker 故障收敛和 Sandbox instance 恢复是其它组件的职责，不能从一次转发失败直接
+推导；Sandbox 的持久化与恢复能力边界见 `sandbox-engine.md`。
 
 ## Scheduler
 
@@ -229,7 +252,8 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 ## 部署边界
 
 - agentd Lifecycler 管理 Worker 数量和生命周期；
-- agentd Deployment 可以多副本运行；每个副本都运行 API、Scheduler、Connector、Session Observer 和周期控制器，
+- agentd Deployment 可以多副本运行；每个副本都运行 API、Scheduler、Connector、Session Observer、
+  Session Reconciler 和周期控制器，
   通过 DB lease、phase CAS 与幂等动作协调；
 - Kubernetes 管理已创建 Worker Pod 的健壮性和重建；
 - SRE 通过 workload 模板管理镜像、资源、placement 约束、故障域和集群容量；
@@ -238,8 +262,8 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
 Helm 部署形态、Worker 双容器模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
-Session Observer 与 Record GC 始终运行。启用 Kubernetes Worker source 后，每个 agentd 副本还运行
-Worker Observer、Lifecycler 和 Pod GC。
+Session Observer、Session Reconciler 与 Record GC 始终运行。启用 Kubernetes Worker source 后，
+每个 agentd 副本还运行 Worker Observer、Lifecycler 和 Pod GC。
 无容量的调度结果先持久化为待分配 Session，再唤醒 Lifecycler；Provisioner 根据缺口创建 Worker Pod，
 Observer 确认 Ready 后，后续请求即可完成 Assignment 并由 Connector 转发到 Agentlet。Pod GC 同时收敛
 空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Session Observer 在执行进入 idle 或

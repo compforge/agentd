@@ -16,20 +16,29 @@ agentd 参考 [OpenSandbox Lifecycle API](https://github.com/opensandbox-group/O
 - **Environment** 描述 Session 需要的运行环境，不是一台已经启动的沙箱；
 - **Session** 是用户看到的长期身份，可以跨 agentd、Agentlet、Harness runtime 和 Sandbox instance
   存在；
-- **Sandbox Engine** 负责把逻辑 Sandbox 身份解析为可用的隔离 Workspace；
+- **Sandbox Engine** 负责按 caller 提供的 `SandboxKey` 解析或准备可用的隔离 Workspace；
 - **Sandbox instance** 是 Engine 管理的可释放资源，可以是 Hostel Bed、容器、虚拟机或远端实例。
 
-Agentlet 将 Sandbox provider 返回的 ID 视为不透明资源引用。当前 Hostel Adapter 直接以 Session ID
-作为 Bed ID；由服务端分配 Sandbox ID 的 Engine 应让 Agentlet 将其作为 opaque `SandboxRef` 上报，
-由 agentd 保存到 Control State，或通过稳定 metadata 重新解析。Provider ID 不能取代 Session ID
-成为产品身份。
+`SandboxKey` 是 Sandbox Engine 契约定义的调用参数；它的 value 由 Engine caller 传入，含义、组成和
+生命周期也由 caller 解释和管理。Engine 必须把它当作 opaque key，不能假设其格式或把 provider
+identity 泄漏给 caller。当前 Agentlet 是直接 caller，它把 agentd 在 `WorkSpec` 中传入的 Session ID
+解释为 `SandboxKey`；其它 caller 可以按自身身份和隔离模型选择 conversation ID，或拼成
+`tenant:session` 等更完整的 key。
+
+Go 契约将 `SandboxKey` 定义为 model，而不是裸字符串；当前 model 只有 `Value string`。后续若 Engine
+需要表达 group、scope 等通用寻址维度，可以向该 model 增加字段，而不修改每个 Workspace 和 Execute
+方法的签名。字段仍由 caller 赋值和解释，不能演变成 agentd 持有的 provider resource model。
+
+Engine 负责维护 `SandboxKey` 到 Bed、容器、虚拟机或远端实例的内部映射，并按 key 幂等地查找、
+创建或恢复资源。agentd 不保存 Engine 返回的 `SandboxRef`，也不理解 provider resource ID；provider
+identity 不能取代 Session ID 成为产品身份。
 
 ## 所有权边界
 
 | 组件 | 拥有什么 | 不拥有什么 |
 | --- | --- | --- |
-| agentd Control Plane | Session 生命周期、Assignment、恢复与资源释放策略 | 沙箱内部实现、命令语义 |
-| Agentlet | Sandbox 绑定、Engine 调用与本地资源释放 | 全局 placement、跨实例资源真相 |
+| agentd Control Plane | Session 生命周期、Assignment 与执行时机；通过 WorkSpec 传递稳定的 Session 身份 | SandboxKey、SandboxRef、provider identity、Sandbox instance 的恢复与释放机制 |
+| Agentlet | 作为 Engine caller 选择并解释 SandboxKey，调用 Engine 能力 | provider binding、全局 placement |
 | Harness Adapter | 将 Harness 的 Tool/Workspace API 映射到 Engine | Sandbox instance 生命周期 |
 | Sandbox Engine | 隔离环境、Workspace、命令执行和底层资源生命周期 | Agent Loop、Session 调度、重试决策 |
 | Agent Ledger Adapter | Tool Attempt 和副作用边界的规范化事实 | 命令执行、Workspace 状态 |
@@ -37,6 +46,16 @@ Agentlet 将 Sandbox provider 返回的 ID 视为不透明资源引用。当前 
 Sandbox Engine 不直接写 Ledger，也不根据 Tool 结果决定是否重试。Harness Adapter 在调用 Engine 前后
 记录 `tool.requested`、`tool.completed` 或失败事实；结果不明确时，由 Agentlet 上报证据，agentd
 结合 Harness State 和 Ledger 决定对账、终止或恢复，不能让 Engine 静默重放命令。
+
+Sandbox 的可恢复性属于 Sandbox Engine 的能力边界。agentd 只决定 Session 何时需要继续执行，并把
+稳定的 Session 身份随 WorkSpec 传给 Agentlet；Agentlet 作为 caller 将其解释为 `SandboxKey`。
+Workspace 如何持久化、Sandbox instance 如何重建或迁移、恢复后如何重新解析 endpoint，均由 Engine
+按 key 保证。真实环境接入 sandctl 等具备控制面与持久化能力的 Engine 时，agentd 直接使用其能力，
+不再实现一套 sandbox 恢复控制器。
+
+最小 Kubernetes 部署把 Hostel 与 Agentlet 放入同一个 Worker Pod，只是为了在没有外部 Sandbox
+服务时提供开箱即用的 Engine。这个部署便利不改变所有权边界，也不能据此要求 agentd 在 Worker Pod
+丢失后恢复 Hostel Bed；需要跨 Pod 保留和恢复 Workspace 时，应替换为具备对应语义的 Sandbox Engine。
 
 ## OpenSandbox 设计参考
 
@@ -70,7 +89,8 @@ Control Plane 与 Harness。所有实现使用同一组 Engine 契约测试验�
 
 ## 能力契约
 
-`agentlet/internal/sandbox/engine.Engine` 暴露 Agentlet 当前需要的最小能力：
+`agentlet/internal/sandbox/engine.Engine` 暴露 Agentlet 当前需要的最小能力。以下操作中的 sandbox
+参数都是 Engine 契约定义、caller 传入和解释的 `SandboxKey`，不是 Engine 分配的 resource ID：
 
 1. **可用性**：`Start` 确认 Engine 服务可用；`Ensure` 幂等地创建、解析或重新连接 Sandbox。
 2. **Workspace**：提供 `Stat`、`ReadFile`、`ReadDir`、`WriteFile` 和 `MkdirAll`，供 Harness 的文件工具使用。
@@ -122,12 +142,16 @@ Harness State 和 Sandbox Workspace 是两类不同的恢复材料。Harness Sta
 
 安全恢复遵循以下约束：
 
-1. Agentlet 接受 Assignment 后通过持久化的资源绑定调用 `Ensure`，重新解析 endpoint，不缓存临时
-   实例地址；
+1. Agentlet 接受 Assignment 后把 WorkSpec 中的稳定 Session 身份解释为 `SandboxKey` 并调用
+   `Ensure`，由 Engine 重新解析 endpoint；Agentlet 不缓存临时实例地址或 provider resource ID；
 2. Engine 若保留 Workspace，必须让重新连接后的 Session 看到一致内容；
 3. Engine 若会因 TTL 或策略回收 Workspace，必须先通过 snapshot、artifact 或 volume 提供耐久恢复路径；
 4. 未决 Tool Attempt 是否可重放由 Ledger 和 agentd 判断，Workspace 中出现文件不能单独证明命令成功；
 5. `Ensure` 只负责资源就绪，不授予 Session 执行所有权；执行归属仍由 Assignment 表达。
+
+这里的“安全恢复”是 agentd/Agentlet 对 Engine 能力的使用协议，不表示 agentd 实现 Sandbox
+恢复。若 Engine 不声明并提供所需的持久化或恢复语义，agentd 不能靠 Ledger、Assignment 或重复
+`Ensure` 补出这些能力。
 
 ## 隔离与运行要求
 
