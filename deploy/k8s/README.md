@@ -6,7 +6,7 @@ Pod，Pod 内固定包含 Agentlet 与 Sandbox Engine 两个容器。
 
 Helm Chart 位于 `deploy/k8s/agentd`，负责安装 agentd workload、namespace RBAC 和 Worker
 PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Lifecycler 和 Pod GC；Connector
-只转发已经完成 Assignment 的请求。
+按 Assignment 转发执行请求，并通过任意健康 Worker 读取共享持久 Event。
 
 ## 部署拓扑
 
@@ -47,12 +47,12 @@ readiness probe 都通过。
 | Scheduler | 基于 Worker facts、容量与 Assignment 做纯 placement 决策 | 访问数据库/K8s、触发扩容 |
 | Lifecycler | 根据持久化需求收敛 Worker 供给，推进 creating/active/draining/retired | 宣告 Ready、转发请求 |
 | Provisioner | 幂等 `Ensure` / `Destroy` 一个 Worker Pod | 容量决策、调度 |
-| Connector | 按 Assignment 和 Observer endpoint 转发 Agent API，并保持流式响应 | 选择 Worker、改 Assignment、管理生命周期 |
+| Connector | 按 Assignment 转发执行流量；通过健康 endpoint 读取共享持久 Event | 改 Assignment、管理生命周期 |
 
 这组边界借鉴 sandctl 的 lifecycle / observer / connector 分工：动作、事实和数据面分别只有一个
 owner。Lifecycler 调用 Provisioner 成功只表示 Kubernetes 接受了期望状态，只有 Observer 可以把
-Worker 标为 Ready。Connector 每次从 Assignment 解析当前 Worker 和 endpoint，endpoint 是一次
-路由结果，不是新的持久化 identity。
+Worker 标为 Ready。执行流量从 Assignment 解析当前 Worker；Event 读取可选择任意健康 Worker。
+endpoint 是一次路由结果，不是新的持久化 identity。
 
 ## 扩容
 
@@ -136,9 +136,10 @@ Helm 不预创建固定数量的匿名 Worker，也不直接参与 Session place
 默认安装使用单副本 agentd 和容器本地 SQLite，不创建 PVC；这适合开发、试用和控制面联调，Pod
 重建后数据会丢失。生产环境或多副本 agentd 通过 `agentd.database.dsn` 配置外部 MySQL；Chart
 会拒绝“多副本但没有外置 DB”的配置。Agentlet 未配置 MySQL 时也使用 Worker Pod 内的 SQLite；
-它能满足最小体验，但 Worker 被删除或重建后，Session、Checkpoint 与 Ledger 会一起丢失，无法实现
-安全恢复。需要健壮恢复时应为 Agentlet 配置外部 MySQL。agentd 与 Agentlet 没有共享表契约；两者
-可以使用同一 MySQL 实例中的不同 database，也可以使用完全独立的数据库和凭据。
+它只能用于单 Worker 的最小体验，Worker 被删除或重建后，Session、Checkpoint 与 Ledger 会一起丢失。
+多 Worker 部署必须让所有 Agentlet 连接同一 Agentlet database，才能由任意 Worker 提供 Event list/stream
+和安全恢复。agentd 与 Agentlet 没有共享表契约；两者可以使用同一 MySQL 实例中的不同 database，也
+可以使用完全独立的数据库和凭据。
 
 ```bash
 helm upgrade --install agentd deploy/k8s/agentd \
@@ -186,9 +187,12 @@ worker:
 
 agentd:
   extraEnv:
-    - name: AGENTD_WORKER_MIN_IDLE
-      value: "1"
+    - name: AGENTD_WORKER_MIN_COUNT
+      value: "2"
 ```
+
+`AGENTD_WORKER_MIN_COUNT` 默认且最小为 `1`，确保没有执行需求时仍保留一个可用 Agentlet 数据面。
+`AGENTD_WORKER_MIN_IDLE` 默认 `0`，只在需要额外预热空闲容量时覆盖。
 
 Chart 把 Worker PodTemplate 挂载到 agentd，由 Provisioner materialize 为独立 Worker Pod；Helm
 本身不创建或回收 Worker。

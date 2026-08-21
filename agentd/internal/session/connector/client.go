@@ -32,6 +32,11 @@ type Target struct {
 	Work     executionapi.WorkSpec
 }
 
+type EventTarget struct {
+	Endpoint string
+	WorkerID string
+}
+
 type Client struct {
 	requestTimeout time.Duration
 	client         *http.Client
@@ -123,6 +128,20 @@ func (c *Client) Forward(
 	return c.do(ctx, target, method, path, rawQuery, body, headers, stream)
 }
 
+// ForwardEventRead forwards a location-independent Event read without an
+// Assignment fence. WorkerID identifies the selected data-plane endpoint.
+func (c *Client) ForwardEventRead(
+	ctx context.Context,
+	target EventTarget,
+	method string,
+	path string,
+	rawQuery string,
+	headers http.Header,
+	stream bool,
+) (*http.Response, error) {
+	return c.doRequest(ctx, target.Endpoint, target.WorkerID, "", method, path, rawQuery, nil, headers, stream)
+}
+
 func (c *Client) do(
 	ctx context.Context,
 	target Target,
@@ -133,7 +152,25 @@ func (c *Client) do(
 	headers http.Header,
 	stream bool,
 ) (*http.Response, error) {
-	endpoint, err := requestURL(target.Endpoint, path, rawQuery)
+	return c.doRequest(
+		ctx, target.Endpoint, target.Work.WorkerID, target.Work.AssignmentID,
+		method, path, rawQuery, body, headers, stream,
+	)
+}
+
+func (c *Client) doRequest(
+	ctx context.Context,
+	endpointBase string,
+	workerID string,
+	assignmentID string,
+	method string,
+	path string,
+	rawQuery string,
+	body []byte,
+	headers http.Header,
+	stream bool,
+) (*http.Response, error) {
+	endpoint, err := requestURL(endpointBase, path, rawQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +183,12 @@ func (c *Client) do(
 			request.Header.Add(name, value)
 		}
 	}
-	request.Header.Set(executionapi.AssignmentHeader, target.Work.AssignmentID)
-	request.Header.Set(executionapi.WorkerHeader, target.Work.WorkerID)
+	if assignmentID != "" {
+		request.Header.Set(executionapi.AssignmentHeader, assignmentID)
+	}
+	if workerID != "" {
+		request.Header.Set(executionapi.WorkerHeader, workerID)
+	}
 	if len(body) > 0 && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", "application/json")
 	}

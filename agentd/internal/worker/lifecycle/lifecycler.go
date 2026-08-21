@@ -27,6 +27,7 @@ type Config struct {
 	RequestTimeout  time.Duration
 	LeaseTTL        time.Duration
 	WorkerCapacity  int
+	MinWorkers      int
 	MinIdleWorkers  int
 	CreateBatchSize int
 	Logger          *slog.Logger
@@ -52,7 +53,7 @@ func New(
 	if config.Interval <= 0 || config.RequestTimeout <= 0 || config.LeaseTTL <= 0 {
 		return nil, fmt.Errorf("create Worker Lifecycler: intervals and lease TTL must be positive")
 	}
-	if config.WorkerCapacity <= 0 || config.CreateBatchSize <= 0 || config.MinIdleWorkers < 0 {
+	if config.WorkerCapacity <= 0 || config.CreateBatchSize <= 0 || config.MinWorkers < 0 || config.MinIdleWorkers < 0 {
 		return nil, fmt.Errorf("create Worker Lifecycler: invalid capacity configuration")
 	}
 	if config.Logger == nil {
@@ -126,11 +127,14 @@ func (l *Lifecycler) planCapacity(ctx context.Context) ([]model.Worker, error) {
 		return nil, err
 	}
 	plannedFreeSlots := int64(0)
+	plannedWorkers := 0
 	for _, worker := range workers {
 		switch worker.Phase {
 		case model.WorkerPhaseCreating:
+			plannedWorkers++
 			plannedFreeSlots += int64(worker.Capacity)
 		case model.WorkerPhaseActive:
+			plannedWorkers++
 			assigned, err := l.repository.CountWorkerSessions(ctx, worker.ID)
 			if err != nil {
 				return nil, err
@@ -142,10 +146,16 @@ func (l *Lifecycler) planCapacity(ctx context.Context) ([]model.Worker, error) {
 	}
 	requiredFreeSlots := pending + int64(l.config.MinIdleWorkers*l.config.WorkerCapacity)
 	deficit := requiredFreeSlots - plannedFreeSlots
-	if deficit <= 0 {
+	count := 0
+	if deficit > 0 {
+		count = int((deficit + int64(l.config.WorkerCapacity) - 1) / int64(l.config.WorkerCapacity))
+	}
+	if floorDeficit := l.config.MinWorkers - plannedWorkers; floorDeficit > count {
+		count = floorDeficit
+	}
+	if count <= 0 {
 		return nil, nil
 	}
-	count := int((deficit + int64(l.config.WorkerCapacity) - 1) / int64(l.config.WorkerCapacity))
 	if count > l.config.CreateBatchSize {
 		count = l.config.CreateBatchSize
 	}

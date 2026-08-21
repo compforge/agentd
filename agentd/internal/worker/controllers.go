@@ -22,6 +22,7 @@ type Config struct {
 	Selector           string
 	Port               int
 	Capacity           int
+	MinCount           int
 	MinIdle            int
 	IdleTTL            time.Duration
 	CreateBatchSize    int
@@ -78,7 +79,7 @@ func New(
 	lifecycler, err := controllifecycle.New(repository, locker, provisioner, controllifecycle.Config{
 		Interval: config.LifecyclerInterval, RequestTimeout: config.ControllerTimeout,
 		LeaseTTL: config.ControllerLeaseTTL, WorkerCapacity: config.Capacity,
-		MinIdleWorkers: config.MinIdle, CreateBatchSize: config.CreateBatchSize,
+		MinWorkers: config.MinCount, MinIdleWorkers: config.MinIdle, CreateBatchSize: config.CreateBatchSize,
 		Logger: logger,
 	})
 	if err != nil {
@@ -87,7 +88,7 @@ func New(
 	podGC, err := controlgc.NewPodGC(repository, locker, kubernetesClient, provisioner, controlgc.PodConfig{
 		Interval: config.GCInterval, RequestTimeout: config.ControllerTimeout,
 		LeaseTTL: config.ControllerLeaseTTL, IdleTTL: config.IdleTTL,
-		MinIdleWorkers: config.MinIdle, DeleteBatchSize: config.GCDeleteBatchSize,
+		MinWorkers: config.MinCount, MinIdleWorkers: config.MinIdle, DeleteBatchSize: config.GCDeleteBatchSize,
 		Logger: logger,
 	})
 	if err != nil {

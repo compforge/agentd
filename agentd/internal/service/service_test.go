@@ -202,6 +202,30 @@ func TestPrepareExecutionBuildsAssignedWorkSnapshot(t *testing.T) {
 	}
 }
 
+func TestResolveEventTargetUsesReadyWorkerWithoutAssignmentOrCapacity(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	putSession(t, repository, "session-1")
+	observeReadyWorker(t, application, "worker-a-stale", 1, now.Add(-2*time.Minute))
+	observeReadyWorker(t, application, "worker-z-full", 1, now)
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "occupying-session", Status: model.SessionStatusRunning,
+		AssignmentID: "assignment-full", WorkerID: "worker-z-full", AssignedAt: &now,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := application.ResolveEventTarget(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.WorkerID != "worker-z-full" || target.Endpoint != "http://worker-z-full" {
+		t.Fatalf("Event target = %#v", target)
+	}
+}
+
 func TestObserveSessionUsesAssignmentFenceAndMonotonicResumeRevision(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()

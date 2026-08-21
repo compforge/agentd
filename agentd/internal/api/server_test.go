@@ -208,6 +208,13 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		stored.AssignmentID != "" || len(stored.ObserverStatus) == 0 {
 		t.Fatalf("persisted observed state = %#v", stored)
 	}
+	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
+	if err != nil {
+		t.Fatalf("list Events after Assignment release: %v", err)
+	}
+	if len(page.Data) != 1 || page.Data[0].Type != "agent.message" {
+		t.Fatalf("Events after Assignment release = %#v", page.Data)
+	}
 }
 
 type fakeAgentlet struct {
@@ -215,6 +222,7 @@ type fakeAgentlet struct {
 	workerID string
 	workSpec executionapi.WorkSpec
 	state    executionapi.SessionState
+	hasEvent bool
 }
 
 func (a *fakeAgentlet) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -256,24 +264,29 @@ func (a *fakeAgentlet) ServeHTTP(response http.ResponseWriter, request *http.Req
 		a.state.Status = "idle"
 		a.state.ResumeRef = "checkpoint-7"
 		a.state.ResumeRevision = 7
+		a.hasEvent = true
 		writeFakeJSON(response, map[string]any{"data": []any{map[string]any{
 			"id": "event-user-1", "type": "user.message", "processed_at": time.Now().UTC(),
 			"content": []any{map[string]any{"type": "text", "text": "hello"}},
 		}}})
 	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/events/stream"):
-		if !a.currentAssignment(request) {
-			http.Error(response, "stale Assignment", http.StatusBadRequest)
+		if request.Header.Get(executionapi.AssignmentHeader) != "" {
+			http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
 			return
 		}
 		response.Header().Set("Content-Type", "text/event-stream")
 		encoded, _ := json.Marshal(fakeAgentMessage())
 		_, _ = fmt.Fprintf(response, "event: agent.message\ndata: %s\n\n", encoded)
 	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/events"):
-		if !a.currentAssignment(request) {
-			http.Error(response, "stale Assignment", http.StatusBadRequest)
+		if request.Header.Get(executionapi.AssignmentHeader) != "" {
+			http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
 			return
 		}
-		writeFakeJSON(response, map[string]any{"data": []any{fakeAgentMessage()}, "next_page": nil})
+		data := []any{}
+		if a.hasEvent {
+			data = append(data, fakeAgentMessage())
+		}
+		writeFakeJSON(response, map[string]any{"data": data, "next_page": nil})
 	default:
 		http.NotFound(response, request)
 	}

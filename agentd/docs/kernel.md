@@ -72,11 +72,12 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 2. 用户 Event 持久化后才确认接收，Controller 生成待执行意图；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
    Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
-4. Connector 把公开请求转换为携带 Assignment 的内部执行请求；Agentlet 接受后通过 Harness
-   Adapter 创建或恢复短命 runtime；
-5. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
-6. Harness 输出投影为持久化 Event，并提交最新恢复点；
-7. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收，agentd
+4. Connector 把执行请求转换为携带 Assignment 的内部请求；持久 Event 读取则通过任意健康 Worker
+   访问 Agentlet 共享持久层，不创建或依赖 Assignment；
+5. Agentlet 接受执行请求后通过 Harness Adapter 创建或恢复短命 runtime；
+6. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
+7. Harness 输出投影为持久化 Event，并提交最新恢复点；
+8. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收，agentd
    释放或更新 Assignment；Lifecycler 最终回收超过 idle TTL 的空 Worker。
 
 agentd 拥有期望状态、全局归属和执行时机，Agentlet 只拥有有效 Assignment 内可丢弃的本地执行状态，

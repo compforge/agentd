@@ -30,10 +30,14 @@ Agentlet 的 HTTP 面只供 agentd 调用，统一位于 `/internal/v1`；Claude
 Assignment 是 Control Plane 的路由权威，Agentlet 的进程内 runtime 只是缓存。进程重启后，Agentlet
 不得从本地内存猜测归属；它根据请求携带的 Assignment 和精确 `ResumeRef` 重建执行现场。
 
-Connector 在转发 Event 前先幂等安装当前 Assignment 的完整 `WorkSpec`。相同 Assignment 的重复快照
-不能覆盖 Agentlet 已推进的 ResumePoint；Event 和状态读取都必须携带相同的 Worker 与 Assignment
-身份。Agentlet 上报的状态只有在 agentd 仍持有该 Assignment 时才能提交，迟到响应不能修改已经重调度
-的 Session。
+Connector 在转发 Event 写入和其它执行动作前先幂等安装当前 Assignment 的完整 `WorkSpec`。相同
+Assignment 的重复快照不能覆盖 Agentlet 已推进的 ResumePoint；执行状态读取也必须携带相同的 Worker
+与 Assignment 身份。Agentlet 上报的状态只有在 agentd 仍持有该 Assignment 时才能提交，迟到响应不能
+修改已经重调度的 Session。
+
+持久 Event list/stream 不属于执行门禁。所有 Agentlet Worker 连接同一 Agentlet 数据库，任意实例都可按
+Session ID 从 Agent Ledger lane 读取 Event，即使该 Session 没有 Assignment 或从未在当前实例执行。
+stream 按持久 lane sequence 增量读取，不依赖进程内订阅；Event 写入仍必须经当前 Assignment 路由。
 
 ## 执行流程
 

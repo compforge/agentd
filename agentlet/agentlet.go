@@ -83,7 +83,11 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithMaxRequestBodySize(2<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(executionService, logger, api.WithWorkerID(config.workerID)).Register(httpServer.Engine)
+	api.New(
+		executionService, logger,
+		api.WithWorkerID(config.workerID),
+		api.WithEventPollInterval(config.eventPollInterval),
+	).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("agentlet listening", "address", config.address, "storage_provider", storage.Provider,
@@ -136,6 +140,7 @@ type config struct {
 	idleTimeout            time.Duration
 	shutdownTimeout        time.Duration
 	reconcileInterval      time.Duration
+	eventPollInterval      time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -178,6 +183,7 @@ func loadConfig() (config, error) {
 		{"AGENTD_HTTP_IDLE_TIMEOUT", 2 * time.Minute, &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", 15 * time.Second, &value.shutdownTimeout},
 		{"AGENTD_RECONCILE_INTERVAL", 5 * time.Second, &value.reconcileInterval},
+		{"AGENTD_EVENT_STREAM_POLL_INTERVAL", 500 * time.Millisecond, &value.eventPollInterval},
 		{"AGENTD_STORAGE_OPERATION_TIMEOUT", 5 * time.Second, &value.storageTimeout},
 		{"AGENTD_MYSQL_CONN_MAX_LIFETIME", 30 * time.Minute, &value.mysqlConnMaxLifetime},
 	}

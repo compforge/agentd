@@ -28,6 +28,7 @@ type PodConfig struct {
 	RequestTimeout  time.Duration
 	LeaseTTL        time.Duration
 	IdleTTL         time.Duration
+	MinWorkers      int
 	MinIdleWorkers  int
 	DeleteBatchSize int
 	Logger          *slog.Logger
@@ -54,7 +55,7 @@ func NewPodGC(
 	if config.Interval <= 0 || config.RequestTimeout <= 0 || config.LeaseTTL <= 0 || config.IdleTTL <= 0 {
 		return nil, fmt.Errorf("create Worker Pod GC: durations must be positive")
 	}
-	if config.MinIdleWorkers < 0 || config.DeleteBatchSize <= 0 {
+	if config.MinWorkers < 0 || config.MinIdleWorkers < 0 || config.DeleteBatchSize <= 0 {
 		return nil, fmt.Errorf("create Worker Pod GC: invalid capacity configuration")
 	}
 	if config.Logger == nil {
@@ -157,6 +158,7 @@ func (g *PodGC) reconcileKnownWorkers(
 	now := time.Now().UTC()
 	idle := make([]model.Worker, 0)
 	destroy := make([]model.Worker, 0, limit)
+	availableWorkers := 0
 	for _, worker := range workers {
 		_, exists := present[worker.ID]
 		switch worker.Phase {
@@ -171,6 +173,7 @@ func (g *PodGC) reconcileKnownWorkers(
 				}
 				continue
 			}
+			availableWorkers++
 			assigned, err := g.repository.CountWorkerSessions(ctx, worker.ID)
 			if err != nil {
 				return nil, err
@@ -196,6 +199,9 @@ func (g *PodGC) reconcileKnownWorkers(
 	}
 	sort.Slice(idle, func(i, j int) bool { return idle[i].IdleSince.Before(*idle[j].IdleSince) })
 	reclaim := len(idle) - g.config.MinIdleWorkers
+	if floorLimit := availableWorkers - g.config.MinWorkers; reclaim > floorLimit {
+		reclaim = floorLimit
+	}
 	for i := 0; i < reclaim && len(destroy) < limit; i++ {
 		draining, ok, err := g.movePhase(
 			ctx, idle[i].ID, model.WorkerPhaseActive, model.WorkerPhaseDraining, true, false, now,
