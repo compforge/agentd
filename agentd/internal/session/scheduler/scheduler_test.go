@@ -74,6 +74,23 @@ func TestScheduleSkipsUnavailableWorkers(t *testing.T) {
 	}
 }
 
+func TestScheduleReservesCreatingWorkerOnlyWhenNoReadyCapacityExists(t *testing.T) {
+	now := time.Now().UTC()
+	planned := Candidate{WorkerID: "worker-creating", Capacity: 2, Reservable: true}
+	decision := New(time.Minute).Schedule(now, "", "", []Candidate{
+		planned,
+		readyCandidate("worker-ready", now, 1, 2),
+	})
+	if decision.WorkerID != "worker-ready" || decision.Reason != ReasonAvailable {
+		t.Fatalf("Schedule() = %+v, want ready Worker", decision)
+	}
+
+	decision = New(time.Minute).Schedule(now, "", "", []Candidate{planned})
+	if decision.WorkerID != "worker-creating" || decision.Reason != ReasonCreating {
+		t.Fatalf("Schedule() = %+v, want creating Worker reservation", decision)
+	}
+}
+
 func readyCandidate(workerID string, observedAt time.Time, assignedCount int64, capacity int) Candidate {
 	return Candidate{
 		WorkerID: workerID, Capacity: capacity, AssignedCount: assignedCount,

@@ -30,7 +30,7 @@ type config struct {
 	workerIdleTTL                time.Duration
 	workerCreateBatchSize        int
 	workerPodTemplateFile        string
-	workerLifecyclerInterval     time.Duration
+	workerReconcilerInterval     time.Duration
 	workerControllerTimeout      time.Duration
 	workerControllerLeaseTTL     time.Duration
 	workerGCInterval             time.Duration
@@ -84,7 +84,7 @@ func loadConfig() (config, error) {
 		workerIdleTTL:                10 * time.Minute,
 		workerCreateBatchSize:        2,
 		workerPodTemplateFile:        envOr("AGENTD_WORKER_POD_TEMPLATE_FILE", "/etc/agentd/worker-template/pod-template.yaml"),
-		workerLifecyclerInterval:     5 * time.Second,
+		workerReconcilerInterval:     5 * time.Second,
 		workerControllerTimeout:      20 * time.Second,
 		workerControllerLeaseTTL:     30 * time.Second,
 		workerGCInterval:             time.Minute,
@@ -189,7 +189,7 @@ func loadConfig() (config, error) {
 		{"AGENTD_SESSION_RECONCILER_INTERVAL", &value.sessionReconcilerInterval},
 		{"AGENTD_SESSION_RECONCILER_REQUEST_TIMEOUT", &value.sessionReconcilerTimeout},
 		{"AGENTD_WORKER_IDLE_TTL", &value.workerIdleTTL},
-		{"AGENTD_WORKER_LIFECYCLER_INTERVAL", &value.workerLifecyclerInterval},
+		{"AGENTD_WORKER_RECONCILER_INTERVAL", &value.workerReconcilerInterval},
 		{"AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", &value.workerControllerTimeout},
 		{"AGENTD_WORKER_CONTROLLER_LEASE_TTL", &value.workerControllerLeaseTTL},
 		{"AGENTD_WORKER_GC_INTERVAL", &value.workerGCInterval},

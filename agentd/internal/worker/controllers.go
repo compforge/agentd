@@ -11,8 +11,8 @@ import (
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
-	controllifecycle "github.com/compforge/agentd/agentd/internal/worker/lifecycle"
 	"github.com/compforge/agentd/agentd/internal/worker/observer"
+	workerreconciler "github.com/compforge/agentd/agentd/internal/worker/reconciler"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,7 @@ type Config struct {
 	IdleTTL            time.Duration
 	CreateBatchSize    int
 	PodTemplateFile    string
-	LifecyclerInterval time.Duration
+	ReconcilerInterval time.Duration
 	ControllerTimeout  time.Duration
 	ControllerLeaseTTL time.Duration
 	GCInterval         time.Duration
@@ -37,13 +37,13 @@ type Config struct {
 }
 
 // Controllers is the composition unit for the Kubernetes Worker control
-// loops. Construction is split before and after Service because Lifecycler
-// wakes from Service demand while Observer writes facts back through Service.
+// loops. Construction is split before and after Service because Observer writes
+// facts back through Service.
 type Controllers struct {
 	config           Config
 	logger           *slog.Logger
 	kubernetesClient *controlk8s.Client
-	lifecycler       *controllifecycle.Lifecycler
+	reconciler       *workerreconciler.Reconciler
 	podGC            *controlgc.PodGC
 	observer         *observer.Observer
 }
@@ -76,12 +76,13 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	lifecycler, err := controllifecycle.New(repository, locker, provisioner, controllifecycle.Config{
-		Interval: config.LifecyclerInterval, RequestTimeout: config.ControllerTimeout,
-		LeaseTTL: config.ControllerLeaseTTL, WorkerCapacity: config.Capacity,
-		MinWorkers: config.MinCount, MinIdleWorkers: config.MinIdle, CreateBatchSize: config.CreateBatchSize,
-		Logger: logger,
-	})
+	workerReconciler, err := workerreconciler.New(
+		repository, locker, kubernetesClient, provisioner, workerreconciler.Config{
+			Interval: config.ReconcilerInterval, RequestTimeout: config.ControllerTimeout,
+			LeaseTTL: config.ControllerLeaseTTL, WorkerCapacity: config.Capacity,
+			MinWorkers: config.MinCount, MinIdleWorkers: config.MinIdle, CreateBatchSize: config.CreateBatchSize,
+			Logger: logger,
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -98,17 +99,17 @@ func New(
 		config:           config,
 		logger:           logger,
 		kubernetesClient: kubernetesClient,
-		lifecycler:       lifecycler,
+		reconciler:       workerReconciler,
 		podGC:            podGC,
 	}, nil
 }
 
-func (c *Controllers) AttachObserver(sink observer.Sink) error {
+func (c *Controllers) AttachObserver(sink observer.Sink, notifier observer.Notifier) error {
 	source, err := observer.NewKubernetesSource(c.kubernetesClient, c.config.Port, c.config.Capacity)
 	if err != nil {
 		return err
 	}
-	c.observer, err = observer.New(source, sink, observer.Config{
+	c.observer, err = observer.New(source, sink, notifier, observer.Config{
 		Interval: c.config.ObserverInterval, RequestTimeout: c.config.ObserverTimeout, Logger: c.logger,
 	})
 	if err != nil {
@@ -117,12 +118,15 @@ func (c *Controllers) AttachObserver(sink observer.Sink) error {
 	return nil
 }
 
-func (c *Controllers) NotifyDemand() {
-	c.lifecycler.NotifyDemand()
+func (c *Controllers) Notify() {
+	if c == nil {
+		return
+	}
+	c.reconciler.Notify()
 }
 
 func (c *Controllers) Run(ctx context.Context) {
 	go c.observer.Run(ctx)
-	go c.lifecycler.Run(ctx)
+	go c.reconciler.Run(ctx)
 	go c.podGC.Run(ctx)
 }

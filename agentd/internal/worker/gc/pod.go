@@ -13,7 +13,6 @@ import (
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
-	controllifecycle "github.com/compforge/agentd/agentd/internal/worker/lifecycle"
 )
 
 const workerPoolLock = "worker-pool:capacity"
@@ -21,6 +20,10 @@ const workerPoolLock = "worker-pool:capacity"
 type PodSource interface {
 	ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error)
 	DeleteWorkerPod(context.Context, string) error
+}
+
+type Provisioner interface {
+	Destroy(context.Context, model.Worker) error
 }
 
 type PodConfig struct {
@@ -38,7 +41,7 @@ type PodGC struct {
 	repository  repo.Repository
 	locker      controllock.Locker
 	pods        PodSource
-	provisioner controllifecycle.Provisioner
+	provisioner Provisioner
 	config      PodConfig
 }
 
@@ -46,7 +49,7 @@ func NewPodGC(
 	repository repo.Repository,
 	locker controllock.Locker,
 	pods PodSource,
-	provisioner controllifecycle.Provisioner,
+	provisioner Provisioner,
 	config PodConfig,
 ) (*PodGC, error) {
 	if repository == nil || locker == nil || pods == nil || provisioner == nil {
@@ -110,6 +113,8 @@ func (g *PodGC) Reconcile(ctx context.Context) error {
 		if err := g.pods.DeleteWorkerPod(ctx, pod.Name); err != nil {
 			return fmt.Errorf("delete zombie Worker Pod %q: %w", pod.Name, err)
 		}
+		g.config.Logger.InfoContext(ctx, "deleted orphan Worker Pod",
+			"worker_id", pod.ID, "pod_name", pod.Name)
 		deleted++
 	}
 
@@ -131,6 +136,8 @@ func (g *PodGC) Reconcile(ctx context.Context) error {
 		if err := g.provisioner.Destroy(ctx, worker); err != nil {
 			return fmt.Errorf("destroy retired Worker %q: %w", worker.ID, err)
 		}
+		g.config.Logger.InfoContext(ctx, "destroyed Worker Pod",
+			"worker_id", worker.ID, "worker_name", worker.Name)
 	}
 	return nil
 }

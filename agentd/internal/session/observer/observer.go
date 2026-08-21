@@ -23,6 +23,10 @@ type Sink interface {
 	ObserveSession(context.Context, string, model.SessionObserverStatus) (model.Session, error)
 }
 
+type Notifier interface {
+	Notify()
+}
+
 type Config struct {
 	Interval       time.Duration
 	RequestTimeout time.Duration
@@ -35,13 +39,14 @@ type Config struct {
 type Observer struct {
 	source         Source
 	sink           Sink
+	notifier       Notifier
 	interval       time.Duration
 	requestTimeout time.Duration
 	concurrency    int
 	logger         *slog.Logger
 }
 
-func New(source Source, sink Sink, config Config) (*Observer, error) {
+func New(source Source, sink Sink, notifier Notifier, config Config) (*Observer, error) {
 	if source == nil || sink == nil {
 		return nil, fmt.Errorf("create Session Observer: source and sink are required")
 	}
@@ -55,7 +60,7 @@ func New(source Source, sink Sink, config Config) (*Observer, error) {
 		config.Logger = slog.Default()
 	}
 	return &Observer{
-		source: source, sink: sink, interval: config.Interval,
+		source: source, sink: sink, notifier: notifier, interval: config.Interval,
 		requestTimeout: config.RequestTimeout, concurrency: config.Concurrency, logger: config.Logger,
 	}, nil
 }
@@ -99,7 +104,7 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 		}()
 	}
 	for _, session := range sessions {
-		if session.AssignmentID == "" || session.WorkerID == "" {
+		if !session.Placement.Bound() {
 			continue
 		}
 		select {
@@ -125,8 +130,8 @@ func (o *Observer) observe(ctx context.Context, session model.Session) error {
 	if err != nil {
 		return fmt.Errorf("observe Session %q: %w", session.ID, err)
 	}
-	_, err = o.sink.ObserveSession(ctx, session.ID, model.SessionObserverStatus{
-		ObservedAt: observedAt, AssignmentID: state.AssignmentID, Exists: true,
+	observed, err := o.sink.ObserveSession(ctx, session.ID, model.SessionObserverStatus{
+		ObservedAt: observedAt, PlacementFence: state.AssignmentID, Exists: true,
 		Status: model.SessionStatus(state.Status), ResumeRef: state.ResumeRef,
 		ResumeRevision: state.ResumeRevision,
 	})
@@ -135,6 +140,14 @@ func (o *Observer) observe(ctx context.Context, session model.Session) error {
 	}
 	if err != nil {
 		return fmt.Errorf("persist Session %q observation: %w", session.ID, err)
+	}
+	if observed.Status != session.Status || observed.ResumeRevision != session.ResumeRevision {
+		o.logger.InfoContext(ctx, "observed Session state",
+			"session_id", session.ID, "worker_id", session.Placement.WorkerID,
+			"status", observed.Status, "resume_revision", observed.ResumeRevision)
+		if o.notifier != nil {
+			o.notifier.Notify()
+		}
 	}
 	return nil
 }

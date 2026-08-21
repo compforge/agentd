@@ -344,9 +344,13 @@ func (a *Service) enqueue(session Session) error {
 		return translateWorkError(session.ID, err)
 	}
 	if !start {
+		a.logger.Debug("coalesced Session wake", "session_id", session.ID,
+			"placement_fence", session.Control.AssignmentID)
 		return nil
 	}
 	a.workerSet.Add(1)
+	a.logger.Info("started Session Work", "session_id", session.ID,
+		"placement_fence", session.Control.AssignmentID)
 	go a.runWorker(session.ID, session.Control.AssignmentID, resident)
 	return nil
 }
@@ -382,6 +386,8 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 					a.logger.Warn("stop terminal Session Work", "session_id", sessionID, "error", err)
 				}
 				a.evictInactiveWork(sessionID, assignmentID)
+				a.logger.Info("settled terminal Session Work", "session_id", sessionID,
+					"placement_fence", assignmentID)
 				finished = true
 				return
 			}
@@ -392,6 +398,8 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 		}
 		finished = true
 		a.evictInactiveWork(sessionID, assignmentID)
+		a.logger.Info("settled idle Session Work", "session_id", sessionID,
+			"placement_fence", assignmentID)
 		return
 	}
 }
@@ -467,6 +475,8 @@ func (a *Service) process(
 		return false, fmt.Errorf("persist running state: %w", err)
 	}
 	inputID, _ := input["id"].(string)
+	a.logger.InfoContext(ctx, "started Session turn", "session_id", sessionID,
+		"input_event_id", inputID, "placement_fence", assignmentID)
 	if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.status_running", nil)); err != nil {
 		return false, fmt.Errorf("record running state: %w", err)
 	}
@@ -514,6 +524,9 @@ func (a *Service) process(
 		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
 			return false, fmt.Errorf("mark unsafe input processed: %w", err)
 		}
+		a.logger.WarnContext(ctx, "terminated Session after unsafe recovery",
+			"session_id", sessionID, "input_event_id", inputID,
+			"resume_revision", session.Control.ResumeRevision)
 		// Termination applies to the whole session. Leave later inputs pending for
 		// manual reconciliation instead of letting this worker revive the session.
 		return false, nil
@@ -538,6 +551,9 @@ func (a *Service) process(
 	if err := a.repository.PutSession(ctx, session); err != nil {
 		return false, fmt.Errorf("persist idle state: %w", err)
 	}
+	a.logger.InfoContext(ctx, "completed Session turn", "session_id", sessionID,
+		"input_event_id", inputID, "resume_revision", session.Control.ResumeRevision,
+		"run_error", runErr != nil)
 	return true, nil
 }
 

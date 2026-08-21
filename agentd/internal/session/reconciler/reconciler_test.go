@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,22 +14,31 @@ import (
 )
 
 type fakeControl struct {
-	sessions     []model.Session
-	prepare      service.ExecutionTarget
-	current      service.ExecutionTarget
-	prepareErr   error
-	currentErr   error
-	prepareCalls []string
-	currentCalls []string
+	sessions       []model.Session
+	reconciled     model.Session
+	current        service.ExecutionTarget
+	reconcileErr   error
+	currentErr     error
+	reconcileCalls []placementCall
+	currentCalls   []string
+}
+
+type placementCall struct {
+	sessionID string
+	hasDemand bool
 }
 
 func (f *fakeControl) ListSessions(context.Context) ([]model.Session, error) {
 	return f.sessions, nil
 }
 
-func (f *fakeControl) PrepareExecution(_ context.Context, sessionID string) (service.ExecutionTarget, error) {
-	f.prepareCalls = append(f.prepareCalls, sessionID)
-	return f.prepare, f.prepareErr
+func (f *fakeControl) ReconcilePlacement(
+	_ context.Context,
+	sessionID string,
+	hasDemand bool,
+) (model.Session, error) {
+	f.reconcileCalls = append(f.reconcileCalls, placementCall{sessionID: sessionID, hasDemand: hasDemand})
+	return f.reconciled, f.reconcileErr
 }
 
 func (f *fakeControl) CurrentExecution(_ context.Context, sessionID string) (service.ExecutionTarget, error) {
@@ -52,6 +62,14 @@ type fakeDataPlane struct {
 	woken   []connector.Target
 }
 
+type fakeWorkerNotifier struct {
+	calls atomic.Int64
+}
+
+func (f *fakeWorkerNotifier) Notify() {
+	f.calls.Add(1)
+}
+
 func (f *fakeDataPlane) Ensure(_ context.Context, target connector.Target) error {
 	f.ensured = append(f.ensured, target)
 	return nil
@@ -62,32 +80,12 @@ func (f *fakeDataPlane) Wake(_ context.Context, target connector.Target) error {
 	return nil
 }
 
-func TestReconcilerAssignsAndWakesPendingSession(t *testing.T) {
-	target := executionTarget("session-1", "assignment-1")
-	control := &fakeControl{sessions: []model.Session{{ID: "session-1"}}, prepare: target}
-	events := &fakeEvents{pending: map[string][]managedevent.ManagedEvent{
-		"session-1": {managedevent.New("user.message", nil)},
-	}}
-	dataPlane := &fakeDataPlane{}
-	reconciler := newTestReconciler(t, control, events, dataPlane)
-
-	if err := reconciler.Reconcile(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(control.prepareCalls) != 1 || len(control.currentCalls) != 0 {
-		t.Fatalf("execution calls = prepare %v, current %v", control.prepareCalls, control.currentCalls)
-	}
-	if len(dataPlane.ensured) != 1 || len(dataPlane.woken) != 1 ||
-		dataPlane.woken[0].Work.AssignmentID != "assignment-1" {
-		t.Fatalf("data-plane calls = ensure %#v, wake %#v", dataPlane.ensured, dataPlane.woken)
-	}
-}
-
-func TestReconcilerRetriesExistingAssignmentInPlace(t *testing.T) {
+func TestReconcilerPlacesAndWakesPendingSession(t *testing.T) {
 	target := executionTarget("session-1", "assignment-1")
 	control := &fakeControl{
-		sessions: []model.Session{{
-			ID: "session-1", AssignmentID: "assignment-1", WorkerID: "worker-1",
+		sessions: []model.Session{{ID: "session-1"}},
+		reconciled: model.Session{ID: "session-1", Placement: model.SessionPlacement{
+			Fence: "assignment-1", WorkerID: "worker-1",
 		}},
 		current: target,
 	}
@@ -100,8 +98,64 @@ func TestReconcilerRetriesExistingAssignmentInPlace(t *testing.T) {
 	if err := reconciler.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(control.prepareCalls) != 0 || len(control.currentCalls) != 1 {
-		t.Fatalf("execution calls = prepare %v, current %v", control.prepareCalls, control.currentCalls)
+	if len(control.reconcileCalls) != 1 || !control.reconcileCalls[0].hasDemand || len(control.currentCalls) != 1 {
+		t.Fatalf("execution calls = reconcile %+v, current %v", control.reconcileCalls, control.currentCalls)
+	}
+	if len(dataPlane.ensured) != 1 || len(dataPlane.woken) != 1 ||
+		dataPlane.woken[0].Work.AssignmentID != "assignment-1" {
+		t.Fatalf("data-plane calls = ensure %#v, wake %#v", dataPlane.ensured, dataPlane.woken)
+	}
+}
+
+func TestReconcilerNotifiesWorkerAfterPlacementChanges(t *testing.T) {
+	control := &fakeControl{
+		sessions: []model.Session{{ID: "session-1"}},
+		reconciled: model.Session{ID: "session-1", Placement: model.SessionPlacement{
+			Fence: "assignment-1", WorkerID: "worker-creating",
+		}},
+		currentErr: service.ErrUnavailable,
+	}
+	events := &fakeEvents{pending: map[string][]managedevent.ManagedEvent{
+		"session-1": {managedevent.New("user.message", nil)},
+	}}
+	notifier := &fakeWorkerNotifier{}
+	reconciler, err := New(control, events, &fakeDataPlane{}, notifier, Config{
+		Interval: time.Hour, RequestTimeout: time.Second, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := notifier.calls.Load(); got != 1 {
+		t.Fatalf("Worker notifications = %d, want 1", got)
+	}
+}
+
+func TestReconcilerRetriesExistingAssignmentInPlace(t *testing.T) {
+	target := executionTarget("session-1", "assignment-1")
+	control := &fakeControl{
+		sessions: []model.Session{{
+			ID: "session-1", Placement: model.SessionPlacement{Fence: "assignment-1", WorkerID: "worker-1"},
+		}},
+		reconciled: model.Session{
+			ID: "session-1", Placement: model.SessionPlacement{Fence: "assignment-1", WorkerID: "worker-1"},
+		},
+		current: target,
+	}
+	events := &fakeEvents{pending: map[string][]managedevent.ManagedEvent{
+		"session-1": {managedevent.New("user.message", nil)},
+	}}
+	dataPlane := &fakeDataPlane{}
+	reconciler := newTestReconciler(t, control, events, dataPlane)
+
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(control.reconcileCalls) != 1 || len(control.currentCalls) != 1 {
+		t.Fatalf("execution calls = reconcile %+v, current %v", control.reconcileCalls, control.currentCalls)
 	}
 	if len(dataPlane.woken) != 1 || dataPlane.woken[0].Work.AssignmentID != "assignment-1" {
 		t.Fatalf("wake calls = %#v", dataPlane.woken)
@@ -110,7 +164,7 @@ func TestReconcilerRetriesExistingAssignmentInPlace(t *testing.T) {
 
 func TestReconcilerLeavesNoCapacityDemandPending(t *testing.T) {
 	control := &fakeControl{
-		sessions: []model.Session{{ID: "session-1"}}, prepareErr: service.ErrNoCapacity,
+		sessions: []model.Session{{ID: "session-1"}}, reconcileErr: service.ErrNoCapacity,
 	}
 	events := &fakeEvents{pending: map[string][]managedevent.ManagedEvent{
 		"session-1": {managedevent.New("user.message", nil)},
@@ -126,25 +180,28 @@ func TestReconcilerLeavesNoCapacityDemandPending(t *testing.T) {
 	}
 }
 
-func TestReconcilerSkipsSessionsWithoutPendingInput(t *testing.T) {
-	control := &fakeControl{sessions: []model.Session{{ID: "session-1"}}}
+func TestReconcilerReleasesStablePlacementWithoutPendingInput(t *testing.T) {
+	control := &fakeControl{
+		sessions:   []model.Session{{ID: "session-1"}},
+		reconciled: model.Session{ID: "session-1", Status: model.SessionStatusIdle},
+	}
 	dataPlane := &fakeDataPlane{}
 	reconciler := newTestReconciler(t, control, &fakeEvents{pending: map[string][]managedevent.ManagedEvent{}}, dataPlane)
 
 	if err := reconciler.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(control.prepareCalls) != 0 || len(control.currentCalls) != 0 {
-		t.Fatalf("execution resolved without pending input: prepare %v, current %v", control.prepareCalls, control.currentCalls)
+	if len(control.reconcileCalls) != 1 || control.reconcileCalls[0].hasDemand || len(control.currentCalls) != 0 {
+		t.Fatalf("execution calls without pending input: reconcile %+v, current %v", control.reconcileCalls, control.currentCalls)
 	}
 }
 
 func TestNewRequiresValidConfiguration(t *testing.T) {
-	_, err := New(nil, nil, nil, Config{})
+	_, err := New(nil, nil, nil, nil, Config{})
 	if err == nil {
 		t.Fatal("New() error = nil")
 	}
-	_, err = New(&fakeControl{}, &fakeEvents{}, &fakeDataPlane{}, Config{
+	_, err = New(&fakeControl{}, &fakeEvents{}, &fakeDataPlane{}, nil, Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 0,
 	})
 	if err == nil {
@@ -159,7 +216,7 @@ func newTestReconciler(
 	dataPlane DataPlane,
 ) *Reconciler {
 	t.Helper()
-	reconciler, err := New(control, events, dataPlane, Config{
+	reconciler, err := New(control, events, dataPlane, nil, Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 2,
 	})
 	if err != nil {

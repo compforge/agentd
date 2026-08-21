@@ -34,8 +34,9 @@ func TestRecordGCSweepsOnlyAgedAbsentRetiredWorkers(t *testing.T) {
 		}
 	}
 	if err := repository.PutSession(ctx, model.Session{
-		ID: "session-bound", Status: model.SessionStatusRunning, WorkerID: "bound",
-		Metadata: map[string]string{}, CreatedAt: now, UpdatedAt: now,
+		ID: "session-bound", Status: model.SessionStatusRunning,
+		Placement: model.SessionPlacement{WorkerID: "bound", Fence: "placement-bound"},
+		Metadata:  map[string]string{}, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

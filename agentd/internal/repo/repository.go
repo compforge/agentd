@@ -28,7 +28,6 @@ type Repository interface {
 	GetSession(context.Context, string) (model.Session, error)
 	GetSessionForUpdate(context.Context, string) (model.Session, error)
 	ListSessions(context.Context) ([]model.Session, error)
-	CountPendingSessions(context.Context) (int64, error)
 	CountWorkerSessions(context.Context, string) (int64, error)
 	DeleteRetiredWorkersBefore(context.Context, time.Time, int) (int64, error)
 }

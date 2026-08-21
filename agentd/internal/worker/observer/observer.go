@@ -17,6 +17,10 @@ type Sink interface {
 	ObserveWorker(context.Context, model.Worker) (model.Worker, error)
 }
 
+type Notifier interface {
+	Notify()
+}
+
 type Config struct {
 	Interval       time.Duration
 	RequestTimeout time.Duration
@@ -29,12 +33,13 @@ type Config struct {
 type Observer struct {
 	source         Source
 	sink           Sink
+	notifier       Notifier
 	interval       time.Duration
 	requestTimeout time.Duration
 	logger         *slog.Logger
 }
 
-func New(source Source, sink Sink, config Config) (*Observer, error) {
+func New(source Source, sink Sink, notifier Notifier, config Config) (*Observer, error) {
 	if source == nil || sink == nil {
 		return nil, fmt.Errorf("create Worker Observer: source and sink are required")
 	}
@@ -45,7 +50,7 @@ func New(source Source, sink Sink, config Config) (*Observer, error) {
 		config.Logger = slog.Default()
 	}
 	return &Observer{
-		source: source, sink: sink, interval: config.Interval,
+		source: source, sink: sink, notifier: notifier, interval: config.Interval,
 		requestTimeout: config.RequestTimeout, logger: config.Logger,
 	}, nil
 }
@@ -79,29 +84,62 @@ func (o *Observer) Reconcile(ctx context.Context) error {
 	}
 
 	seen := make(map[string]struct{}, len(snapshots))
+	known := make(map[string]model.Worker, len(existing))
+	for _, worker := range existing {
+		known[worker.ID] = worker
+	}
 	var reconcileErrors []error
 	for _, snapshot := range snapshots {
 		seen[snapshot.ID] = struct{}{}
-		if err := o.observe(ctx, model.Worker{
-			ID: snapshot.ID, Name: snapshot.Name, Capacity: snapshot.Capacity,
-		}, model.WorkerObserverStatus{
+		status := model.WorkerObserverStatus{
 			ObservedAt: observedAt, Exists: true, Ready: snapshot.Ready, Endpoint: snapshot.Endpoint,
 			PodUID: snapshot.PodUID, PodPhase: snapshot.PodPhase, Unschedulable: snapshot.Unschedulable,
-		}); err != nil {
+		}
+		if err := o.observe(ctx, model.Worker{
+			ID: snapshot.ID, Name: snapshot.Name, Capacity: snapshot.Capacity,
+		}, status); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
+		} else if workerAvailabilityChanged(known[snapshot.ID], status) {
+			o.logger.InfoContext(ctx, "observed Worker availability",
+				"worker_id", snapshot.ID, "exists", true, "ready", snapshot.Ready,
+				"pod_phase", snapshot.PodPhase, "unschedulable", snapshot.Unschedulable)
+			o.notify()
 		}
 	}
 	for _, worker := range existing {
 		if _, ok := seen[worker.ID]; ok {
 			continue
 		}
+		status := model.WorkerObserverStatus{ObservedAt: observedAt, Exists: false}
 		if err := o.observe(ctx, model.Worker{
 			ID: worker.ID, Name: worker.Name, Capacity: worker.Capacity,
-		}, model.WorkerObserverStatus{ObservedAt: observedAt, Exists: false}); err != nil {
+		}, status); err != nil {
 			reconcileErrors = append(reconcileErrors, err)
+		} else if workerAvailabilityChanged(worker, status) {
+			o.logger.InfoContext(ctx, "observed Worker availability",
+				"worker_id", worker.ID, "exists", false, "ready", false)
+			o.notify()
 		}
 	}
 	return errors.Join(reconcileErrors...)
+}
+
+func (o *Observer) notify() {
+	if o.notifier != nil {
+		o.notifier.Notify()
+	}
+}
+
+func workerAvailabilityChanged(worker model.Worker, next model.WorkerObserverStatus) bool {
+	if worker.ID == "" {
+		return true
+	}
+	var previous model.WorkerObserverStatus
+	if json.Unmarshal(worker.ObserverStatus, &previous) != nil {
+		return true
+	}
+	return previous.Exists != next.Exists || previous.Ready != next.Ready ||
+		previous.PodUID != next.PodUID || previous.Unschedulable != next.Unschedulable
 }
 
 func (o *Observer) observe(ctx context.Context, worker model.Worker, status model.WorkerObserverStatus) error {

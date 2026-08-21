@@ -272,16 +272,6 @@ func (r *GORMRepository) getSession(query *gormio.DB, sessionID string) (model.S
 	return row.session()
 }
 
-func (r *GORMRepository) CountPendingSessions(ctx context.Context) (int64, error) {
-	var count int64
-	if err := r.db.WithContext(ctx).Model(&sessionRow{}).
-		Where("status = ? AND worker_id IS NULL", model.SessionStatusRescheduling).
-		Count(&count).Error; err != nil {
-		return 0, fmt.Errorf("count pending sessions: %w", err)
-	}
-	return count, nil
-}
-
 func (r *GORMRepository) CountWorkerSessions(ctx context.Context, workerID string) (int64, error) {
 	var count int64
 	if err := r.db.WithContext(ctx).Model(&sessionRow{}).Where("worker_id = ?", workerID).Count(&count).Error; err != nil {
@@ -420,9 +410,9 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 		Harness: session.Harness, HarnessVersion: session.HarnessVersion,
 		ResumeRef: session.ResumeRef, ResumeRevision: session.ResumeRevision,
 		ObserverStatus: session.ObserverStatus,
-		AssignmentID:   optionalString(session.AssignmentID), WorkerID: optionalString(session.WorkerID),
+		AssignmentID:   optionalString(session.Placement.Fence), WorkerID: optionalString(session.Placement.WorkerID),
 		LastWorkerID: optionalString(session.LastWorkerID),
-		AssignedAt:   session.AssignedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
+		AssignedAt:   session.Placement.PlacedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 	}, nil
 }
 
@@ -434,9 +424,11 @@ func (r sessionRow) session() (model.Session, error) {
 		Harness: r.Harness, HarnessVersion: r.HarnessVersion,
 		ResumeRef: r.ResumeRef, ResumeRevision: r.ResumeRevision,
 		ObserverStatus: r.ObserverStatus,
-		AssignmentID:   stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID),
+		Placement: model.SessionPlacement{
+			Fence: stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID), PlacedAt: r.AssignedAt,
+		},
 		LastWorkerID: stringValue(r.LastWorkerID),
-		AssignedAt:   r.AssignedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		CreatedAt:    r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if err := json.Unmarshal(r.Metadata, &value.Metadata); err != nil {
 		return model.Session{}, fmt.Errorf("decode session %q metadata: %w", r.ID, err)

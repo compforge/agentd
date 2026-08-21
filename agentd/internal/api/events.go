@@ -62,6 +62,9 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		}
 		accepted = append(accepted, value)
 	}
+	s.logger.InfoContext(ctx, "accepted Session ingress Events",
+		"session_id", sessionID, "event_count", len(accepted),
+		"has_message", hasMessage, "has_interrupt", hasInterrupt)
 
 	if hasMessage {
 		s.executionNotifier.Notify()

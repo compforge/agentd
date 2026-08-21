@@ -147,6 +147,8 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
+	s.logger.InfoContext(ctx, "created Session", "session_id", created.ID,
+		"agent_id", created.AgentID, "environment_id", created.EnvironmentID)
 	agent, err := s.service.GetAgent(ctx, created.AgentID)
 	if err != nil {
 		s.writeError(request, err)

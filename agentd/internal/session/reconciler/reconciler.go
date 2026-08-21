@@ -17,7 +17,7 @@ import (
 
 type Control interface {
 	ListSessions(context.Context) ([]model.Session, error)
-	PrepareExecution(context.Context, string) (service.ExecutionTarget, error)
+	ReconcilePlacement(context.Context, string, bool) (model.Session, error)
 	CurrentExecution(context.Context, string) (service.ExecutionTarget, error)
 }
 
@@ -28,6 +28,10 @@ type EventSource interface {
 type DataPlane interface {
 	Ensure(context.Context, connector.Target) error
 	Wake(context.Context, connector.Target) error
+}
+
+type WorkerNotifier interface {
+	Notify()
 }
 
 type Config struct {
@@ -44,6 +48,7 @@ type Reconciler struct {
 	control        Control
 	events         EventSource
 	dataPlane      DataPlane
+	workerNotifier WorkerNotifier
 	interval       time.Duration
 	requestTimeout time.Duration
 	concurrency    int
@@ -51,7 +56,13 @@ type Reconciler struct {
 	notifications  chan struct{}
 }
 
-func New(control Control, events EventSource, dataPlane DataPlane, config Config) (*Reconciler, error) {
+func New(
+	control Control,
+	events EventSource,
+	dataPlane DataPlane,
+	workerNotifier WorkerNotifier,
+	config Config,
+) (*Reconciler, error) {
 	if control == nil || events == nil || dataPlane == nil {
 		return nil, fmt.Errorf("create Session Reconciler: control, event source, and data plane are required")
 	}
@@ -65,7 +76,7 @@ func New(control Control, events EventSource, dataPlane DataPlane, config Config
 		config.Logger = slog.Default()
 	}
 	return &Reconciler{
-		control: control, events: events, dataPlane: dataPlane,
+		control: control, events: events, dataPlane: dataPlane, workerNotifier: workerNotifier,
 		interval: config.Interval, requestTimeout: config.RequestTimeout,
 		concurrency: config.Concurrency, logger: config.Logger,
 		notifications: make(chan struct{}, 1),
@@ -95,12 +106,11 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// Reconcile ensures one current Work and one wake signal for every Session
-// with durable, unprocessed user input. It never moves an existing Assignment
-// merely because its Agentlet is temporarily unreachable. Worker failure
-// reconciliation is a separate control-plane concern.
+// Reconcile is the single owner of Session placement actions. It consumes
+// durable input, Worker facts, and Agentlet observations to release stable
+// placements, place pending work, and wake the selected Agentlet.
 //
-// +spec=`An unprocessed durable user Event remains executable after notification loss or control-plane restart; reconciliation assigns unbound Sessions but retries existing Assignments in place`
+// +spec=`An unprocessed durable user Event remains executable after notification loss or control-plane restart; placement changes occur only after a stable execution boundary or confirmed Worker loss`
 // +link=agentd/docs/agentd.md
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	sessions, err := r.control.ListSessions(ctx)
@@ -127,9 +137,6 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}()
 	}
 	for _, session := range sessions {
-		if session.Status == model.SessionStatusTerminated {
-			continue
-		}
 		select {
 		case jobs <- session:
 		case <-ctx.Done():
@@ -150,17 +157,26 @@ func (r *Reconciler) reconcileSession(ctx context.Context, session model.Session
 	if err != nil {
 		return fmt.Errorf("read pending input for Session %q: %w", session.ID, err)
 	}
-	if len(pending) == 0 {
+	reconciled, err := r.control.ReconcilePlacement(requestCtx, session.ID, len(pending) > 0)
+	if errors.Is(err, service.ErrNoCapacity) || errors.Is(err, service.ErrNoAssignment) {
 		return nil
 	}
-
-	var execution service.ExecutionTarget
-	if session.AssignmentID == "" || session.WorkerID == "" {
-		execution, err = r.control.PrepareExecution(requestCtx, session.ID)
-	} else {
-		execution, err = r.control.CurrentExecution(requestCtx, session.ID)
+	if err != nil {
+		return fmt.Errorf("reconcile placement for Session %q: %w", session.ID, err)
 	}
-	if errors.Is(err, service.ErrNoCapacity) || errors.Is(err, service.ErrNoAssignment) {
+	if reconciled.Placement.Bound() && reconciled.Placement.Fence != session.Placement.Fence &&
+		r.workerNotifier != nil {
+		// A changed placement may point at a newly published Worker row. Wake the
+		// Worker Reconciler after the transaction commits; a redundant wake for
+		// an already-ready Worker is harmless and coalesced.
+		r.workerNotifier.Notify()
+	}
+	if len(pending) == 0 || reconciled.Status == model.SessionStatusTerminated ||
+		!reconciled.Placement.Bound() {
+		return nil
+	}
+	execution, err := r.control.CurrentExecution(requestCtx, session.ID)
+	if errors.Is(err, service.ErrUnavailable) || errors.Is(err, service.ErrNoAssignment) {
 		return nil
 	}
 	if err != nil {
@@ -173,6 +189,9 @@ func (r *Reconciler) reconcileSession(ctx context.Context, session model.Session
 	if err := r.dataPlane.Wake(requestCtx, target); err != nil {
 		return fmt.Errorf("wake Session %q: %w", session.ID, err)
 	}
+	r.logger.InfoContext(ctx, "woke Session on Agentlet",
+		"session_id", session.ID, "worker_id", execution.Work.WorkerID,
+		"placement_fence", execution.Work.AssignmentID)
 	return nil
 }
 
