@@ -74,7 +74,7 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 		}
 		session.Control.ResumeRef = resumeRef
 	}
-	resident, _, err := a.works.Ensure(WorkSpec{
+	resident, created, err := a.works.Ensure(WorkSpec{
 		AssignmentID: spec.AssignmentID,
 		Session:      executionSession(session),
 	})
@@ -92,6 +92,11 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 	}
 	if err := a.repository.PutSession(ctx, session); err != nil {
 		return Session{}, fmt.Errorf("cache Work Session %q: %w", session.ID, err)
+	}
+	if created {
+		a.logger.InfoContext(ctx, "accepted Session placement",
+			"session_id", session.ID, "worker_id", spec.WorkerID,
+			"placement_fence", spec.AssignmentID, "resume_revision", session.Control.ResumeRevision)
 	}
 	return session, nil
 }

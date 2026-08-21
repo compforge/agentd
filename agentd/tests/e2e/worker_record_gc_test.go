@@ -85,7 +85,7 @@ func TestRetiredWorkerRecordOutlivesPodThenExpires(t *testing.T) {
 		t.Fatalf("destroyed Pods = %#v", pods.destroyed)
 	}
 
-	controlService, err := control.New(repository, time.Minute, nil)
+	controlService, err := control.New(repository, time.Minute, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestRetiredWorkerRecordOutlivesPodThenExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerObserver, err := observer.New(workerSource, controlService, observer.Config{
+	workerObserver, err := observer.New(workerSource, controlService, nil, observer.Config{
 		Interval: time.Minute, RequestTimeout: time.Second,
 	})
 	if err != nil {

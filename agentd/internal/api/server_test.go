@@ -52,7 +52,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlService, err := service.New(repository, time.Minute, nil)
+	controlService, err := service.New(repository, time.Minute, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatal(err)
 	}
 	defer agentletConnector.CloseIdleConnections()
-	executionReconciler, err := sessionreconciler.New(controlService, events, agentletConnector, sessionreconciler.Config{
+	executionReconciler, err := sessionreconciler.New(controlService, events, agentletConnector, nil, sessionreconciler.Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 	})
 	if err != nil {
@@ -198,13 +198,16 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionObserver, err := sessionobserver.New(source, controlService, sessionobserver.Config{
+	sessionObserver, err := sessionobserver.New(source, controlService, nil, sessionobserver.Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := sessionObserver.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlService.ReconcilePlacement(ctx, session.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	current, err := client.Beta.Sessions.Get(ctx, session.ID, anthropic.BetaSessionGetParams{})
@@ -219,7 +222,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatal(err)
 	}
 	if stored.ResumeRef != "checkpoint-7" || stored.ResumeRevision != 7 ||
-		stored.AssignmentID != "" || len(stored.ObserverStatus) == 0 {
+		stored.Placement.Bound() || len(stored.ObserverStatus) != 0 {
 		t.Fatalf("persisted observed state = %#v", stored)
 	}
 	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})

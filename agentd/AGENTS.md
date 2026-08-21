@@ -6,10 +6,10 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 技术，而是通过 Control Plane 与 Agentlet，把可替换的 Harness、Sandbox Engine 和 Agent Ledger
 组织成长生命周期服务。稳定定位与边界见 `docs/kernel.md`。
 
-- agentd 是 Control Plane 的代码与服务边界，拥有全局资源、Worker、Assignment、调度、转发和
+- agentd 是 Control Plane 的代码与服务边界，拥有全局资源、Worker、Session placement、调度、转发和
   恢复决策。
 - Agentlet 在单个 Worker Pod 内通过内部执行 API 管理多个 Harness runtime；它不实现面向客户端的
-  Claude Managed Agents API，也不拥有全局 Assignment。
+  Claude Managed Agents API，也不拥有全局 placement。
 - AgentGo 只拥有 Agent Loop 与原生会话状态，不感知 HTTP API 或具体 Sandbox Engine 实现。
 - Agent Ledger 记录规范化执行事实并保存不透明 Checkpoint，不解释 Harness State，也不做调度或自动重放决策。
 
@@ -30,18 +30,18 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
 │   │   ├── api/               # Control Plane HTTP 适配
-│   │   ├── model/             # Worker、Session 与 Assignment 领域模型
+│   │   ├── model/             # Worker 与内嵌 placement 的 Session 领域模型
 │   │   ├── repo/              # Repository 契约及 GORM 实现、表映射与 resource lock
 │   │   ├── service/           # 跨 Session/Worker 的控制面事务与状态投影
 │   │   ├── session/
 │   │   │   ├── connector/     # 已分配 Session 的 Agentlet 数据面
 │   │   │   ├── observer/      # 只读 Agentlet 状态并持久化 Session observation
-│   │   │   ├── reconciler/    # 将 Ledger 中待处理输入收敛为 Assignment 与 wake
+│   │   │   ├── reconciler/    # 将 Ledger demand 收敛为 Session placement 与 wake
 │   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
 │   │   └── worker/
 │   │       ├── controllers.go # Worker 控制环组合与启动
 │   │       ├── observer/      # 周期拉取 Worker Pod 事实并持久化 observation
-│   │       ├── lifecycle/     # Worker 供给和 lifecycle phase 收敛
+│   │       ├── reconciler/    # Worker row → Pod 与预热容量收敛
 │   │       ├── gc/            # Pod 与终态记录的独立回收
 │   │       └── k8s/           # Kubernetes Client 与 PodSnapshot substrate
 │   └── docs/
@@ -73,9 +73,11 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、容量和当前绑定
    Session 数调度；Agentlet 不主动注册或发心跳。
 4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
-   Control State 中的 observation、Assignment 和容量做无 I/O placement，不访问 Kubernetes 或
-   Agentlet。Lifecycler 管理 Worker 供给；Connector 只按 Assignment 转发 WorkSpec、wake、interrupt
-   和状态读取。公开 Event 由 agentd 直接读写共享 Ledger。
+   Control State 中的 observation、Session placement 和容量做无 I/O 决策，不访问 Kubernetes 或
+   Agentlet。Session Reconciler 是 placement 动作的唯一 owner；Worker Reconciler 实现 Worker Pod 并维护
+   预热下限。两个 Reconciler 都可被其它组件即时通知，但通知只加速基于 DB 的收敛，不承载状态。
+   Connector 只按 placement fence 转发 WorkSpec、wake、interrupt 和状态读取。公开 Event 由 agentd
+   直接读写共享 Ledger。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。

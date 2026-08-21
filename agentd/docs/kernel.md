@@ -10,7 +10,7 @@ Control Plane 和 Agentlet，把 Agent Harness、Sandbox Engine、持久化和 A
 agentd 的稳定职责只有四项：
 
 1. **资源控制**：agentd 作为 Control Plane，通过 Claude Managed Agents 兼容 API 管理 Agent、
-   Environment、Session 和 Event，并通过 Worker 与 Assignment 选择执行位置。
+   Environment、Session 和 Event，并通过 Worker 与 Session placement 选择执行位置。
 2. **节点执行**：每个 Agentlet 通过内部执行 API 接受有效 Assignment，并在容量边界内管理多个
    Harness runtime；Claude 兼容协议止于 agentd。
 3. **冻结与恢复**：Agent 等待用户、外部事件或调度时，可以冻结耐久状态并尽可能释放
@@ -74,8 +74,8 @@ Agentlet 执行。
 |------|--------|----------|
 | Managed Agents API | 拥有公开协议、View Model 和兼容性 | 不暴露公开 API |
 | Event | 接收并持久化用户 ingress，直接提供 list/stream | 不接收、不代理、不查询公开 Event；只写自身产生的执行事实 |
-| Session 与资源 | 拥有全局事实、期望状态和对外读模型 | 仅缓存当前 Assignment 所需的执行快照 |
-| 调度 | 创建 Worker、选择 placement、维护 Assignment | 不选择 Worker，也不修改全局 Assignment |
+| Session 与资源 | 拥有全局事实、期望状态和对外读模型 | 仅缓存当前 placement 所需的执行快照 |
+| 调度 | 创建 Worker，并维护 Session 内的当前 placement | 不选择 Worker，也不修改全局 placement |
 | 执行 | 通过 `wake`、`interrupt` 发出带 Assignment 门禁的执行意图 | 校验 Assignment，驱动 Harness 并观测本地执行状态 |
 | Harness 与 Sandbox | 只依赖能力契约 | 拥有 Adapter、短命 Harness runtime 和 Sandbox Engine 调用 |
 | 恢复 | 决定何时、在哪里重新分配和唤醒 Work | 恢复 Harness，并调用 Sandbox Engine 提供的恢复能力 |
@@ -101,12 +101,13 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
 - **Work**：Session 的长期执行实体。Work 可以冻结、迁移或恢复，但不能与某个进程或 Worker 绑定。
 - **Event**：用户和 Session 之间的持久化输入输出，也是唤醒 Session 的依据。
-- **Worker**：一个由 Lifecycler 管理、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
+- **Worker**：一个由 Worker Reconciler 实现、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
   容量单位。
-- **Assignment**：Session 当前所在 Worker 的临时执行归属，不是产品身份。
+- **Placement**：Session Control State 中的当前 Worker 位置。它随 Session 存储，不是独立资源。
 
 Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
-计算资源，Assignment 只是它们在某一时刻的节点归属。
+计算资源。内部协议中的 `assignment_id` 是 placement fence：它是为一次节点归属派生的值对象，
+用于拒绝迟到请求和观测，不拥有独立生命周期，也不单独建表或运行 Reconciler。
 
 ## 服务主流程
 
@@ -115,14 +116,18 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 2. 用户 Event 持久化后才确认接收；Session Reconciler 以未处理 Event 为 durable demand，内存通知
    只用于降低唤醒延迟；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
-   Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
+   Session Reconciler 创建 Worker row 并写入 placement，再即时唤醒 Worker Reconciler 创建 Pod；Worker
+   Observer 确认 Ready 后反向唤醒 Session Reconciler 继续执行；
 4. agentd 直接从共享 Ledger 读取持久 Event；Connector 只把携带 Assignment 的 wake、
    interrupt 和状态请求转换为 Agentlet 内部调用；
 5. Agentlet 接受执行请求后通过 Harness Adapter 创建或恢复短命 runtime；
 6. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
 7. Harness 输出投影为持久化 Event，并提交最新恢复点；
 8. 空闲或等待中的 Session 释放 Harness runtime，Sandbox 按引擎能力保留、休眠或回收，agentd
-   释放或更新 Assignment；Lifecycler 最终回收超过 idle TTL 的空 Worker。
+   释放或更新 placement；GC 最终回收超过 idle TTL 的空 Worker。
+
+Reconciler 同时接受可合并的进程内通知和周期触发。通知只表达“可能需要重新收敛”，不携带事实或
+动作；Control State 与 Ledger 才是真相源，因此通知丢失、重复或进程重启都由下一次周期扫描修复。
 
 agentd 拥有期望状态、全局归属和执行时机，Agentlet 只拥有有效 Assignment 内可丢弃的本地执行状态，
 Harness Adapter 拥有模型循环和原生会话语义，Sandbox Engine 拥有隔离资源生命周期。组件都可以
@@ -146,7 +151,7 @@ Claude 兼容面与 agentd 内部模型必须显式隔离：
 
 - **API View Model** 只表达 Claude Managed Agents 的 request、response、分页和 error
   envelope，可随官方 API 演进；
-- **Domain Model** 表达 agentd 自身的 Session、Worker、Assignment 和调度语义，不承诺
+- **Domain Model** 表达 agentd 自身的 Session、Worker、placement 和调度语义，不承诺
   与公开 JSON 同形；
 - **DB Model** 是 Repository 内部的持久化行与索引形状，可随 agentd 业务和迁移需求
   调整，不直接暴露给 handler。
@@ -157,10 +162,25 @@ row 的显式转换。官方 API 增加字段不意味着机械扩表，存储�
 
 ## 持久化、恢复与审计
 
-Control State 拥有 Worker、Assignment 和 Session 当前决策，其模型与调度规则定义在 `agentd.md`。
+Control State 拥有 Worker 与 Session 当前 placement 决策，其模型与调度规则定义在 `agentd.md`。
 Agentlet 对 Harness Checkpoint 和 Agent Ledger 的使用顺序定义在 `agentlet.md`；Ledger 对象模型、
 协议和存储规范由 Agent Ledger 项目拥有。三者的权威来源独立，Kernel 不解释 Ledger Run，也不重复
 展开其内部结构。
+
+## 日志与运行观测
+
+agentd 和 Agentlet 统一使用标准库 `log/slog`，二进制入口默认输出 JSON。日志记录状态变化、真实动作和
+异常背压，不记录没有变化的正常周期扫描：
+
+- `INFO`：placement 分配、移动和释放，Worker row/Pod 创建，Connector wake，Agentlet Work/Turn
+  开始与结束，以及 GC 删除；
+- `WARN`：Kubernetes Pending/Unschedulable 背压、可恢复降级和需要关注的终止；
+- `ERROR`：一次控制循环、外部调用或持久化动作失败；
+- `DEBUG`：幂等重复、合并 wake 等正常但高频的细节。
+
+关联字段统一使用 `session_id`、`worker_id`、`placement_fence`、`input_event_id`、`resume_revision`、
+`action` 和 `error`；所有日志带 `service=agentd|agentlet`。日志不得输出凭据、DSN、完整 prompt、Event
+正文或工具敏感结果。Ledger 是审计事实来源，日志只服务运行诊断，不能替代 Ledger。
 
 ## 扩展边界
 

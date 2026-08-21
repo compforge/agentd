@@ -22,6 +22,8 @@ import (
 
 // Run starts the Agentlet execution service and blocks until it stops.
 func Run(logger *slog.Logger) error {
+	logger = logger.With("service", "agentlet")
+	slog.SetDefault(logger)
 	config, err := loadConfig()
 	if err != nil {
 		return err

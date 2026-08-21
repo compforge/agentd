@@ -3,6 +3,7 @@ package observer
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,14 @@ func (f fakeSource) ListWorkers(context.Context) ([]WorkerSnapshot, error) { ret
 
 type fakeSink struct {
 	workers map[string]model.Worker
+}
+
+type fakeNotifier struct {
+	calls atomic.Int64
+}
+
+func (f *fakeNotifier) Notify() {
+	f.calls.Add(1)
 }
 
 func (f *fakeSink) ListWorkers(context.Context) ([]model.Worker, error) {
@@ -36,9 +45,10 @@ func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 	sink := &fakeSink{workers: map[string]model.Worker{
 		"uid-old": {ID: "uid-old", Name: "old", Capacity: 2},
 	}}
+	notifier := &fakeNotifier{}
 	controller, err := New(fakeSource{workers: []WorkerSnapshot{{
 		ID: "uid-new", Name: "new", Endpoint: "http://10.0.0.1:8019", Ready: true, Capacity: 4,
-	}}}, sink, Config{Interval: time.Second, RequestTimeout: time.Second})
+	}}}, sink, notifier, Config{Interval: time.Second, RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +58,9 @@ func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 	}
 	assertStatus(t, sink.workers["uid-new"], true, true)
 	assertStatus(t, sink.workers["uid-old"], false, false)
+	if got := notifier.calls.Load(); got != 2 {
+		t.Fatalf("Session Reconciler notifications = %d, want 2", got)
+	}
 }
 
 func assertStatus(t *testing.T, worker model.Worker, exists, ready bool) {

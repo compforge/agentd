@@ -6,7 +6,7 @@
 容器。
 
 Helm Chart 位于 `deploy/k8s/agentd`，负责安装 agentd workload、namespace RBAC 和 Worker
-PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Lifecycler 和 Pod GC；Connector
+PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Worker Reconciler 和 Pod GC；Connector
 只按 Assignment 转发 WorkSpec、wake、interrupt 和状态请求。agentd 直接读写共享 Ledger 上的
 持久 Event，不经过 Worker。
 
@@ -17,7 +17,7 @@ PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、L
 Client ── Agent API ──►│ agentd Deployment (replicas=N)│
                         │                              │
                         │ Observer   Scheduler         │
-                        │ Lifecycler Connector         │
+                        │ Reconciler Connector         │
                         └──────┬───────────┬───────────┘
                                │ K8s API   │ internal API
                    Ensure/Destroy│         │ WorkSpec/wake/state
@@ -38,7 +38,7 @@ Agent Ledger。默认 Chart 创建单实例 MySQL Deployment 与 PVC；配置外
 Worker，不会让 Kubernetes 在缩容时选中仍承载 Session 的 Pod。Worker 使用 agentd 生成的 UUID，
 并写入 `agentd.compforge.dev/managed=true` 与 `agentd.compforge.dev/worker-id=<worker UUID>` labels；
 Pod UID、endpoint 与 Ready 是 Observer facts。Kubernetes 可以重启 Pod 内异常
-容器；Pod 消失则该 Worker 终止，Lifecycler 按 durable demand 创建具有新 identity 的 Worker。
+容器；Pod 消失则该 Worker 终止，Session Reconciler 按 durable demand 发布具有新 identity 的 Worker。
 
 当前 Sandbox Engine 实现使用 Hostel，但外部部署契约只称 Sandbox Engine。Agentlet 通过
 `http://127.0.0.1:8080` 访问 sidecar；两个容器分别由自己的 PID 1 管理，Pod Ready 要求两者的
@@ -51,36 +51,36 @@ Sandbox Control Plane，Sandbox 粘滞、恢复、容量和物理 placement 都�
 |---|---|---|
 | Observer | 周期观察 Worker Pod，持久化存在、Ready、endpoint 等事实 | 创建资源、分配 Session |
 | Scheduler | 基于 Worker facts、容量与 Assignment 做纯 placement 决策 | 访问数据库/K8s、触发扩容 |
-| Lifecycler | 根据持久化需求收敛 Worker 供给，推进 creating/active/draining/retired | 宣告 Ready、转发请求 |
+| Session Reconciler | 把 Event demand 收敛为 Session placement，必要时发布 Worker row | 创建 Pod、宣告 Ready |
+| Worker Reconciler | 把 Worker row 实现为 Pod，并维护预热下限 | 读取 Event、决定 Session placement |
 | Provisioner | 幂等 `Ensure` / `Destroy` 一个 Worker Pod | 容量决策、调度 |
 | Connector | 按 Assignment 转发 WorkSpec、wake、interrupt 和状态读取 | Event API、改 Assignment、管理生命周期 |
 
-这组边界借鉴 sandctl 的 lifecycle / observer / connector 分工：动作、事实和数据面分别只有一个
-owner。Lifecycler 调用 Provisioner 成功只表示 Kubernetes 接受了期望状态，只有 Observer 可以把
+这组边界借鉴 sandctl 的 reconciler / observer / connector 分工：动作、事实和数据面分别只有一个
+owner。Worker Reconciler 调用 Provisioner 成功只表示 Kubernetes 接受了期望状态，只有 Observer 可以把
 Worker 标为 Ready。执行流量从 Assignment 解析当前 Worker；公开 Event 由 agentd 直接访问共享
 Ledger。endpoint 是一次路由结果，不是新的持久化 identity。
 
 ## 扩容
 
-持久化但尚无有效 Assignment 的 Session 是 durable demand。一次调度无候选时只保留需求并唤醒
-Lifecycler；Scheduler 本身不创建 Pod。
+未处理 Event 是 durable demand。Session Reconciler 无候选时创建 Worker row 并预留 placement；
+Scheduler 本身不创建 Pod。
 
 ```text
-pending Session
+Event demand
   → Scheduler: no capacity
-  → Lifecycler recomputes demand gap
+  → Session Reconciler creates Worker row + placement
+  → Worker Reconciler checks Kubernetes backpressure
   → Provisioner.Ensure(worker)
   → Kubernetes creates Worker Pod
   → Observer persists Ready + endpoint
-  → retry scheduling
-  → persist Assignment
   → Connector forwards request to Agentlet
 ```
 
-Lifecycler 每轮从数据库重新计算缺口：待分配需求减去 active Worker 的空闲 slot 和 creating Worker
-即将提供的 slot。唤醒信号只是加速提示，不能代替数据库事实；agentd 重启后也能从 pending Session
-恢复扩容。创建采用有上限的小批次；如果上一批 Pod 仍 Pending，则暂缓继续放大，给 Kubernetes
-消化镜像、配额和节点容量压力。轻微超配允许由后续 idle 回收收敛。
+Session Reconciler 优先使用 Ready Worker，其次预留 creating Worker 的剩余 slot，避免并发请求重复创建。
+Worker Reconciler 只实现已发布的 Worker row，并补足 `minWorkers/minIdleWorkers`。创建采用有上限的小批次；
+创建前直接读取 Kubernetes，如果受管 Pod 为 Pending 或 Unschedulable，则把它作为 Kubernetes 对 agentd
+的背压，本轮不再创建 Pod 或补预热。其它决策等待 Observer facts 落库后再进行。
 
 ## GC
 
@@ -115,15 +115,15 @@ DB Record GC 只分批删除超过保留期的 `retired` Worker 行。删除时�
 - 数据库存在 creating Worker 而 Pod 缺失时，Provisioner 可以幂等完成本轮创建。
 - active Worker 的 Pod 缺失时先退役该 Worker，再根据 durable demand 创建新 Worker。
 - 存在带 agentd managed label 的 Pod 而数据库无对应 Worker 时，按批幂等删除。
-- Observer 状态与 Lifecycler phase 正交：前者描述外部事实，后者描述 agentd 正在采取的动作。
+- Observer 状态与 Worker phase 正交：前者描述外部事实，后者描述 agentd 正在采取的动作。
 - Connector 遇到过期 endpoint 或连接失败时重新解析 facts，不自行迁移 Session 或创建 Worker。
 
-agentd 可以运行多个副本，每个副本都提供 API、Scheduler 和 Connector，也运行 Observer、Lifecycler
+agentd 可以运行多个副本，每个副本都提供 API、Scheduler 和 Connector，也运行 Observer、Worker Reconciler
 与 Record GC，不依赖全局 Leader。一次容量缺口计算和批量创建用短 DB lease 串行化；单个 Worker 的
 回收权由 phase CAS 决定；Observer 通过 freshness fence 合并事实；外部 `Ensure` / `Destroy` 保持幂等。
 任一副本退出后，其 lease 到期或下一轮 reconcile 即可由其它副本继续。
 
-短 lease 只覆盖“重算缺口并插入 creating Worker”，不覆盖 Pod 启动等待。Worker 行必须先于 Pod
+短 lease 只覆盖“补足预热 Worker 并选择待创建 Pod”，不覆盖 Pod 启动等待。Worker 行必须先于 Pod
 创建提交；随后任意副本都可以为 creating 行幂等补做 `Ensure`。这使多实例和进程崩溃共用同一条
 恢复路径，也避免一个全局 controller leader 成为所有周期任务的串行点。
 

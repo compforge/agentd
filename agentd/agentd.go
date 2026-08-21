@@ -22,6 +22,8 @@ import (
 )
 
 func Run(logger *slog.Logger) error {
+	logger = logger.With("service", "agentd")
+	slog.SetDefault(logger)
 	config, err := loadConfig()
 	if err != nil {
 		return err
@@ -52,7 +54,7 @@ func Run(logger *slog.Logger) error {
 		Port: config.workerPort, Capacity: config.workerCapacity,
 		MinCount: config.workerMinCount, MinIdle: config.workerMinIdle,
 		IdleTTL: config.workerIdleTTL, CreateBatchSize: config.workerCreateBatchSize,
-		PodTemplateFile: config.workerPodTemplateFile, LifecyclerInterval: config.workerLifecyclerInterval,
+		PodTemplateFile: config.workerPodTemplateFile, ReconcilerInterval: config.workerReconcilerInterval,
 		ControllerTimeout: config.workerControllerTimeout, ControllerLeaseTTL: config.workerControllerLeaseTTL,
 		GCInterval: config.workerGCInterval, GCDeleteBatchSize: config.workerGCDeleteBatchSize,
 		ObserverInterval: config.observerInterval, ObserverTimeout: config.observerTimeout,
@@ -60,18 +62,13 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	var demandNotifier control.DemandNotifier
+	workerCapacity := 0
 	if workerControllers != nil {
-		demandNotifier = workerControllers
+		workerCapacity = config.workerCapacity
 	}
-	controlService, err := control.New(repository, config.observationTimeout, demandNotifier)
+	controlService, err := control.New(repository, config.observationTimeout, workerCapacity)
 	if err != nil {
 		return err
-	}
-	if workerControllers != nil {
-		if err := workerControllers.AttachObserver(controlService); err != nil {
-			return err
-		}
 	}
 	agentletConnector, err := connector.New(connector.Config{
 		RequestTimeout:        config.connectorRequestTimeout,
@@ -86,18 +83,26 @@ func Run(logger *slog.Logger) error {
 	}
 	defer agentletConnector.CloseIdleConnections()
 	events := managedevent.NewLog(storage.Ledger)
-	sessionReconciler, err := sessionreconciler.New(controlService, events, agentletConnector, sessionreconciler.Config{
-		Interval: config.sessionReconcilerInterval, RequestTimeout: config.sessionReconcilerTimeout,
-		Concurrency: config.sessionReconcilerConcurrency, Logger: logger,
-	})
+	sessionReconciler, err := sessionreconciler.New(
+		controlService, events, agentletConnector, workerControllers,
+		sessionreconciler.Config{
+			Interval: config.sessionReconcilerInterval, RequestTimeout: config.sessionReconcilerTimeout,
+			Concurrency: config.sessionReconcilerConcurrency, Logger: logger,
+		},
+	)
 	if err != nil {
 		return err
+	}
+	if workerControllers != nil {
+		if err := workerControllers.AttachObserver(controlService, sessionReconciler); err != nil {
+			return err
+		}
 	}
 	sessionSource, err := sessionobserver.NewAgentletSource(controlService, agentletConnector)
 	if err != nil {
 		return err
 	}
-	sessionObserver, err := sessionobserver.New(sessionSource, controlService, sessionobserver.Config{
+	sessionObserver, err := sessionobserver.New(sessionSource, controlService, sessionReconciler, sessionobserver.Config{
 		Interval: config.sessionObserverInterval, RequestTimeout: config.sessionObserverTimeout,
 		Concurrency: config.sessionObserverConcurrency, Logger: logger,
 	})

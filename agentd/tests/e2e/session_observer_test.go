@@ -15,11 +15,12 @@ import (
 	control "github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	sessionreconciler "github.com/compforge/agentd/agentd/internal/session/reconciler"
 	managedevent "github.com/compforge/agentd/internal/event"
 	"github.com/compforge/agentd/internal/executionapi"
 )
 
-func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
+func TestSessionReconcilerReleasesObservedIdlePlacement(t *testing.T) {
 	ctx := context.Background()
 	repository, database := openRepositoryDatabase(t)
 	ledger, err := ledgergorm.New(database, time.Second)
@@ -49,7 +50,7 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	}))
 	defer agentlet.Close()
 
-	application, err := control.New(repository, time.Minute, nil)
+	application, err := control.New(repository, time.Minute, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +85,11 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	target, err := application.PrepareExecution(ctx, "session-e2e")
+	placed, err := application.ReconcilePlacement(ctx, "session-e2e", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignmentID = target.Work.AssignmentID
+	assignmentID = placed.Placement.Fence
 	events := managedevent.NewLog(ledger)
 	input := managedevent.New("user.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "hello"}},
@@ -116,7 +117,7 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer, err := sessionobserver.New(source, application, sessionobserver.Config{
+	observer, err := sessionobserver.New(source, application, nil, sessionobserver.Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 	})
 	if err != nil {
@@ -125,13 +126,25 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	if err := observer.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := events.MarkProcessed(ctx, "session-e2e", input["id"].(string)); err != nil {
+		t.Fatal(err)
+	}
+	executionReconciler, err := sessionreconciler.New(application, events, client, nil, sessionreconciler.Config{
+		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executionReconciler.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	session, err := repository.GetSession(ctx, "session-e2e")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.Status != model.SessionStatusIdle || session.AssignmentID != "" || session.WorkerID != "" ||
-		session.ResumeRef != "checkpoint-e2e" || session.ResumeRevision != 3 || len(session.ObserverStatus) == 0 {
+	if session.Status != model.SessionStatusIdle || session.Placement.Bound() ||
+		session.ResumeRef != "checkpoint-e2e" || session.ResumeRevision != 3 || len(session.ObserverStatus) != 0 {
 		t.Fatalf("observed Session = %#v", session)
 	}
 	worker, err := repository.GetWorker(ctx, "worker-e2e")

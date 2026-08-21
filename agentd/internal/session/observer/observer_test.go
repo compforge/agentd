@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,14 @@ type fakeSink struct {
 	err          error
 }
 
+type fakeNotifier struct {
+	calls atomic.Int64
+}
+
+func (f *fakeNotifier) Notify() {
+	f.calls.Add(1)
+}
+
 func (f *fakeSink) ListSessions(context.Context) ([]model.Session, error) {
 	return f.sessions, nil
 }
@@ -45,7 +54,10 @@ func (f *fakeSink) ObserveSession(
 	status model.SessionObserverStatus,
 ) (model.Session, error) {
 	f.observations[sessionID] = status
-	return model.Session{ID: sessionID}, f.err
+	return model.Session{
+		ID: sessionID, Status: status.Status,
+		ResumeRef: status.ResumeRef, ResumeRevision: status.ResumeRevision,
+	}, f.err
 }
 
 func TestObserverPollsOnlyAssignedSessions(t *testing.T) {
@@ -57,12 +69,13 @@ func TestObserverPollsOnlyAssignedSessions(t *testing.T) {
 	}}
 	sink := &fakeSink{
 		sessions: []model.Session{
-			{ID: "assigned", AssignmentID: "assignment-1", WorkerID: "worker-1"},
+			{ID: "assigned", Placement: model.SessionPlacement{Fence: "assignment-1", WorkerID: "worker-1"}},
 			{ID: "idle"},
 		},
 		observations: map[string]model.SessionObserverStatus{},
 	}
-	observer, err := New(source, sink, Config{
+	notifier := &fakeNotifier{}
+	observer, err := New(source, sink, notifier, Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 2,
 	})
 	if err != nil {
@@ -75,9 +88,12 @@ func TestObserverPollsOnlyAssignedSessions(t *testing.T) {
 		t.Fatalf("observed Sessions = %#v", source.observed)
 	}
 	status := sink.observations["assigned"]
-	if status.ObservedAt.IsZero() || !status.Exists || status.AssignmentID != "assignment-1" ||
+	if status.ObservedAt.IsZero() || !status.Exists || status.PlacementFence != "assignment-1" ||
 		status.Status != model.SessionStatusRunning || status.ResumeRevision != 2 {
 		t.Fatalf("persisted observation = %#v", status)
+	}
+	if got := notifier.calls.Load(); got != 1 {
+		t.Fatalf("Session Reconciler notifications = %d, want 1", got)
 	}
 }
 
@@ -87,12 +103,12 @@ func TestObserverIgnoresAssignmentRace(t *testing.T) {
 	}}
 	sink := &fakeSink{
 		sessions: []model.Session{{
-			ID: "session-1", AssignmentID: "assignment-old", WorkerID: "worker-1",
+			ID: "session-1", Placement: model.SessionPlacement{Fence: "assignment-old", WorkerID: "worker-1"},
 		}},
 		observations: map[string]model.SessionObserverStatus{},
 		err:          service.ErrConflict,
 	}
-	observer, err := New(source, sink, Config{
+	observer, err := New(source, sink, nil, Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 	})
 	if err != nil {
@@ -109,11 +125,11 @@ func TestObserverPreservesFactsWhenSourceFails(t *testing.T) {
 	}
 	sink := &fakeSink{
 		sessions: []model.Session{{
-			ID: "session-1", AssignmentID: "assignment-1", WorkerID: "worker-1",
+			ID: "session-1", Placement: model.SessionPlacement{Fence: "assignment-1", WorkerID: "worker-1"},
 		}},
 		observations: map[string]model.SessionObserverStatus{},
 	}
-	observer, err := New(source, sink, Config{
+	observer, err := New(source, sink, nil, Config{
 		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 	})
 	if err != nil {
