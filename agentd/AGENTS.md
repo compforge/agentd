@@ -70,7 +70,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Session 数调度；Agentlet 不主动注册或发心跳。
 4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
    Control State 中的 observation、Assignment 和容量做无 I/O placement，不访问 Kubernetes 或
-   Agentlet。Lifecycler 管理 Worker 供给，Connector 只转发已分配流量。
+   Agentlet。Lifecycler 管理 Worker 供给；Connector 按 Assignment 转发执行流量，并通过任意健康
+   Worker 读取 Agentlet 共享持久层中的 Event。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。

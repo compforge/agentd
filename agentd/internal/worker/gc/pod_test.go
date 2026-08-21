@@ -79,6 +79,40 @@ func TestPodGCReclaimsIdleWorker(t *testing.T) {
 	}
 }
 
+func TestPodGCRetainsMinimumWorkerCount(t *testing.T) {
+	repository := newTestRepository(t)
+	now := time.Now().UTC()
+	idleSince := now.Add(-time.Hour)
+	if err := repository.PutWorker(context.Background(), model.Worker{
+		ID: "worker-floor", Name: "worker-floor", Capacity: 1,
+		Phase: model.WorkerPhaseActive, IdleSince: &idleSince, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pods := &testPodSource{pods: []controlk8s.PodSnapshot{{
+		ID: "worker-floor", Name: "worker-floor", Managed: true,
+	}}}
+	provisioner := &testProvisioner{}
+	controller, err := NewPodGC(repository, testLocker{}, pods, provisioner, PodConfig{
+		Interval: time.Minute, RequestTimeout: time.Second, LeaseTTL: 2 * time.Second,
+		IdleTTL: time.Minute, MinWorkers: 1, DeleteBatchSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := repository.GetWorker(context.Background(), "worker-floor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker.Phase != model.WorkerPhaseActive || len(provisioner.destroyed) != 0 {
+		t.Fatalf("minimum Worker was reclaimed: phase %q, destroyed %#v", worker.Phase, provisioner.destroyed)
+	}
+}
+
 func TestPodGCDeletesZombiePod(t *testing.T) {
 	repository := newTestRepository(t)
 	pods := &testPodSource{pods: []controlk8s.PodSnapshot{{

@@ -13,10 +13,13 @@ part of routine development checks such as `make test`, `make lint`, or `make bu
 |---|---|---|
 | retired Worker record retention | Pod GC → Observer → Record GC → SQLite | SQLite + deterministic Pod substrate |
 | idle Session assignment release | Agentlet state API → Session Observer → Control State → Worker capacity | SQLite + deterministic Agentlet HTTP substrate |
+| Event read after assignment release | Session Observer → Assignment release → healthy Worker → persisted Event API | SQLite + deterministic Agentlet HTTP substrate |
 
 The Worker record case proves that Pod cleanup and metadata retention are separate lifecycles: an
 idle Worker Pod is destroyed first, its terminal record remains available during the retention
 window, and only Record GC deletes the aged, absent, unbound row.
 
 The Session observation case proves that observation is read-only, the Assignment fence protects
-the update, the safe ResumeRef advances, and an idle Session releases its Worker capacity.
+the update, the safe ResumeRef advances, and an idle Session releases its Worker capacity. It also
+proves that persisted Event reads remain available through a healthy Worker after that Assignment
+has been released.

@@ -23,10 +23,14 @@ func TestLoadConfigDefaultsToSQLite(t *testing.T) {
 	if config.workerPort != 8019 {
 		t.Fatalf("worker port = %d", config.workerPort)
 	}
+	if config.workerMinCount != 1 || config.workerMinIdle != 0 {
+		t.Fatalf("Worker floors = count %d, idle %d", config.workerMinCount, config.workerMinIdle)
+	}
 }
 
 func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("AGENTD_WORKER_CAPACITY", "8")
+	t.Setenv("AGENTD_WORKER_MIN_COUNT", "3")
 	t.Setenv("AGENTD_WORKER_MIN_IDLE", "2")
 	t.Setenv("AGENTD_WORKER_IDLE_TTL", "20m")
 	t.Setenv("AGENTD_WORKER_CREATE_BATCH_SIZE", "3")
@@ -48,7 +52,8 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.workerCapacity != 8 || config.workerMinIdle != 2 || config.workerCreateBatchSize != 3 {
+	if config.workerCapacity != 8 || config.workerMinCount != 3 || config.workerMinIdle != 2 ||
+		config.workerCreateBatchSize != 3 {
 		t.Fatalf("worker capacity config = %+v", config)
 	}
 	if config.workerIdleTTL != 20*time.Minute || config.workerPodTemplateFile != "/tmp/worker.yaml" {
@@ -78,5 +83,13 @@ func TestLoadConfigRequiresControllerLeaseToOutliveRequest(t *testing.T) {
 
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("loadConfig() error = nil, want invalid Worker controller lease error")
+	}
+}
+
+func TestLoadConfigRequiresAtLeastOneWorker(t *testing.T) {
+	t.Setenv("AGENTD_WORKER_MIN_COUNT", "0")
+
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("loadConfig() accepted zero minimum Workers")
 	}
 }

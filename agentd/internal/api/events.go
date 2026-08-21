@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 	"strings"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 )
@@ -23,32 +21,28 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	s.proxyEvents(ctx, request, target, false)
+	s.proxyAssignedEvents(ctx, request, target, false)
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	target, err := s.service.CurrentExecution(ctx, request.Param("session_id"))
-	if errors.Is(err, service.ErrNoAssignment) {
-		writeJSON(request, consts.StatusOK, map[string]any{"data": []any{}, "next_page": nil})
-		return
-	}
+	target, err := s.service.ResolveEventTarget(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	s.proxyEvents(ctx, request, target, false)
+	s.proxyEventRead(ctx, request, target, false)
 }
 
 func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	target, err := s.service.CurrentExecution(ctx, request.Param("session_id"))
+	target, err := s.service.ResolveEventTarget(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	s.proxyEvents(ctx, request, target, true)
+	s.proxyEventRead(ctx, request, target, true)
 }
 
-func (s *Server) proxyEvents(
+func (s *Server) proxyAssignedEvents(
 	ctx context.Context,
 	request *hertzapp.RequestContext,
 	target service.ExecutionTarget,
@@ -84,6 +78,43 @@ func (s *Server) proxyEvents(
 		))
 		return
 	}
+	s.writeEventResponse(request, response, stream)
+}
+
+func (s *Server) proxyEventRead(
+	ctx context.Context,
+	request *hertzapp.RequestContext,
+	target service.EventTarget,
+	stream bool,
+) {
+	sessionID := request.Param("session_id")
+	path := "/internal/v1/sessions/" + url.PathEscape(sessionID) + "/events"
+	if stream {
+		path += "/stream"
+	}
+	response, err := s.connector.ForwardEventRead(
+		ctx,
+		connector.EventTarget{Endpoint: target.Endpoint, WorkerID: target.WorkerID},
+		string(request.Method()),
+		path,
+		string(request.Request.URI().QueryString()),
+		connectorHeaders(request),
+		stream,
+	)
+	if err != nil {
+		s.writeError(request, fmt.Errorf(
+			"%w: forward Session %q persisted Events: %v", service.ErrUnavailable, sessionID, err,
+		))
+		return
+	}
+	s.writeEventResponse(request, response, stream)
+}
+
+func (s *Server) writeEventResponse(
+	request *hertzapp.RequestContext,
+	response *http.Response,
+	stream bool,
+) {
 	copyConnectorHeaders(request, response.Header)
 	request.Response.SetStatusCode(response.StatusCode)
 	if stream {

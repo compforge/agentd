@@ -14,7 +14,7 @@ agentd 是 Managed Agent 的 Control Plane，负责全局资源、执行时机�
 | Observer | Worker 是否可用；Assignment 对应的 Session 执行到了哪里 | `worker.observer_status`、`session.observer_status` |
 | Scheduler | 当前 Session 应分配给哪个可用 Worker | 无；只返回纯决策 |
 | Lifecycler | 应创建、drain 或回收哪些 Worker | Worker lifecycle phase 和运行资源动作 |
-| Connector | 已分配 Worker 的 Agent API 如何触达 | 无；只走数据面 |
+| Connector | 执行流量与持久 Event 读取如何触达 Agentlet | 无；只走数据面 |
 
 动作、事实、决策和数据面不能合并成一个大 Driver：Lifecycler 创建成功不代表 Ready，Observer 不因
 看到空闲容量而创建 Worker，Scheduler 不访问数据库或 Kubernetes，Connector 不修改 Assignment。
@@ -126,13 +126,15 @@ Lifecycler 与 Kubernetes 操作分两层：
 
 1. active Worker 的空闲 slot 先满足尚未绑定 Worker 的 Session；
 2. creating Worker 按 `capacity` 计入即将到来的容量，避免重复创建；
-3. 再补足配置的 `minIdleWorkers`，它只统计零绑定 Session 的通用 Worker；
-4. 创建数量同时受 `createBatchSize` 限制；
-5. 任一受管 Worker Pod 仍 Pending 或 Unschedulable 时，本轮停止继续扩容。
+3. active 与 creating Worker 总数不足 `minWorkers` 时补足实例下限；
+4. 再补足配置的 `minIdleWorkers`，它只统计零绑定 Session 的通用 Worker；
+5. 创建数量同时受 `createBatchSize` 限制；
+6. 任一受管 Worker Pod 仍 Pending 或 Unschedulable 时，本轮停止继续扩容。
 
-`minIdleWorkers` 默认 0，此时只有 durable demand 才会创建 Worker。唤醒 channel 只合并通知，不携带
-数量；周期 reconcile 和即时唤醒都从数据库重新计算相同目标。空闲 Worker 超过 idle TTL 后可以轮换，
-若因此低于 idle floor，下一轮用当前镜像和模板补回。
+`minWorkers` 默认且最小为 1，使没有执行需求时仍有 Agentlet 数据面可以承接持久 Event 读取；
+`minIdleWorkers` 默认 0，不要求 Worker 忙时额外常驻空闲实例。唤醒 channel 只合并通知，不携带数量；
+周期 reconcile 和即时唤醒都从数据库重新计算相同目标。空闲 Worker 超过 idle TTL 后可以轮换，若
+因此低于总数或 idle floor，下一轮用当前镜像和模板补回。
 
 creating Worker 的 Pod 缺失时可以幂等完成本轮创建；active Worker 的 Pod 缺失时先退役旧 Worker，
 再根据 durable demand 创建新 Worker。Kubernetes 存在带 managed label 的 Pod 而数据库没有对应
@@ -196,17 +198,22 @@ DB Record GC 只处理已经 `retired`、Observer 已确认 Pod 不存在且超�
 
 ## Connector
 
-Connector 是 Agentlet 数据面的唯一入口：按 Session 读取 Assignment，从当前 Worker observation
-解析 endpoint，把执行所需的 Agent、Environment 和 Session Control State 组成 `WorkSpec` 快照，再把
-公开请求转换为 Agentlet 内部执行 API，并保持普通响应或 SSE stream。
+Connector 是 Agentlet 数据面的唯一入口，但执行与持久读取使用两条不同路由：
+
+- Event 写入、Session 状态和 Harness 执行按 Session 读取 Assignment，从当前 Worker observation
+  解析 endpoint，并在转发前安装 `WorkSpec`；
+- Event list/stream 从 fresh、Ready 的 Worker 中选择一个 endpoint，直接读取所有 Agentlet 共享的
+  持久层，不创建 Assignment，也不要求 Session 当前仍在执行。
 
 ```text
-Session ID → Assignment → Worker → fresh endpoint → ensure WorkSpec → Agentlet internal API
+execution:  Session ID → Assignment → Worker → fresh endpoint → ensure WorkSpec → Agentlet
+Event read: Session ID → any fresh ready Worker → shared Agentlet database
 ```
 
-endpoint 是一次解析结果，不是持久化 identity。Connector 不选择 Worker、不修改 Assignment、
-不创建 Worker，也不因连接失败自行迁移 Session。连接失败或 observation 过期时，它重新解析 facts，
-并把不可达结果交给上层恢复或重调度流程；是否可以安全重试仍由 Control State 和 Ledger 判断。
+Event 读取选择只是无状态数据面路由，不考虑执行容量，也不改变 placement。endpoint 是一次解析结果，
+不是持久化 identity。Connector 不修改 Assignment、不创建 Worker，也不因连接失败自行迁移 Session。
+连接失败或 observation 过期时，它重新解析 facts，并把不可达结果交给上层恢复或重调度流程；是否可以
+安全重试仍由 Control State 和 Ledger 判断。
 
 Agentlet 协议适配、显式超时、连接池、SSE 断连传播和 trace context 透传属于 Connector，不能散落
 在各个 API handler。

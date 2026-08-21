@@ -34,6 +34,37 @@ func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
 	}
 }
 
+func TestEventLogLoadsEventsAcrossAgentletInstances(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	writer := NewEventLog(store)
+	reader := New(NewMemoryRepository(), NewEventLog(store), recordingHarness{})
+
+	first := NewManagedEvent("agent.message", map[string]any{"content": "first"})
+	if err := writer.Append(ctx, "session-1", first); err != nil {
+		t.Fatal(err)
+	}
+	events, cursor, err := reader.LoadEvents(ctx, "session-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0]["id"] != first["id"] || cursor == 0 {
+		t.Fatalf("initial durable Event read = events %#v, cursor %d", events, cursor)
+	}
+
+	second := NewManagedEvent("agent.message", map[string]any{"content": "second"})
+	if err := writer.Append(ctx, "session-1", second); err != nil {
+		t.Fatal(err)
+	}
+	events, nextCursor, err := reader.LoadEvents(ctx, "session-1", cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0]["id"] != second["id"] || nextCursor <= cursor {
+		t.Fatalf("incremental durable Event read = events %#v, cursor %d", events, nextCursor)
+	}
+}
+
 func TestApplyWorkSpecCachesSnapshotAndEnforcesAssignmentFence(t *testing.T) {
 	ctx := context.Background()
 	repository := NewMemoryRepository()

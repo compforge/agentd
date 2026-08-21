@@ -21,21 +21,31 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	ctx := context.Background()
 	repository := openRepository(t)
 	var assignmentID string
+	eventReadWithoutAssignment := false
 	agentlet := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/internal/v1/sessions/session-e2e/state" {
-			http.Error(response, "Session Observer must only read state", http.StatusMethodNotAllowed)
-			return
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/internal/v1/sessions/session-e2e/state":
+			if request.Header.Get(executionapi.AssignmentHeader) != assignmentID ||
+				request.Header.Get(executionapi.WorkerHeader) != "worker-e2e" {
+				http.Error(response, "stale Assignment", http.StatusConflict)
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(executionapi.SessionState{
+				AssignmentID: assignmentID, Status: "idle",
+				ResumeRef: "checkpoint-e2e", ResumeRevision: 3,
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/internal/v1/sessions/session-e2e/events":
+			if request.Header.Get(executionapi.AssignmentHeader) != "" {
+				http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
+				return
+			}
+			eventReadWithoutAssignment = true
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": []any{}, "next_page": nil})
+		default:
+			http.Error(response, "unexpected Agentlet request", http.StatusMethodNotAllowed)
 		}
-		if request.Header.Get(executionapi.AssignmentHeader) != assignmentID ||
-			request.Header.Get(executionapi.WorkerHeader) != "worker-e2e" {
-			http.Error(response, "stale Assignment", http.StatusConflict)
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(executionapi.SessionState{
-			AssignmentID: assignmentID, Status: "idle",
-			ResumeRef: "checkpoint-e2e", ResumeRevision: 3,
-		})
 	}))
 	defer agentlet.Close()
 
@@ -116,5 +126,25 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	}
 	if worker.IdleSince == nil {
 		t.Fatalf("released Worker = %#v", worker)
+	}
+	eventTarget, err := application.ResolveEventTarget(ctx, "session-e2e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ForwardEventRead(
+		ctx,
+		connector.EventTarget{Endpoint: eventTarget.Endpoint, WorkerID: eventTarget.WorkerID},
+		http.MethodGet,
+		"/internal/v1/sessions/session-e2e/events",
+		"",
+		nil,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !eventReadWithoutAssignment {
+		t.Fatalf("Event read after release = status %d, unassigned %t", response.StatusCode, eventReadWithoutAssignment)
 	}
 }

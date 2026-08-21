@@ -19,9 +19,10 @@ import (
 )
 
 type Server struct {
-	service  *service.Service
-	logger   *slog.Logger
-	workerID string
+	service           *service.Service
+	logger            *slog.Logger
+	workerID          string
+	eventPollInterval time.Duration
 }
 
 type Option func(*Server)
@@ -30,8 +31,12 @@ func WithWorkerID(workerID string) Option {
 	return func(server *Server) { server.workerID = workerID }
 }
 
+func WithEventPollInterval(interval time.Duration) Option {
+	return func(server *Server) { server.eventPollInterval = interval }
+}
+
 func New(executionService *service.Service, logger *slog.Logger, options ...Option) *Server {
-	server := &Server{service: executionService, logger: logger}
+	server := &Server{service: executionService, logger: logger, eventPollInterval: 500 * time.Millisecond}
 	for _, option := range options {
 		option(server)
 	}
@@ -305,9 +310,6 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	if !s.requireAssignment(ctx, request) {
-		return
-	}
 	events, err := s.service.ListEvents(ctx, request.Param("session_id"))
 	if err != nil {
 		s.writeError(ctx, request, err)
@@ -317,21 +319,12 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 }
 
 func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	if !s.requireAssignment(ctx, request) {
-		return
-	}
 	if len(request.QueryArgs().PeekAll("event_deltas[]")) > 0 || len(request.QueryArgs().PeekAll("event_deltas")) > 0 {
 		s.writeError(ctx, request, fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported))
 		return
 	}
 	sessionID := request.Param("session_id")
-	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
-		s.writeError(ctx, request, err)
-		return
-	}
-	channel, cancel := s.service.Subscribe(sessionID)
-	defer cancel()
-	history, err := s.service.ListEvents(ctx, sessionID)
+	history, cursor, err := s.service.LoadEvents(ctx, sessionID, 0)
 	if err != nil {
 		s.writeError(ctx, request, err)
 		return
@@ -339,29 +332,29 @@ func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestCont
 	request.Header("X-Accel-Buffering", "no")
 	writer := sse.NewWriter(request)
 	defer writer.Close()
-	seen := make(map[string]struct{}, len(history))
 	for _, event := range history {
 		if err := writeSSE(writer, event); err != nil {
 			return
 		}
-		if id, ok := event["id"].(string); ok {
-			seen[id] = struct{}{}
-		}
 	}
+	ticker := time.NewTicker(s.eventPollInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event := <-channel:
-			if id, ok := event["id"].(string); ok {
-				if _, duplicate := seen[id]; duplicate {
-					continue
-				}
-				seen[id] = struct{}{}
-			}
-			if err := writeSSE(writer, event); err != nil {
+		case <-ticker.C:
+			events, nextCursor, err := s.service.LoadEvents(ctx, sessionID, cursor)
+			if err != nil {
+				s.logger.Error("poll persisted Session Events", "session_id", sessionID, "error", err)
 				return
 			}
+			for _, event := range events {
+				if err := writeSSE(writer, event); err != nil {
+					return
+				}
+			}
+			cursor = nextCursor
 		}
 	}
 }

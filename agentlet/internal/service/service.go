@@ -302,14 +302,11 @@ func validateIncoming(events []IncomingEvent) error {
 }
 
 func (a *Service) ListEvents(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
-	if _, err := a.repository.GetSession(ctx, sessionID); err != nil {
-		return nil, err
-	}
 	return a.events.List(ctx, sessionID)
 }
 
-func (a *Service) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
-	return a.events.Subscribe(sessionID)
+func (a *Service) LoadEvents(ctx context.Context, sessionID string, afterSeq int64) ([]ManagedEvent, int64, error) {
+	return a.events.Load(ctx, sessionID, afterSeq)
 }
 
 // Recover reconciles durable inputs left by a replaced process or stopped worker.

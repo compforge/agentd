@@ -87,6 +87,25 @@ func TestReconcileCombinesPendingDemandAndWarmCapacity(t *testing.T) {
 	}
 }
 
+func TestReconcileMaintainsMinimumWorkerCount(t *testing.T) {
+	repository := newTestRepository(t)
+	provisioner := &fakeProvisioner{}
+	lifecycler := newTestLifecycler(t, repository, provisioner, Config{
+		WorkerCapacity: 1, MinWorkers: 1, CreateBatchSize: 10,
+	})
+
+	if err := lifecycler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	workers, err := repository.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workers) != 1 || len(provisioner.ensured) != 1 {
+		t.Fatalf("minimum Worker reconcile = workers %d, ensured %#v", len(workers), provisioner.ensured)
+	}
+}
+
 func TestReconcileDoesNotGrowBehindPendingWorker(t *testing.T) {
 	repository := newTestRepository(t)
 	now := time.Now().UTC()

@@ -47,7 +47,8 @@ func Run(logger *slog.Logger) error {
 	}
 	workerControllers, err := worker.New(worker.Config{
 		Source: config.workerSource, Namespace: config.workerNamespace, Selector: config.workerSelector,
-		Port: config.workerPort, Capacity: config.workerCapacity, MinIdle: config.workerMinIdle,
+		Port: config.workerPort, Capacity: config.workerCapacity,
+		MinCount: config.workerMinCount, MinIdle: config.workerMinIdle,
 		IdleTTL: config.workerIdleTTL, CreateBatchSize: config.workerCreateBatchSize,
 		PodTemplateFile: config.workerPodTemplateFile, LifecyclerInterval: config.workerLifecyclerInterval,
 		ControllerTimeout: config.workerControllerTimeout, ControllerLeaseTTL: config.workerControllerLeaseTTL,

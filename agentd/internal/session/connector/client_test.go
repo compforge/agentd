@@ -113,3 +113,39 @@ func TestClientInstallsWorkAndForwardsAssignedRequests(t *testing.T) {
 		t.Fatalf("streamed response = %q, error = %v", body, readErr)
 	}
 }
+
+func TestClientForwardsEventReadsWithoutAssignment(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get(executionapi.WorkerHeader) != "worker-2" {
+			http.Error(response, "wrong Worker", http.StatusBadRequest)
+			return
+		}
+		if request.Header.Get(executionapi.AssignmentHeader) != "" {
+			http.Error(response, "unexpected Assignment", http.StatusBadRequest)
+			return
+		}
+		_, _ = response.Write([]byte(`{"data":[],"next_page":null}`))
+	}))
+	defer server.Close()
+
+	client, err := New(Config{
+		RequestTimeout: time.Second, DialTimeout: time.Second, ResponseHeaderTimeout: time.Second,
+		IdleConnTimeout: time.Second, MaxIdleConns: 4, MaxIdleConnsPerHost: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	response, err := client.ForwardEventRead(
+		context.Background(), EventTarget{Endpoint: server.URL, WorkerID: "worker-2"},
+		http.MethodGet, "/internal/v1/sessions/session-1/events", "", nil, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Event read status = %d", response.StatusCode)
+	}
+}

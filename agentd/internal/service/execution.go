@@ -17,6 +17,11 @@ type ExecutionTarget struct {
 	Work     executionapi.WorkSpec
 }
 
+type EventTarget struct {
+	Endpoint string
+	WorkerID string
+}
+
 // PrepareExecution assigns the Session when necessary, then resolves the
 // immutable Work snapshot and current Agentlet endpoint for Connector.
 func (a *Service) PrepareExecution(ctx context.Context, sessionID string) (ExecutionTarget, error) {
@@ -38,14 +43,8 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 	if err != nil {
 		return ExecutionTarget{}, fmt.Errorf("load assigned Worker %q: %w", session.WorkerID, err)
 	}
-	status, err := parseWorkerObserverStatus(worker.ObserverStatus)
-	if err != nil {
-		return ExecutionTarget{}, fmt.Errorf("%w: Worker %q observation: %v", ErrUnavailable, worker.ID, err)
-	}
-	now := time.Now().UTC()
-	if worker.Phase != model.WorkerPhaseActive || !status.Exists || !status.Ready ||
-		strings.TrimSpace(status.Endpoint) == "" || status.ObservedAt.IsZero() || status.ObservedAt.After(now) ||
-		now.Sub(status.ObservedAt) > a.observationTimeout {
+	status, ready := a.readyWorker(worker, time.Now().UTC())
+	if !ready {
 		return ExecutionTarget{}, fmt.Errorf("%w: Worker %q has no fresh ready endpoint", ErrUnavailable, worker.ID)
 	}
 	agent, err := a.repository.GetAgent(ctx, session.AgentID)
@@ -75,6 +74,41 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 			Environment: executionapi.EnvironmentSnapshot{ID: environment.ID, Config: environment.Config},
 		},
 	}, nil
+}
+
+// ResolveEventTarget selects a data-plane endpoint for durable Event reads.
+// Event history belongs to the shared Agentlet database, not to the Worker's
+// current in-memory Session assignment.
+//
+// +spec=`Persisted Event reads use any fresh ready Worker and never create or require an Assignment`
+// +link=agentd/docs/agentd.md
+func (a *Service) ResolveEventTarget(ctx context.Context, sessionID string) (EventTarget, error) {
+	if _, err := a.repository.GetSession(ctx, sessionID); err != nil {
+		return EventTarget{}, fmt.Errorf("load Session %q Event target: %w", sessionID, err)
+	}
+	workers, err := a.repository.ListWorkers(ctx)
+	if err != nil {
+		return EventTarget{}, fmt.Errorf("list Event read Workers: %w", err)
+	}
+	now := time.Now().UTC()
+	for _, worker := range workers {
+		status, ready := a.readyWorker(worker, now)
+		if ready {
+			return EventTarget{Endpoint: status.Endpoint, WorkerID: worker.ID}, nil
+		}
+	}
+	return EventTarget{}, fmt.Errorf("%w: no fresh ready Worker for Event reads", ErrUnavailable)
+}
+
+func (a *Service) readyWorker(worker model.Worker, now time.Time) (model.WorkerObserverStatus, bool) {
+	status, err := parseWorkerObserverStatus(worker.ObserverStatus)
+	if err != nil {
+		return model.WorkerObserverStatus{}, false
+	}
+	ready := worker.Phase == model.WorkerPhaseActive && status.Exists && status.Ready &&
+		strings.TrimSpace(status.Endpoint) != "" && !status.ObservedAt.IsZero() && !status.ObservedAt.After(now) &&
+		now.Sub(status.ObservedAt) <= a.observationTimeout
+	return status, ready
 }
 
 // ObserveSession persists one Agentlet observation and projects its safe facts

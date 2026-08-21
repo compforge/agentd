@@ -25,6 +25,7 @@ type config struct {
 	workerSelector               string
 	workerPort                   int
 	workerCapacity               int
+	workerMinCount               int
 	workerMinIdle                int
 	workerIdleTTL                time.Duration
 	workerCreateBatchSize        int
@@ -74,6 +75,7 @@ func loadConfig() (config, error) {
 		workerSelector:               envOr("AGENTD_WORKER_LABEL_SELECTOR", "app.kubernetes.io/name=agentlet"),
 		workerPort:                   8019,
 		workerCapacity:               1,
+		workerMinCount:               1,
 		workerMinIdle:                0,
 		workerIdleTTL:                10 * time.Minute,
 		workerCreateBatchSize:        2,
@@ -122,6 +124,9 @@ func loadConfig() (config, error) {
 		return config{}, errors.New("AGENTD_WORKER_PORT must not exceed 65535")
 	}
 	if value.workerCapacity, err = positiveIntEnv("AGENTD_WORKER_CAPACITY", value.workerCapacity); err != nil {
+		return config{}, err
+	}
+	if value.workerMinCount, err = positiveIntEnv("AGENTD_WORKER_MIN_COUNT", value.workerMinCount); err != nil {
 		return config{}, err
 	}
 	if value.workerMinIdle, err = nonNegativeIntEnv("AGENTD_WORKER_MIN_IDLE", value.workerMinIdle); err != nil {

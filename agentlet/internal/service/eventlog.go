@@ -21,14 +21,13 @@ type EventLog struct {
 	store agentledger.EventStore
 
 	mu                sync.Mutex
-	subscribers       map[string]map[chan ManagedEvent]struct{}
 	userActor         agentledger.Actor
 	orchestratorActor agentledger.Actor
 }
 
 func NewEventLog(store agentledger.EventStore) *EventLog {
 	return &EventLog{
-		store: store, subscribers: make(map[string]map[chan ManagedEvent]struct{}),
+		store:     store,
 		userActor: agentledger.NewActor("user", ""), orchestratorActor: agentledger.NewActor("orchestrator", "agentd"),
 	}
 }
@@ -71,14 +70,6 @@ func (l *EventLog) Append(ctx context.Context, sessionID string, event ManagedEv
 	}, ""); err != nil {
 		return fmt.Errorf("append managed event: %w", err)
 	}
-	if cloned["type"] != "managed.event_processed" {
-		for channel := range l.subscribers[sessionID] {
-			select {
-			case channel <- cloned:
-			default:
-			}
-		}
-	}
 	return nil
 }
 
@@ -89,26 +80,35 @@ func (l *EventLog) MarkProcessed(ctx context.Context, sessionID, eventID string)
 }
 
 func (l *EventLog) List(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
+	events, _, err := l.Load(ctx, sessionID, 0)
+	return events, err
+}
+
+// Load returns public Events committed after a durable lane sequence. The
+// cursor advances across internal projection records as well as public Events.
+func (l *EventLog) Load(ctx context.Context, sessionID string, afterSeq int64) ([]ManagedEvent, int64, error) {
 	lane, exists, err := l.store.FindLane(ctx, sessionID, managedEventRun, managedEventLane)
 	if err != nil {
-		return nil, fmt.Errorf("find managed event lane: %w", err)
+		return nil, afterSeq, fmt.Errorf("find managed event lane: %w", err)
 	}
 	if !exists {
-		return nil, nil
+		return []ManagedEvent{}, afterSeq, nil
 	}
-	var events []ManagedEvent
+	events := make([]ManagedEvent, 0)
 	processed := make(map[string]string)
-	for stored, err := range l.store.LoadLane(ctx, lane.ID, 0) {
+	nextSeq := afterSeq
+	for stored, err := range l.store.LoadLane(ctx, lane.ID, afterSeq) {
 		if err != nil {
-			return nil, fmt.Errorf("list managed events: %w", err)
+			return nil, afterSeq, fmt.Errorf("load managed events: %w", err)
 		}
+		nextSeq = stored.Seq
 		raw, ok := stored.Payload["event"]
 		if !ok {
 			continue
 		}
 		event, err := mapEvent(raw)
 		if err != nil {
-			return nil, err
+			return nil, afterSeq, err
 		}
 		if event["type"] == "managed.event_processed" {
 			if target, ok := event["event_id"].(string); ok {
@@ -125,7 +125,7 @@ func (l *EventLog) List(ctx context.Context, sessionID string) ([]ManagedEvent, 
 			}
 		}
 	}
-	return events, nil
+	return events, nextSeq, nil
 }
 
 func (l *EventLog) UnprocessedUserMessages(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
@@ -140,22 +140,6 @@ func (l *EventLog) UnprocessedUserMessages(ctx context.Context, sessionID string
 		}
 	}
 	return pending, nil
-}
-
-func (l *EventLog) Subscribe(sessionID string) (<-chan ManagedEvent, func()) {
-	channel := make(chan ManagedEvent, 32)
-	l.mu.Lock()
-	if l.subscribers[sessionID] == nil {
-		l.subscribers[sessionID] = make(map[chan ManagedEvent]struct{})
-	}
-	l.subscribers[sessionID][channel] = struct{}{}
-	l.mu.Unlock()
-	return channel, func() {
-		l.mu.Lock()
-		delete(l.subscribers[sessionID], channel)
-		close(channel)
-		l.mu.Unlock()
-	}
 }
 
 func NewManagedEvent(eventType string, fields map[string]any) ManagedEvent {
