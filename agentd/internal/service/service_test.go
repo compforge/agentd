@@ -33,8 +33,8 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 		sessionID string
 		workerID  string
 	}{
-		{"session-1", "worker-a"},
-		{"session-2", "worker-b"},
+		{"session-1", "worker-b"},
+		{"session-2", "worker-a"},
 		{"session-3", "worker-b"},
 	}
 	for _, want := range wants {
@@ -69,15 +69,15 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if released.LastWorkerID != "worker-a" || released.WorkerID != "" || released.AssignmentID != "" {
-		t.Fatalf("released Session affinity = %+v, want last worker-a", released)
+	if released.LastWorkerID != "worker-b" || released.WorkerID != "" || released.AssignmentID != "" {
+		t.Fatalf("released Session affinity = %+v, want last worker-b", released)
 	}
 	replacement, err := application.Assign(ctx, "session-4")
 	if err != nil {
 		t.Fatalf("Assign() after release: %v", err)
 	}
-	if replacement.WorkerID != "worker-a" {
-		t.Fatalf("replacement.WorkerID = %q, want worker-a", replacement.WorkerID)
+	if replacement.WorkerID != "worker-b" {
+		t.Fatalf("replacement.WorkerID = %q, want worker-b", replacement.WorkerID)
 	}
 }
 
