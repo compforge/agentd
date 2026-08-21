@@ -13,7 +13,13 @@ import (
 func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 	t.Parallel()
 	sandboxEngine := &recordingEngine{}
-	toolset := NewAgentGoToolset(sandboxEngine, engine.SandboxKey{Value: "session_123"}, time.Second)
+	toolset, err := PrepareAgentGoToolset(context.Background(), sandboxEngine, "session_123", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandboxEngine.ensuredKey.Value != "session_123" {
+		t.Fatalf("ensured sandbox key = %#v, want session_123", sandboxEngine.ensuredKey)
+	}
 	var bashIndex = -1
 	for index, tool := range toolset {
 		if tool.Name() == "bash" {
@@ -28,8 +34,8 @@ func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sandboxEngine.sandboxKey.Value != "session_123" {
-		t.Fatalf("sandbox key = %#v, want session_123", sandboxEngine.sandboxKey)
+	if sandboxEngine.executedKey.Value != "session_123" {
+		t.Fatalf("execution sandbox key = %#v, want session_123", sandboxEngine.executedKey)
 	}
 	if sandboxEngine.command.Command != "pwd" || sandboxEngine.command.Cwd != "/workspace" || sandboxEngine.command.Timeout != 42*time.Millisecond {
 		t.Fatalf("unexpected command: %#v", sandboxEngine.command)
@@ -44,13 +50,16 @@ func TestAgentGoToolsetUsesStableSandboxIdentity(t *testing.T) {
 }
 
 type recordingEngine struct {
-	sandboxKey engine.SandboxKey
-	command    engine.Command
+	ensuredKey  engine.SandboxKey
+	executedKey engine.SandboxKey
+	command     engine.Command
 }
 
-func (*recordingEngine) Name() string                                    { return "recording" }
-func (*recordingEngine) Start(context.Context) error                     { return nil }
-func (*recordingEngine) Ensure(context.Context, engine.SandboxKey) error { return nil }
+func (*recordingEngine) Name() string { return "recording" }
+func (e *recordingEngine) Ensure(_ context.Context, sandboxKey engine.SandboxKey) error {
+	e.ensuredKey = sandboxKey
+	return nil
+}
 
 func (*recordingEngine) Stat(context.Context, engine.SandboxKey, string) (engine.FileInfo, error) {
 	return engine.FileInfo{}, fs.ErrNotExist
@@ -77,7 +86,7 @@ func (e *recordingEngine) Execute(
 	sandboxKey engine.SandboxKey,
 	command engine.Command,
 ) (engine.CommandResult, error) {
-	e.sandboxKey = sandboxKey
+	e.executedKey = sandboxKey
 	e.command = command
 	return engine.CommandResult{Output: "ok"}, nil
 }

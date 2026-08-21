@@ -351,7 +351,6 @@ func managedEventText(event service.ManagedEvent) []string {
 type noopSandbox struct{}
 
 func (noopSandbox) Name() string                                    { return "noop" }
-func (noopSandbox) Start(context.Context) error                     { return nil }
 func (noopSandbox) Ensure(context.Context, engine.SandboxKey) error { return nil }
 func (noopSandbox) Stat(context.Context, engine.SandboxKey, string) (engine.FileInfo, error) {
 	return engine.FileInfo{}, fs.ErrNotExist

@@ -46,22 +46,6 @@ func NewClient(rawURL string, timeout time.Duration) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Health(ctx context.Context) error {
-	request, err := c.request(ctx, http.MethodGet, "/healthz", "", nil)
-	if err != nil {
-		return err
-	}
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("check hostel health: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return responseError("check hostel health", response)
-	}
-	return nil
-}
-
 func (c *Client) EnsureBed(ctx context.Context, bedID string) error {
 	lock := c.lockForBed(bedID)
 	lock.Lock()

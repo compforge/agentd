@@ -115,7 +115,7 @@ func (a *Service) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 // free Work capacity. The transaction locks the schedulable Worker set so two
 // concurrent schedulers cannot consume the same final slot.
 //
-// +spec=`A Session reuses its live Assignment; otherwise agentd persists a new Assignment on the least-loaded live Worker whose current Assignment count is below capacity; no-capacity demand is durable before Lifecycler is notified`
+// +spec=`Schedulable candidates are scored by projected capacity headroom plus decreasing current-Assignment and last-Worker affinity bonuses; affinity never reserves capacity or prevents movement, and no-capacity demand is durable before Lifecycler is notified`
 // +link=agentd/docs/agentd.md
 func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
 	if strings.TrimSpace(sessionID) == "" {
@@ -144,7 +144,7 @@ func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignmen
 			}
 			candidates = append(candidates, schedulingCandidate(worker, count))
 		}
-		decision := a.scheduler.Schedule(now, session.WorkerID, candidates)
+		decision := a.scheduler.Schedule(now, session.WorkerID, session.LastWorkerID, candidates)
 		if decision.Reason == scheduler.ReasonExisting {
 			selected = assignmentFromSession(session)
 			return nil
@@ -163,6 +163,7 @@ func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignmen
 		}
 		session.AssignmentID = agentledger.NewID()
 		session.WorkerID = decision.WorkerID
+		session.LastWorkerID = decision.WorkerID
 		session.AssignedAt = &now
 		if err := repository.PutSession(ctx, session); err != nil {
 			return fmt.Errorf("persist binding for session %q: %w", sessionID, err)
@@ -268,6 +269,9 @@ func (a *Service) Release(ctx context.Context, sessionID string) error {
 		}
 		now := time.Now().UTC()
 		session.Status = model.SessionStatusIdle
+		if workerID != "" {
+			session.LastWorkerID = workerID
+		}
 		session.AssignmentID = ""
 		session.WorkerID = ""
 		session.AssignedAt = nil

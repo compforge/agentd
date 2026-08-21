@@ -35,12 +35,14 @@ API and manages assigned harness runtimes.
 
 `agentd` owns the public API, durable managed-agent identity, and control state. It schedules each
 Session onto an elastic Worker and routes execution through the Connector. A Worker is Agentlet's
-workload form; on Kubernetes it is a Pod containing Agentlet and a Sandbox Engine sidecar.
+workload form; on Kubernetes it is a Pod running Agentlet.
 
 Agentlet drives the selected Harness—AgentGo is the first implementation—while the Sandbox Engine
 provides isolated tool execution. Checkpoints and append-only execution facts are persisted through
 Agent Ledger, so a Session can release its Worker and later resume on another one without making
-the control plane understand Harness-native state.
+the control plane understand Harness-native state. The default Helm chart co-locates a Hostel
+sidecar only for quick start; a production Sandbox Engine is expected to have its own control plane
+and is not part of agentd Worker placement.
 
 ## Kubernetes deployment (preview)
 
@@ -59,9 +61,8 @@ directly.
 The default Helm values install one agentd replica and a shared MySQL Deployment backed by a PVC;
 agentd and every Agentlet use the same database. Production deployments can replace the built-in
 database with an external MySQL DSN. The Helm topology is currently a preview
-while Assignment release and cross-Worker recovery are being completed. See
-[`deploy/k8s/README.md`](deploy/k8s/README.md) for the topology, persistence options, image settings,
-and current limitations.
+for quick start. See [`deploy/k8s/README.md`](deploy/k8s/README.md) for the topology, persistence
+options, image settings, and current limitations.
 
 The API uses the Claude Managed Agents beta paths and accepts
 `anthropic-beta: managed-agents-2026-04-01`.

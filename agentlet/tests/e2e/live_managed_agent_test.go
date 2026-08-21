@@ -43,12 +43,9 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{
-		Endpoint: sandboxEndpoint, RequestTimeout: 30 * time.Second, StartupTimeout: 30 * time.Second,
+		Endpoint: sandboxEndpoint, RequestTimeout: 30 * time.Second,
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sandboxEngine.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{

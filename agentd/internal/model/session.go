@@ -17,6 +17,7 @@ const (
 // Session is both durable execution demand and its current Worker binding.
 // A rescheduling Session without a Worker is pending capacity. AssignmentID is
 // regenerated whenever the Session moves to another Worker and acts as a fence.
+// LastWorkerID is a non-owning affinity hint and never reserves Worker capacity.
 type Session struct {
 	ID             string
 	AgentID        string
@@ -33,6 +34,7 @@ type Session struct {
 	ObserverStatus json.RawMessage
 	AssignmentID   string
 	WorkerID       string
+	LastWorkerID   string
 	AssignedAt     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time

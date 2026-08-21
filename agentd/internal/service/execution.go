@@ -86,7 +86,7 @@ func (a *Service) readyWorker(worker model.Worker, now time.Time) (model.WorkerO
 // into Control State. Idle and terminal observations release the Assignment in
 // the same transaction, so Worker capacity is not held by inactive Sessions.
 //
-// +spec=`Session observations apply only to the current Assignment; stale observations cannot rewind ResumeRevision; idle or terminal observations atomically release placement`
+// +spec=`Session observations apply only to the current Assignment; stale observations cannot rewind ResumeRevision; idle or terminal observations atomically release placement while preserving a non-owning last-Worker affinity hint`
 // +link=agentd/docs/agentd.md
 func (a *Service) ObserveSession(
 	ctx context.Context,
@@ -168,6 +168,9 @@ func (a *Service) ObserveSession(
 
 		workerID := session.WorkerID
 		if release {
+			if workerID != "" {
+				session.LastWorkerID = workerID
+			}
 			session.AssignmentID = ""
 			session.WorkerID = ""
 			session.AssignedAt = nil

@@ -17,8 +17,6 @@ func TestRemoteEngineExecutesInSessionBed(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
-		case "/healthz":
-			writer.WriteHeader(http.StatusOK)
 		case "/v1/beds":
 			_ = json.NewEncoder(writer).Encode(map[string]any{"state": "active"})
 		case "/command":
@@ -34,12 +32,9 @@ func TestRemoteEngineExecutesInSessionBed(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	engine, err := NewEngine(EngineConfig{
-		URL: server.URL, RequestTimeout: time.Second, StartupTimeout: time.Second,
+		URL: server.URL, RequestTimeout: time.Second,
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	result, err := engine.Execute(context.Background(), sandboxengine.SandboxKey{Value: "session_123"}, sandboxengine.Command{

@@ -2,7 +2,6 @@ package hostel
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -12,12 +11,10 @@ import (
 type EngineConfig struct {
 	URL            string
 	RequestTimeout time.Duration
-	StartupTimeout time.Duration
 }
 
 type Engine struct {
-	client  *Client
-	starter *Starter
+	client *Client
 }
 
 var _ engine.Engine = (*Engine)(nil)
@@ -27,18 +24,11 @@ func NewEngine(config EngineConfig) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{
-		client:  client,
-		starter: &Starter{Client: client, StartupTimeout: config.StartupTimeout},
-	}, nil
+	return &Engine{client: client}, nil
 }
 
 func (e *Engine) Name() string {
 	return "hostel"
-}
-
-func (e *Engine) Start(ctx context.Context) error {
-	return e.starter.Start(ctx)
 }
 
 func (e *Engine) Ensure(ctx context.Context, sandboxKey engine.SandboxKey) error {
@@ -77,31 +67,4 @@ func (e *Engine) Execute(
 	command engine.Command,
 ) (engine.CommandResult, error) {
 	return e.client.Run(ctx, sandboxKey.Value, command)
-}
-
-// Starter only waits for the Sandbox Engine endpoint to become ready. The
-// Worker Pod, not Agentlet, owns the Engine process lifecycle.
-type Starter struct {
-	Client         *Client
-	StartupTimeout time.Duration
-}
-
-func (s *Starter) Start(ctx context.Context) error {
-	if s.StartupTimeout <= 0 {
-		return fmt.Errorf("start Hostel: startup timeout must be positive")
-	}
-	deadlineCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
-	defer cancel()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if err := s.Client.Health(deadlineCtx); err == nil {
-			return nil
-		}
-		select {
-		case <-deadlineCtx.Done():
-			return fmt.Errorf("wait for Hostel health: %w", deadlineCtx.Err())
-		case <-ticker.C:
-		}
-	}
 }

@@ -149,9 +149,11 @@ func (r *AgentGoRunner) Run(
 		agentgo.WithMaxTurns(100),
 	}
 	if agentUsesToolset(session.Agent) {
-		options = append(options, agentgo.WithTools(sandbox.NewAgentGoToolset(
-			r.config.Sandbox, engine.SandboxKey{Value: session.ID}, r.config.ToolTimeout,
-		)...))
+		toolset, err := sandbox.PrepareAgentGoToolset(ctx, r.config.Sandbox, session.ID, r.config.ToolTimeout)
+		if err != nil {
+			return finish(err)
+		}
+		options = append(options, agentgo.WithTools(toolset...))
 	}
 	// The ledger adapter still owns strict model/tool audit hooks. The final
 	// committer is intentionally replaced so recovery state has its own store.
