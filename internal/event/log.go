@@ -95,12 +95,31 @@ func (l *Log) List(ctx context.Context, sessionID string) ([]ManagedEvent, error
 // Load returns public Events committed after a durable lane sequence. The
 // cursor advances across internal projection records as well as public Events.
 func (l *Log) Load(ctx context.Context, sessionID string, afterSeq int64) ([]ManagedEvent, int64, error) {
+	events, processed, nextSeq, err := l.loadProjection(ctx, sessionID, afterSeq)
+	if err != nil {
+		return nil, afterSeq, err
+	}
+	for _, value := range events {
+		if id, ok := value["id"].(string); ok {
+			if timestamp, found := processed[id]; found && value["processed_at"] == nil {
+				value["processed_at"] = timestamp
+			}
+		}
+	}
+	return events, nextSeq, nil
+}
+
+func (l *Log) loadProjection(
+	ctx context.Context,
+	sessionID string,
+	afterSeq int64,
+) ([]ManagedEvent, map[string]string, int64, error) {
 	lane, exists, err := l.store.FindLane(ctx, sessionID, managedEventRun, managedEventLane)
 	if err != nil {
-		return nil, afterSeq, fmt.Errorf("find managed event lane: %w", err)
+		return nil, nil, afterSeq, fmt.Errorf("find managed event lane: %w", err)
 	}
 	if !exists {
-		return []ManagedEvent{}, afterSeq, nil
+		return []ManagedEvent{}, map[string]string{}, afterSeq, nil
 	}
 
 	events := make([]ManagedEvent, 0)
@@ -108,7 +127,7 @@ func (l *Log) Load(ctx context.Context, sessionID string, afterSeq int64) ([]Man
 	nextSeq := afterSeq
 	for stored, loadErr := range l.store.LoadLane(ctx, lane.ID, afterSeq) {
 		if loadErr != nil {
-			return nil, afterSeq, fmt.Errorf("load managed events: %w", loadErr)
+			return nil, nil, afterSeq, fmt.Errorf("load managed events: %w", loadErr)
 		}
 		nextSeq = stored.Seq
 		raw, ok := stored.Payload["event"]
@@ -117,7 +136,7 @@ func (l *Log) Load(ctx context.Context, sessionID string, afterSeq int64) ([]Man
 		}
 		value, mapErr := mapEvent(raw)
 		if mapErr != nil {
-			return nil, afterSeq, mapErr
+			return nil, nil, afterSeq, mapErr
 		}
 		if value["type"] == "managed.event_processed" {
 			if target, ok := value["event_id"].(string); ok {
@@ -127,28 +146,106 @@ func (l *Log) Load(ctx context.Context, sessionID string, afterSeq int64) ([]Man
 		}
 		events = append(events, value)
 	}
-	for _, value := range events {
-		if id, ok := value["id"].(string); ok {
-			if timestamp, found := processed[id]; found {
-				value["processed_at"] = timestamp
-			}
-		}
-	}
-	return events, nextSeq, nil
+	return events, processed, nextSeq, nil
 }
 
-func (l *Log) UnprocessedUserMessages(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
-	events, err := l.List(ctx, sessionID)
+// PendingInputs returns accepted ingress Events not yet consumed by Agentlet.
+// Public processed_at and internal consumption are deliberately independent:
+// confirmation/result Events are acknowledged on receipt but remain executable
+// until managed.event_processed is durable.
+func (l *Log) PendingInputs(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
+	events, processed, _, err := l.loadProjection(ctx, sessionID, 0)
 	if err != nil {
 		return nil, err
 	}
 	pending := make([]ManagedEvent, 0)
+	resolutions := make([]ManagedEvent, 0)
 	for _, value := range events {
-		if value["type"] == "user.message" && value["processed_at"] == nil {
+		id, _ := value["id"].(string)
+		eventType, _ := value["type"].(string)
+		if !strings.HasPrefix(eventType, "user.") || eventType == "user.interrupt" || processed[id] != "" {
+			continue
+		}
+		if eventType == "user.tool_confirmation" || eventType == "user.tool_result" {
+			resolutions = append(resolutions, value)
+		} else {
 			pending = append(pending, value)
 		}
 	}
+	if len(resolutions) > 0 {
+		return resolutions, nil
+	}
+	blocking := unresolvedToolUses(events)
+	if len(blocking) > 0 {
+		return []ManagedEvent{}, nil
+	}
 	return pending, nil
+}
+
+// UnprocessedUserMessages remains as a source-compatible alias for callers
+// migrating to the broader PendingInputs ingress contract.
+func (l *Log) UnprocessedUserMessages(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
+	return l.PendingInputs(ctx, sessionID)
+}
+
+// UnresolvedToolUses projects the latest requires_action stop into its still
+// unanswered agent.tool_use Events. Resolution receipt, rather than Agentlet
+// consumption, removes a blocker from the public protocol view.
+func (l *Log) UnresolvedToolUses(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
+	events, err := l.List(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return unresolvedToolUses(events), nil
+}
+
+func unresolvedToolUses(events []ManagedEvent) []ManagedEvent {
+	toolUses := make(map[string]ManagedEvent)
+	resolved := make(map[string]bool)
+	var required []string
+	for _, value := range events {
+		eventType, _ := value["type"].(string)
+		switch eventType {
+		case "agent.tool_use":
+			id, _ := value["id"].(string)
+			toolUses[id] = value
+		case "user.tool_confirmation", "user.tool_result":
+			toolUseID, _ := value["tool_use_id"].(string)
+			resolved[toolUseID] = true
+		case "session.status_idle":
+			required = requiredEventIDs(value["stop_reason"])
+		case "session.status_running", "session.status_terminated":
+			required = nil
+		}
+	}
+	result := make([]ManagedEvent, 0, len(required))
+	for _, id := range required {
+		if value, ok := toolUses[id]; ok && !resolved[id] {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func requiredEventIDs(raw any) []string {
+	stopReason, ok := raw.(map[string]any)
+	if !ok || stopReason["type"] != "requires_action" {
+		return nil
+	}
+	values, ok := stopReason["event_ids"].([]any)
+	if !ok {
+		if typed, typedOK := stopReason["event_ids"].([]string); typedOK {
+			return typed
+		}
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if id, ok := value.(string); ok {
+			result = append(result, id)
+		}
+	}
+	return result
 }
 
 func (l *Log) append(ctx context.Context, sessionID string, value ManagedEvent, actor agentledger.Actor) error {

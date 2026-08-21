@@ -22,7 +22,7 @@ type Control interface {
 }
 
 type EventSource interface {
-	UnprocessedUserMessages(context.Context, string) ([]managedevent.ManagedEvent, error)
+	PendingInputs(context.Context, string) ([]managedevent.ManagedEvent, error)
 }
 
 type DataPlane interface {
@@ -153,7 +153,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 func (r *Reconciler) reconcileSession(ctx context.Context, session model.Session) error {
 	requestCtx, cancel := context.WithTimeout(ctx, r.requestTimeout)
 	defer cancel()
-	pending, err := r.events.UnprocessedUserMessages(requestCtx, session.ID)
+	pending, err := r.events.PendingInputs(requestCtx, session.ID)
 	if err != nil {
 		return fmt.Errorf("read pending input for Session %q: %w", session.ID, err)
 	}

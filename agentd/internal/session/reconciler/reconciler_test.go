@@ -50,7 +50,7 @@ type fakeEvents struct {
 	pending map[string][]managedevent.ManagedEvent
 }
 
-func (f *fakeEvents) UnprocessedUserMessages(
+func (f *fakeEvents) PendingInputs(
 	_ context.Context,
 	sessionID string,
 ) ([]managedevent.ManagedEvent, error) {

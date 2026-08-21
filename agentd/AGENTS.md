@@ -80,8 +80,9 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Connector 只按 placement fence 转发 WorkSpec、wake、interrupt 和状态读取。公开 Event 由 agentd
    直接读写共享 Ledger。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
-   判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
-   转为 `terminated` 等待人工对账。
+   判断是否安全继续；同一 input 不重复注入，结果不明确且不可安全重试的 Tool Attempt 不自动重放。
+   Agentlet 将其投影为 `idle/requires_action`，调用方通过 Claude 原生 `user.tool_confirmation` 或
+   `user.tool_result` 对账；一次 allow 只授权一个精确 Attempt 的下一次物理执行。
 6. AgentGo 运行在 Agentlet 进程。Agentlet 根据稳定 Session 身份调用 Sandbox Engine；agentd 不持有
    SandboxKey、实例引用或物理位置。Quick Start 可以共置 sidecar，正式部署由独立 Sandbox Control
    Plane 保证执行环境可用。

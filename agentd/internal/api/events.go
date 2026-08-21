@@ -44,10 +44,37 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		return
 	}
 
-	var hasMessage, hasInterrupt bool
+	blocking, err := s.events.UnresolvedToolUses(ctx, sessionID)
+	if err != nil {
+		s.writeError(request, fmt.Errorf("read Session required actions: %w", err))
+		return
+	}
+	blockingIDs := make(map[string]bool, len(blocking))
+	for _, value := range blocking {
+		id, _ := value["id"].(string)
+		blockingIDs[id] = true
+	}
+	if err := validateIngressSequence(ingress, blockingIDs); err != nil {
+		s.writeError(request, err)
+		return
+	}
+	var hasInput, hasMessage, hasInterrupt, hasToolResult bool
 	for _, item := range ingress {
 		hasMessage = hasMessage || item.Type == "user.message"
 		hasInterrupt = hasInterrupt || item.Type == "user.interrupt"
+		hasInput = hasInput || item.Type != "user.interrupt"
+		hasToolResult = hasToolResult || item.Type == "user.tool_result"
+	}
+	if hasToolResult {
+		environment, err := s.service.GetEnvironment(ctx, session.EnvironmentID)
+		if err != nil {
+			s.writeError(request, err)
+			return
+		}
+		if environment.Config["type"] != "self_hosted" {
+			s.writeError(request, fmt.Errorf("%w: user.tool_result requires a self_hosted Environment", service.ErrUnsupported))
+			return
+		}
 	}
 	accepted := make([]managedevent.ManagedEvent, 0, len(ingress))
 	for _, item := range ingress {
@@ -55,6 +82,16 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		if item.Type == "user.message" {
 			value["content"] = item.Content
 			value["processed_at"] = nil
+		} else if item.Type == "user.tool_confirmation" {
+			value["tool_use_id"] = item.ToolUseID
+			value["result"] = item.Result
+			if item.DenyMessage != "" {
+				value["deny_message"] = item.DenyMessage
+			}
+		} else if item.Type == "user.tool_result" {
+			value["tool_use_id"] = item.ToolUseID
+			value["content"] = item.Content
+			value["is_error"] = item.IsError
 		}
 		if err := s.events.AppendIngress(ctx, sessionID, value); err != nil {
 			s.writeError(request, fmt.Errorf("persist Session ingress Event: %w", err))
@@ -66,7 +103,7 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		"session_id", sessionID, "event_count", len(accepted),
 		"has_message", hasMessage, "has_interrupt", hasInterrupt)
 
-	if hasMessage {
+	if hasInput {
 		s.executionNotifier.Notify()
 	}
 	if hasInterrupt {
@@ -90,6 +127,27 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		}
 	}
 	writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+}
+
+func validateIngressSequence(ingress []view.IngressEvent, blockingIDs map[string]bool) error {
+	remaining := make(map[string]bool, len(blockingIDs))
+	for id := range blockingIDs {
+		remaining[id] = true
+	}
+	for _, item := range ingress {
+		switch item.Type {
+		case "user.tool_confirmation", "user.tool_result":
+			if !remaining[item.ToolUseID] {
+				return fmt.Errorf("%w: tool_use_id %q is not awaiting user action", service.ErrConflict, item.ToolUseID)
+			}
+			delete(remaining, item.ToolUseID)
+		case "user.message":
+			if len(remaining) > 0 {
+				return fmt.Errorf("%w: Session requires tool action before accepting a new message", service.ErrConflict)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {

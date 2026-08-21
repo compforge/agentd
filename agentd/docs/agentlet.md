@@ -94,7 +94,17 @@ Adapter saves checkpoint
 ```
 
 恢复时 Agentlet 校验 Harness/codec 兼容性，并结合 Ledger 未决 Attempt 判断是否可以继续。已经完成的
-结果只幂等吸收到 Harness State，不重新执行；结果不明确的 Tool Attempt 不自动重放。
+结果只幂等吸收到 Harness State，不重新执行。Action 在首次执行前固化 `Effect(kind, idempotency)`：
+`none/read` 和已知幂等的 `write` 可以在原 Action 下递增 `attempt_no` 后重试；`write+none/unknown`、
+`unknown` 或缺失声明都保持 fail-closed。Ledger 只保存 Effect 事实，是否重试由 Agentlet 的 Harness
+恢复策略决定。
+
+Fail-closed 不等于终止 Session。Agentlet 释放本轮执行资源，把未决 Attempt 投影成
+`agent.tool_use`，随后写入带 `stop_reason.requires_action.event_ids` 的 `session.status_idle`。公开 API
+只接受 Claude Managed Agents 已有的 `user.tool_confirmation` 与 `user.tool_result` 来解除阻塞：deny
+或外部对账结果成为 Tool Result 后继续模型循环；allow 只允许原 Action 创建一个新 Attempt。确认
+Event ID 会写入新 Attempt 的 requested payload；如果新 Attempt 的结果再次不明确，旧确认不能重放，
+必须生成新的 `agent.tool_use` 再次询问。普通 user message 在 required action 解决前保持排队。
 
 提交顺序必须保证：先保存可读取的 checkpoint，再把精确 `ResumeRef` 上报 agentd；先追加 Attempt 的
 requested 事实，再发起模型或工具调用；拿到结果后再追加 completed / failed。跨 Control State、

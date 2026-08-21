@@ -85,7 +85,16 @@ func (r *AgentGoRunner) Run(
 	if err := projectAssistantMessages(messages, input.ID, emit); err != nil {
 		return TurnResult{ResumeRevision: revision}, fmt.Errorf("project restored AgentGo messages: %w", err)
 	}
-	action, err := r.resumeAction(ctx, session.ID, messages, input.ID)
+	runID := "input/" + input.ID
+	action := resumePrompt
+	var resolution toolResolutionPlan
+	if input.ToolResolution == nil {
+		action, err = r.resumeAction(ctx, session.ID, messages, input.ID)
+	} else {
+		resolution, err = r.planToolResolution(ctx, session.ID, input)
+		runID = resolution.Attempt.RunID
+		action = resumeContinue
+	}
 	if err != nil {
 		return TurnResult{ResumeRevision: revision}, err
 	}
@@ -95,7 +104,6 @@ func (r *AgentGoRunner) Run(
 	if r.config.APIKey == "" {
 		return TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: ANTHROPIC_API_KEY is not configured")
 	}
-	runID := "input/" + input.ID
 	actor, err := r.ensureCheckpointActor(ctx, agentledger.NewActorWithKey(
 		fmt.Sprintf("agentd/agents/%s/versions/%d", session.Agent.ID, session.Agent.Version),
 		"agent",
@@ -120,6 +128,7 @@ func (r *AgentGoRunner) Run(
 		return TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, r.finishRun(ctx, recorder, runErr)
 	}
 
+	retryAuthorization := resolution.RetryAuthorization
 	adapter, err := agentgoadapter.New(ctx, agentgoadapter.Config{
 		Store:            r.config.Ledger,
 		SessionID:        session.ID,
@@ -127,6 +136,19 @@ func (r *AgentGoRunner) Run(
 		Actor:            actor,
 		NativeSessionID:  session.ID,
 		OperationTimeout: r.config.OperationTimeout,
+		ToolEffect:       agentGoToolEffect,
+		CanRetryTool: func(action agentledger.Action, attempt agentledger.Attempt, _ agentgo.ToolCall) agentgoadapter.ToolRetryDecision {
+			if canRetryToolEffect(action.Effect) {
+				return agentgoadapter.ToolRetryDecision{Approved: true}
+			}
+			if retryAuthorization.ActionID == action.ID && retryAuthorization.AttemptID == attempt.ID {
+				return agentgoadapter.ToolRetryDecision{
+					Approved: true,
+					Metadata: map[string]any{"recovery_decision_id": retryAuthorization.DecisionID},
+				}
+			}
+			return agentgoadapter.ToolRetryDecision{}
+		},
 	})
 	if err != nil {
 		return finish(fmt.Errorf("create AgentGo ledger adapter: %w", err))
@@ -141,6 +163,21 @@ func (r *AgentGoRunner) Run(
 	model, err := llm.NewModel("anthropic", session.Agent.ModelID, modelOptions...)
 	if err != nil {
 		return finish(fmt.Errorf("create AgentGo model: %w", err))
+	}
+
+	commitMessage := r.messageCommitter(
+		r.checkpointKey(session.ID), actor.ID, session.ID, runID, messages, &checkpointID, &revision,
+	)
+	if resolution.ToolResult != nil {
+		if !hasToolResult(messages, resolution.Attempt.ToolCallID) {
+			if err := commitMessage(*resolution.ToolResult); err != nil {
+				return finish(fmt.Errorf("persist user tool resolution: %w", err))
+			}
+			messages = append(messages, *resolution.ToolResult)
+		}
+		if err := r.recordToolResolution(ctx, recorder, resolution); err != nil {
+			return finish(err)
+		}
 	}
 
 	options := []agentgo.AgentOption{
@@ -158,9 +195,7 @@ func (r *AgentGoRunner) Run(
 	// The ledger adapter still owns strict model/tool audit hooks. The final
 	// committer is intentionally replaced so recovery state has its own store.
 	options = append(options, adapter.Options()...)
-	options = append(options, agentgo.WithMessageCommitter(r.messageCommitter(
-		r.checkpointKey(session.ID), actor.ID, session.ID, runID, messages, &checkpointID, &revision,
-	)))
+	options = append(options, agentgo.WithMessageCommitter(commitMessage))
 	agent := agentgo.NewAgent(options...)
 	if err := agent.SetMessages(messages); err != nil {
 		return finish(fmt.Errorf("restore AgentGo session: %w", err))
@@ -236,12 +271,18 @@ func (r *AgentGoRunner) resumeAction(
 	if inputIndex(messages, inputID) < 0 {
 		return resumePrompt, nil
 	}
-	unresolved, err := unresolvedToolAttempts(ctx, r.config.Ledger, sessionID)
+	unresolved, err := unresolvedToolAttempts(ctx, r.config.Ledger, sessionID, "input/"+inputID)
 	if err != nil {
 		return resumePrompt, fmt.Errorf("inspect AgentGo recovery attempts: %w", err)
 	}
-	if len(unresolved) > 0 {
-		return resumePrompt, fmt.Errorf("%w: %d tool attempt(s) have no durable outcome", ErrUnsafeRecovery, len(unresolved))
+	var blockers []BlockingToolUse
+	for _, attempt := range unresolved {
+		if !canRetryToolEffect(attempt.Action.Effect) {
+			blockers = append(blockers, attempt.blockingToolUse())
+		}
+	}
+	if len(blockers) > 0 {
+		return resumePrompt, &RequiresActionError{ToolUses: blockers}
 	}
 	if len(messages) == 0 {
 		return resumePrompt, fmt.Errorf("%w: committed input is missing from AgentGo state", ErrUnsafeRecovery)
@@ -249,6 +290,9 @@ func (r *AgentGoRunner) resumeAction(
 	last := messages[len(messages)-1]
 	if last.GetRole() == agentgo.RoleAssistant {
 		if last.HasToolCalls() {
+			if len(unresolved) > 0 {
+				return resumeContinue, nil
+			}
 			return resumePrompt, fmt.Errorf("%w: AgentGo stopped after committing tool calls without durable results", ErrUnsafeRecovery)
 		}
 		return resumeCompleted, nil
@@ -434,44 +478,6 @@ func inputIndex(messages []agentgo.AgentMessage, inputID string) int {
 		}
 	}
 	return -1
-}
-
-func unresolvedToolAttempts(
-	ctx context.Context,
-	store agentledger.EventStore,
-	sessionID string,
-) ([]string, error) {
-	view, err := store.LoadSession(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	actionTypes := make(map[string]string, len(view.Actions))
-	for _, action := range view.Actions {
-		actionTypes[action.ID] = action.Type
-	}
-	toolAttempts := make(map[string]struct{}, len(view.Attempts))
-	for _, attempt := range view.Attempts {
-		if actionTypes[attempt.ActionID] == agentledger.ActionTypeToolCall {
-			toolAttempts[attempt.ID] = struct{}{}
-		}
-	}
-	pending := make(map[string]struct{})
-	for _, event := range view.Events {
-		if _, isTool := toolAttempts[event.SubjectID]; !isTool {
-			continue
-		}
-		switch event.EventType {
-		case agentledger.EventTypeAttemptRequested:
-			pending[event.SubjectID] = struct{}{}
-		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed:
-			delete(pending, event.SubjectID)
-		}
-	}
-	result := make([]string, 0, len(pending))
-	for attemptID := range pending {
-		result = append(result, attemptID)
-	}
-	return result, nil
 }
 
 func projectAssistantMessages(
