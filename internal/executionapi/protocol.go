@@ -22,10 +22,20 @@ type AgentSnapshot struct {
 	ID          string           `json:"id"`
 	Name        string           `json:"name"`
 	Description string           `json:"description"`
-	ModelID     string           `json:"model_id"`
+	Model       ModelSnapshot    `json:"model"`
 	System      string           `json:"system"`
 	Tools       []map[string]any `json:"tools"`
 	Version     int64            `json:"version"`
+}
+
+// ModelSnapshot contains the external model connection needed by the assigned
+// Harness. It is private execution data and must never be projected as an Event.
+type ModelSnapshot struct {
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	UpstreamID string `json:"upstream_id"`
+	BaseURL    string `json:"base_url,omitempty"`
+	APIKey     string `json:"api_key"`
 }
 
 type EnvironmentSnapshot struct {

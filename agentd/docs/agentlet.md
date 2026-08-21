@@ -142,5 +142,7 @@ Hostel；双容器是最小部署实现，不是 Agentlet 或 Worker 的稳定�
 2. Agentlet 不创建、drain 或删除 Worker。
 3. Agentlet 不暴露、代理或查询公开 Event API，只写自身产生的执行事实。
 4. Agentlet 不解释全局 Control State，只消费请求携带的执行切片。
-5. Harness Adapter 拥有原生状态语义；Agent Ledger 拥有规范化执行事实。
-6. Sandbox Engine 拥有隔离资源及其 placement；Agentlet 只构造 key 并通过 Adapter 使用它。
+5. Agentlet 不提供 Model API、不查询 Model 表，也不持有全局默认模型；它只把 WorkSpec 中已解析的
+   Model 连接交给本次 Assignment 的 Harness。
+6. Harness Adapter 拥有原生状态语义；Agent Ledger 拥有规范化执行事实。
+7. Sandbox Engine 拥有隔离资源及其 placement；Agentlet 只构造 key 并通过 Adapter 使用它。

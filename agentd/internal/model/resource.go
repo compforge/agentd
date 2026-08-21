@@ -15,6 +15,19 @@ type Agent struct {
 	UpdatedAt   time.Time
 }
 
+// Model is a control-plane registration for an external model service.
+// APIKey is write-only at the public API boundary and is only sent to the
+// assigned Agentlet as part of an internal WorkSpec.
+type Model struct {
+	ID         string
+	Provider   string
+	UpstreamID string
+	BaseURL    string
+	APIKey     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type Environment struct {
 	ID          string
 	Name        string

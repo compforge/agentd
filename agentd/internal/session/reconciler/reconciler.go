@@ -111,7 +111,9 @@ func (r *Reconciler) Run(ctx context.Context) {
 // placements, place pending work, and wake the selected Agentlet.
 //
 // +spec=`An unprocessed durable user Event remains executable after notification loss or control-plane restart; placement changes occur only after a stable execution boundary or confirmed Worker loss`
+// +case:id=worker_replacement_resume,desc=`A durable Session resumes on a new logical Worker after confirmed Worker loss`,input=`replace-worker-between-sandbox-turns`,expect=`two completed turns on different logical Workers`,forbid=`lost durable input or reuse of the retired Worker`,group=system
 // +link=agentd/docs/agentd.md
+// +link=tests/e2e/cases/managed-agent.yaml
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	sessions, err := r.control.ListSessions(ctx)
 	if err != nil {

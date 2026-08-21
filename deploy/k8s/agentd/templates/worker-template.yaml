@@ -49,14 +49,6 @@ data:
                   key: dsn
             - name: AGENTD_SANDBOX_ENDPOINT
               value: http://127.0.0.1:8080
-            {{- if .Values.model.apiKey }}
-            - name: ANTHROPIC_API_KEY
-              value: {{ .Values.model.apiKey | quote }}
-            {{- end }}
-            {{- if .Values.model.baseURL }}
-            - name: ANTHROPIC_BASE_URL
-              value: {{ .Values.model.baseURL | quote }}
-            {{- end }}
           ports:
             - name: agentlet-http
               containerPort: 8019

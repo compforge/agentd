@@ -215,6 +215,13 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
+	if err := repository.PutModel(ctx, model.Model{
+		ID: "model-1", Provider: "anthropic", UpstreamID: "claude-sonnet-4-6",
+		BaseURL: "https://model.example.test", APIKey: "secret",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.PutAgent(ctx, model.Agent{
 		ID: "agent-1", Name: "test", ModelID: "model-1", Version: 3,
 		System: "be concise", Tools: []map[string]any{{"type": "agent_toolset_20260401"}},
@@ -253,6 +260,11 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 		target.Work.Agent.ID != "agent-1" || target.Work.Agent.Version != 3 ||
 		target.Work.Environment.ID != "env-1" {
 		t.Fatalf("work snapshot = %#v", target.Work)
+	}
+	if target.Work.Agent.Model.ID != "model-1" || target.Work.Agent.Model.Provider != "anthropic" ||
+		target.Work.Agent.Model.UpstreamID != "claude-sonnet-4-6" ||
+		target.Work.Agent.Model.BaseURL != "https://model.example.test" || target.Work.Agent.Model.APIKey != "secret" {
+		t.Fatalf("model snapshot = %#v", target.Work.Agent.Model)
 	}
 }
 

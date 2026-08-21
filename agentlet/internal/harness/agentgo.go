@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,8 +18,6 @@ import (
 )
 
 type AgentGoRunnerConfig struct {
-	APIKey           string
-	BaseURL          string
 	RequestTimeout   time.Duration
 	OperationTimeout time.Duration
 	ToolTimeout      time.Duration
@@ -63,10 +62,12 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session Session) (st
 
 // Run executes one AgentGo turn and projects only durable assistant messages.
 //
-// +spec=`Model calls use the session's model and system prompt; only complete assistant messages become managed events, while every model attempt remains auditable`
-// +case:id=model_question_answer,desc=`answer through an Anthropic-compatible streaming model`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
+// +spec=`Each AgentGo turn restores the exact Session checkpoint, uses its configured model and Sandbox, persists only complete assistant messages, and keeps model/tool attempts auditable`
+// +case:id=model_question_answer,desc=`answer through the configured streaming model provider`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
 // +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
+// +case:id=sandbox_resume,desc=`send two tool-using turns to one managed Session`,input=`each turn requires the isolated bash tool and the same final marker`,expect=`both turns finish, the second restores the first checkpoint, and durable Event history contains both answers`,forbid=`losing Session identity, bypassing the Sandbox, or duplicating a completed input`,group=system
 // +link=agentd/docs/agentlet.md
+// +link=tests/e2e/cases/managed-agent.yaml
 func (r *AgentGoRunner) Run(
 	ctx context.Context,
 	session Session,
@@ -101,8 +102,14 @@ func (r *AgentGoRunner) Run(
 	if action == resumeCompleted {
 		return TurnResult{ResumeRef: session.ResumeRef, ResumeRevision: revision}, nil
 	}
-	if r.config.APIKey == "" {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: ANTHROPIC_API_KEY is not configured")
+	if strings.TrimSpace(session.Agent.Model.APIKey) == "" {
+		return TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: model API key is not configured")
+	}
+	provider := strings.ToLower(strings.TrimSpace(session.Agent.Model.Provider))
+	if !llm.IsProviderRegistered(provider) {
+		return TurnResult{ResumeRevision: revision}, fmt.Errorf(
+			"run AgentGo session: model provider %q is not registered", session.Agent.Model.Provider,
+		)
 	}
 	actor, err := r.ensureCheckpointActor(ctx, agentledger.NewActorWithKey(
 		fmt.Sprintf("agentd/agents/%s/versions/%d", session.Agent.ID, session.Agent.Version),
@@ -154,13 +161,13 @@ func (r *AgentGoRunner) Run(
 		return finish(fmt.Errorf("create AgentGo ledger adapter: %w", err))
 	}
 	modelOptions := []llm.ModelOption{
-		llm.WithAPIKey(r.config.APIKey),
+		llm.WithAPIKey(session.Agent.Model.APIKey),
 		llm.WithRequestTimeout(r.config.RequestTimeout),
 	}
-	if r.config.BaseURL != "" {
-		modelOptions = append(modelOptions, llm.WithBaseURL(r.config.BaseURL))
+	if session.Agent.Model.BaseURL != "" {
+		modelOptions = append(modelOptions, llm.WithBaseURL(session.Agent.Model.BaseURL))
 	}
-	model, err := llm.NewModel("anthropic", session.Agent.ModelID, modelOptions...)
+	model, err := llm.NewModel(provider, session.Agent.Model.UpstreamID, modelOptions...)
 	if err != nil {
 		return finish(fmt.Errorf("create AgentGo model: %w", err))
 	}

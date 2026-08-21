@@ -6,8 +6,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 技术，而是通过 Control Plane 与 Agentlet，把可替换的 Harness、Sandbox Engine 和 Agent Ledger
 组织成长生命周期服务。稳定定位与边界见 `docs/kernel.md`。
 
-- agentd 是 Control Plane 的代码与服务边界，拥有全局资源、Worker、Session placement、调度、转发和
-  恢复决策。
+- agentd 是 Control Plane 的代码与服务边界，拥有 Model 注册信息等全局资源、Worker、Session
+  placement、调度、转发和恢复决策。
 - Agentlet 在单个 Worker Pod 内通过内部执行 API 管理多个 Harness runtime；它不实现面向客户端的
   Claude Managed Agents API，也不拥有全局 placement。
 - AgentGo 只拥有 Agent Loop 与原生会话状态，不感知 HTTP API 或具体 Sandbox Engine 实现。
@@ -91,6 +91,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Plane 保证执行环境可用。
 7. 所有外部 HTTP、模型和存储调用显式配置超时；子进程退出和服务关闭必须收敛
    正在执行的 Session。
+8. Model 是 agentd 独有的外部模型连接注册资源。Agentlet 不提供 Model API、不查询 Model 表；agentd
+   在安装 WorkSpec 时下发已解析连接。API key 不进入公开读响应、Event、Ledger 或日志。
 
 ## References
 

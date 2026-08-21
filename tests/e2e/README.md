@@ -1,10 +1,19 @@
 # agentd system E2E
 
-This suite drives a **running agentd deployment** exclusively through the Claude Managed Agents API.
-It creates an Agent, cloud Environment, and Session, then executes two turns that require a Sandbox
-Engine tool. A passing run proves the public request crossed the Control Plane, Worker placement,
-Agentlet, AgentGo, model, Ledger/Checkpoint, and Sandbox Engine, and that the second turn resumed the
-first Session.
+This suite drives a **running agentd deployment** through public APIs. Resilience cases inject and
+observe controlled deployment faults through case-harness Kubernetes primitives; final acceptance
+still uses the public Managed Agents API. Its canonical CaseSet is
+[`cases/managed-agent.yaml`](cases/managed-agent.yaml):
+
+- `model_secret_redaction` registers and reads a Model through create, get, and list, proving that
+  credentials remain write-only.
+- `sandbox_resume` creates an Agent, cloud Environment, and Session, then executes two turns that
+  require a Sandbox Engine tool. It proves that the request crosses the Control Plane, Worker
+  placement, Agentlet, AgentGo, model, Ledger/Checkpoint, and Sandbox Engine, and that the second
+  turn resumes the first Session.
+- `worker_replacement_resume` completes one tool turn, deletes the explicitly selected managed
+  Worker Pods, waits for a new logical Worker, and completes a second turn on the same Session. It
+  proves that Worker loss does not lose durable Session input or checkpoint state.
 
 The test uses unique resource names and intentionally keeps the resulting records. Agentd has no
 public delete contract for these durable audit resources; use a disposable environment or the
@@ -12,12 +21,15 @@ deployment's record-retention policy.
 
 ## Run
 
-Point the suite at a deployment whose agentd, shared MySQL, dynamically created Workers, model
-credentials, and Sandbox Engine are all ready:
+Point the suite at a deployment whose agentd, shared MySQL, dynamically created Workers, and Sandbox
+Engine are ready. The suite registers its external model connection through agentd before creating
+the Agent:
 
 ```bash
 AGENTD_E2E_BASE_URL=http://127.0.0.1:8020 \
+AGENTD_E2E_MODEL_PROVIDER=anthropic \
 AGENTD_E2E_MODEL=claude-sonnet-4-6 \
+AGENTD_E2E_MODEL_API_KEY=... \
 AGENTD_REQUIRE_E2E=1 \
 go test -tags=e2e -v ./tests/e2e
 ```
@@ -27,8 +39,35 @@ go test -tags=e2e -v ./tests/e2e
 | `AGENTD_E2E_BASE_URL` | yes to execute | — | Public agentd endpoint, without `/v1` |
 | `AGENTD_E2E_API_KEY` | no | `test` | Client API key; agentd currently does not authenticate it |
 | `AGENTD_E2E_MODEL` | no | `claude-sonnet-4-6` | Model configured on the created Agent |
+| `AGENTD_E2E_MODEL_PROVIDER` | no | `anthropic` | AgentGo model provider registered through `/v1/models` |
+| `AGENTD_E2E_MODEL_BASE_URL` | no | provider default | Optional external model endpoint |
+| `AGENTD_E2E_MODEL_API_KEY` | yes to execute | `ANTHROPIC_API_KEY` | Write-only credential registered for the E2E Model |
 | `AGENTD_E2E_TIMEOUT` | no | `10m` | Whole-case deadline, including Worker scale-out and two turns |
+| `AGENTD_E2E_RUN_ID` | no | UTC timestamp | Stable identity for this E2E Run |
+| `AGENTD_E2E_RUNS_DIR` | no | `runs` | Parent directory for Run artifacts |
 | `AGENTD_REQUIRE_E2E` | no | `0` | Fail instead of skip when the target URL is absent |
 
+`worker_replacement_resume` is intentionally disruptive and skips unless explicitly enabled. Run
+it only against a disposable namespace or a dedicated Worker pool:
+
+```bash
+AGENTD_E2E_ALLOW_WORKER_DISRUPTION=1 \
+AGENTD_E2E_KUBECONFIG="$KUBECONFIG" \
+AGENTD_E2E_KUBE_CONTEXT=my-context \
+AGENTD_E2E_KUBE_NAMESPACE=agentd-e2e \
+AGENTD_E2E_WORKER_SELECTOR='app.kubernetes.io/instance=agentd-e2e,agentd.compforge.dev/managed=true' \
+go test -tags=e2e -run TestManagedAgentResumesAfterWorkerReplacement -v ./tests/e2e
+```
+
+| Variable | Required | Default | Meaning |
+|---|---:|---|---|
+| `AGENTD_E2E_ALLOW_WORKER_DISRUPTION` | yes | `0` | Must be `1` before the case can delete Worker Pods |
+| `AGENTD_E2E_KUBE_NAMESPACE` | yes | — | Namespace-scoped boundary for Kubernetes operations |
+| `AGENTD_E2E_WORKER_SELECTOR` | yes | — | Dedicated managed Worker pool to validate and disrupt |
+| `AGENTD_E2E_KUBECONFIG` | yes on a client | — | Kubeconfig used by case-harness |
+| `AGENTD_E2E_KUBE_CONTEXT` | no | current | Optional kubeconfig context override |
+| `AGENTD_E2E_KUBE_IN_CLUSTER` | yes in a Job | `0` | Use in-cluster credentials instead of a kubeconfig |
+
 `make test-e2e` also executes the deterministic component suites. When
-`AGENTD_E2E_BASE_URL` is absent, only this live black-box case skips.
+`AGENTD_E2E_BASE_URL` is absent, these live black-box cases skip. Executed system CaseRuns are
+aggregated into `runs/agentd-system/<run-id>/verdict.json`.

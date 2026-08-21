@@ -16,6 +16,9 @@ type Repository interface {
 	PutAgent(context.Context, model.Agent) error
 	GetAgent(context.Context, string) (model.Agent, error)
 	ListAgents(context.Context) ([]model.Agent, error)
+	PutModel(context.Context, model.Model) error
+	GetModel(context.Context, string) (model.Model, error)
+	ListModels(context.Context) ([]model.Model, error)
 	PutEnvironment(context.Context, model.Environment) error
 	GetEnvironment(context.Context, string) (model.Environment, error)
 	ListEnvironments(context.Context) ([]model.Environment, error)

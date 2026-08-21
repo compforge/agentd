@@ -132,7 +132,9 @@ func (a *Service) Shutdown(ctx context.Context) error {
 }
 
 func (a *Service) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
-	if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.ModelID) == "" {
+	if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Model.ID) == "" ||
+		strings.TrimSpace(value.Model.Provider) == "" || strings.TrimSpace(value.Model.UpstreamID) == "" ||
+		strings.TrimSpace(value.Model.APIKey) == "" {
 		return Agent{}, invalid("agent name and model are required")
 	}
 	now := time.Now().UTC()

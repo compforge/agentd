@@ -37,6 +37,10 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 	if err != nil {
 		return ExecutionTarget{}, fmt.Errorf("load Session %q Agent: %w", sessionID, err)
 	}
+	registeredModel, err := a.repository.GetModel(ctx, agent.ModelID)
+	if err != nil {
+		return ExecutionTarget{}, fmt.Errorf("load Agent %q Model %q: %w", agent.ID, agent.ModelID, err)
+	}
 	environment, err := a.repository.GetEnvironment(ctx, session.EnvironmentID)
 	if err != nil {
 		return ExecutionTarget{}, fmt.Errorf("load Session %q Environment: %w", sessionID, err)
@@ -54,7 +58,11 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 				CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 			},
 			Agent: executionapi.AgentSnapshot{
-				ID: agent.ID, Name: agent.Name, Description: agent.Description, ModelID: agent.ModelID,
+				ID: agent.ID, Name: agent.Name, Description: agent.Description,
+				Model: executionapi.ModelSnapshot{
+					ID: registeredModel.ID, Provider: registeredModel.Provider, UpstreamID: registeredModel.UpstreamID,
+					BaseURL: registeredModel.BaseURL, APIKey: registeredModel.APIKey,
+				},
 				System: agent.System, Tools: agent.Tools, Version: agent.Version,
 			},
 			Environment: executionapi.EnvironmentSnapshot{ID: environment.ID, Config: environment.Config},

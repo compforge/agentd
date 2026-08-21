@@ -142,6 +142,7 @@ type sqliteE2EServer struct {
 type sqliteE2EClient struct {
 	service *service.Service
 	events  *service.EventLog
+	model   harness.Model
 }
 
 func startSQLiteE2EServer(
@@ -326,7 +327,9 @@ func createSQLiteE2EConfiguredSession(
 ) (service.Agent, service.Environment, service.Session) {
 	t.Helper()
 	agent, err := client.service.CreateAgent(ctx, service.Agent{
-		Name: name, ModelID: string(modelID), System: system,
+		Name:   name,
+		Model:  modelForSQLiteE2E(client, string(modelID)),
+		System: system,
 	})
 	if err != nil {
 		t.Fatalf("create fixture agent: %v", err)
@@ -344,6 +347,19 @@ func createSQLiteE2EConfiguredSession(
 		t.Fatalf("create fixture session: %v", err)
 	}
 	return agent, environment, session
+}
+
+func modelForSQLiteE2E(client *sqliteE2EClient, modelID string) harness.Model {
+	value := client.model
+	value.ID = modelID
+	value.UpstreamID = modelID
+	if value.Provider == "" {
+		value.Provider = "anthropic"
+	}
+	if value.APIKey == "" {
+		value.APIKey = "test"
+	}
+	return value
 }
 
 func sendSQLiteE2EMessage(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID, text string) {

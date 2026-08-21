@@ -21,10 +21,6 @@ service:
   type: ClusterIP
   port: 8020
 
-model:
-  apiKey: ""
-  baseURL: ""
-
 database:
   # Set an external DSN to skip the built-in MySQL workload.
   dsn: ""

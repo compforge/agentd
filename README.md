@@ -8,11 +8,17 @@
 `agentd` is a managed agent server built with [AgentGo](https://github.com/compforge/agentgo) and
 [Agent Ledger](https://github.com/compforge/agent-ledger), with a pluggable Sandbox Engine.
 
-It exposes the core Claude Managed Agents resources—Agent, Environment, Session, and Event—while
+It exposes the core Claude Managed Agents resources—Agent, Environment, Session, and Event—plus a
+self-hosted Model registry for external model connections, while
 running the agent harness and sandbox on infrastructure you control. The API transport uses Hertz.
 The architecture separates the `agentd` control plane from per-Pod Agentlet instances. `agentd`
 owns the Managed Agents API and schedules each Session; Agentlet exposes only an internal execution
 API and manages assigned harness runtimes.
+
+Before creating an Agent, register the external model connection with `POST /v1/models`. The Agent
+references that Model resource by ID. Model credentials are write-only and are resolved by agentd
+into the private WorkSpec sent to the assigned Agentlet; agentd does not provide a model inference
+service of its own.
 
 ## Core capabilities
 

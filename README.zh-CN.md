@@ -9,10 +9,15 @@
 [AgentGo](https://github.com/compforge/agentgo) 和
 [Agent Ledger](https://github.com/compforge/agent-ledger) 构建，并支持可插拔的 Sandbox Engine。
 
-它提供 Claude Managed Agents 的核心资源——Agent、Environment、Session 和 Event——同时把
-Agent Harness 和 Sandbox 运行在用户控制的基础设施上。API 传输层使用 Hertz。整体架构将
+它提供 Claude Managed Agents 的核心资源——Agent、Environment、Session 和 Event——以及供
+自托管部署登记外部模型连接的 Model 资源，同时把 Agent Harness 和 Sandbox 运行在用户控制的
+基础设施上。API 传输层使用 Hertz。整体架构将
 `agentd` 控制面与每个 Pod 中的 Agentlet 实例分开：`agentd` 提供 Managed Agents API 并为
 Session 调度执行位置；Agentlet 只暴露内部执行 API，负责管理分配给自己的 Harness 执行。
+
+创建 Agent 前，部署者先通过 `POST /v1/models` 注册外部模型连接，Agent 再通过 ID 引用该 Model。
+模型凭据只写不读，由 agentd 解析进发送给当前 Agentlet 的内部 WorkSpec；agentd 自身不提供模型
+推理服务。
 
 ## 核心能力
 
