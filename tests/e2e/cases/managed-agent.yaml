@@ -1,0 +1,45 @@
+caseset: agentd-managed-agent
+focus: Managed Agent resource security and durable tool-using Session continuity.
+schema_version: 1
+facets:
+  boundary: {values: [control-plane, system]}
+  recovery: {values: [checkpoint, worker-replacement]}
+  security: {values: [credential]}
+cases:
+  - id: model_secret_redaction
+    desc: Model credentials remain write-only across create, get, and list.
+    input: {operation: register-get-list-model}
+    facets: {boundary: control-plane, security: credential}
+    judge:
+      e2e:
+        assert:
+          - {path: "responses[].id", op: not_empty}
+          - {path: "responses[].api_key_configured", op: eq, value: true}
+    binding:
+      symbol_id: agentd/internal/api/models.go::modelResponse
+      spec: Model credentials are write-only; public responses expose only whether a key is configured.
+  - id: sandbox_resume
+    desc: One managed Session completes two isolated tool turns from its durable checkpoint.
+    input: {operation: two-sandbox-turns, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: checkpoint}
+    judge:
+      e2e:
+        assert:
+          - {path: agent_messages, op: gte, value: 2}
+          - {path: "turns[].marker", op: eq, value: AGENTD_E2E_OK}
+    binding:
+      symbol_id: agentlet/internal/harness/agentgo.go::AgentGoRunner.Run
+      spec: Each turn restores the exact Session checkpoint and executes tools through its Sandbox.
+  - id: worker_replacement_resume
+    desc: One managed Session resumes on a new logical Worker after its old Worker Pods disappear.
+    input: {operation: replace-worker-between-sandbox-turns, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: worker-replacement}
+    judge:
+      e2e:
+        assert:
+          - {path: agent_messages, op: gte, value: 2}
+          - {path: replacement_worker_id, op: not_in, value_path: previous_worker_ids}
+          - {path: "turns[].marker", op: eq, value: AGENTD_E2E_OK}
+    binding:
+      symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
+      spec: Confirmed Worker loss changes placement while durable Session input resumes from its checkpoint.

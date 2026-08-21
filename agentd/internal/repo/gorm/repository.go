@@ -34,6 +34,18 @@ type agentRow struct {
 
 func (agentRow) TableName() string { return "agents" }
 
+type modelRow struct {
+	ID         string    `gorm:"primaryKey;size:191"`
+	Provider   string    `gorm:"not null;size:64"`
+	UpstreamID string    `gorm:"column:model_id;not null;size:191"`
+	BaseURL    string    `gorm:"size:2048"`
+	APIKey     string    `gorm:"type:text;not null"`
+	CreatedAt  time.Time `gorm:"not null"`
+	UpdatedAt  time.Time `gorm:"not null"`
+}
+
+func (modelRow) TableName() string { return "models" }
+
 type environmentRow struct {
 	ID          string    `gorm:"primaryKey;size:191"`
 	Name        string    `gorm:"not null;size:255"`
@@ -88,10 +100,53 @@ func NewGORM(db *gormio.DB) (*GORMRepository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("create control-plane repository: database is required")
 	}
-	if err := db.AutoMigrate(&agentRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}); err != nil {
+	if err := db.AutoMigrate(&modelRow{}, &agentRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}); err != nil {
 		return nil, fmt.Errorf("migrate control-plane store: %w", err)
 	}
 	return &GORMRepository{db: db}, nil
+}
+
+func (r *GORMRepository) PutModel(ctx context.Context, value model.Model) error {
+	row := modelRow{
+		ID: value.ID, Provider: value.Provider, UpstreamID: value.UpstreamID,
+		BaseURL: value.BaseURL, APIKey: value.APIKey,
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+	}
+	if err := r.db.WithContext(ctx).Save(&row).Error; err != nil {
+		return fmt.Errorf("put model %q: %w", value.ID, err)
+	}
+	return nil
+}
+
+func (r *GORMRepository) GetModel(ctx context.Context, modelID string) (model.Model, error) {
+	var row modelRow
+	if err := r.db.WithContext(ctx).Where("id = ?", modelID).First(&row).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Model{}, repo.ErrNotFound
+		}
+		return model.Model{}, fmt.Errorf("get model %q: %w", modelID, err)
+	}
+	return model.Model{
+		ID: row.ID, Provider: row.Provider, UpstreamID: row.UpstreamID,
+		BaseURL: row.BaseURL, APIKey: row.APIKey,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}, nil
+}
+
+func (r *GORMRepository) ListModels(ctx context.Context) ([]model.Model, error) {
+	var rows []modelRow
+	if err := r.db.WithContext(ctx).Order("created_at, id").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list models: %w", err)
+	}
+	values := make([]model.Model, 0, len(rows))
+	for _, row := range rows {
+		values = append(values, model.Model{
+			ID: row.ID, Provider: row.Provider, UpstreamID: row.UpstreamID,
+			BaseURL: row.BaseURL, APIKey: row.APIKey,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return values, nil
 }
 
 func (r *GORMRepository) PutAgent(ctx context.Context, agent model.Agent) error {

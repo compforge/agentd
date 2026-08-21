@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/compforge/agentd/agentlet/internal/harness"
 	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 	"github.com/compforge/agentd/internal/executionapi"
 )
@@ -17,7 +18,9 @@ import (
 func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec) (Session, error) {
 	if strings.TrimSpace(spec.AssignmentID) == "" || strings.TrimSpace(spec.WorkerID) == "" ||
 		strings.TrimSpace(spec.Session.ID) == "" || strings.TrimSpace(spec.Agent.ID) == "" ||
-		strings.TrimSpace(spec.Agent.ModelID) == "" {
+		strings.TrimSpace(spec.Agent.Model.ID) == "" || strings.TrimSpace(spec.Agent.Model.Provider) == "" ||
+		strings.TrimSpace(spec.Agent.Model.UpstreamID) == "" ||
+		strings.TrimSpace(spec.Agent.Model.APIKey) == "" {
 		return Session{}, invalid("WorkSpec assignment, worker, session, agent, and model are required")
 	}
 	if spec.Session.EnvironmentID == "" || spec.Session.EnvironmentID != spec.Environment.ID {
@@ -38,7 +41,11 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 
 	agent := Agent{
 		ID: spec.Agent.ID, Name: spec.Agent.Name, Description: spec.Agent.Description,
-		ModelID: spec.Agent.ModelID, System: spec.Agent.System, Tools: spec.Agent.Tools,
+		Model: harness.Model{
+			ID: spec.Agent.Model.ID, Provider: spec.Agent.Model.Provider, UpstreamID: spec.Agent.Model.UpstreamID,
+			BaseURL: spec.Agent.Model.BaseURL, APIKey: spec.Agent.Model.APIKey,
+		},
+		System: spec.Agent.System, Tools: spec.Agent.Tools,
 		Version: spec.Agent.Version,
 	}
 	environment := Environment{ID: spec.Environment.ID, Config: spec.Environment.Config}

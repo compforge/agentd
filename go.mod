@@ -7,6 +7,7 @@ require (
 	github.com/cloudwego/hertz v0.10.4
 	github.com/compforge/agent-ledger/go v0.0.0-20260821095101-af94b8133e1e
 	github.com/compforge/agentgo v0.0.1
+	github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f
 	github.com/go-sql-driver/mysql v1.9.3
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
@@ -52,6 +53,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

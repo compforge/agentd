@@ -73,6 +73,7 @@ Agentlet 执行。
 | 能力 | agentd | Agentlet |
 |------|--------|----------|
 | Managed Agents API | 拥有公开协议、View Model 和兼容性 | 不暴露公开 API |
+| Model Registry | 拥有外部模型连接的注册、凭据和 Agent 引用校验 | 不提供 Model CRUD；只消费 WorkSpec 中的连接快照 |
 | Event | 接收并持久化用户 ingress，直接提供 list/stream | 不接收、不代理、不查询公开 Event；只写自身产生的执行事实 |
 | Session 与资源 | 拥有全局事实、期望状态和对外读模型 | 仅缓存当前 placement 所需的执行快照 |
 | 调度 | 创建 Worker，并维护 Session 内的当前 placement | 不选择 Worker，也不修改全局 placement |
@@ -97,6 +98,7 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 ## 核心对象
 
 - **Agent**：可复用、可版本化的 Harness 配置。
+- **Model**：agentd 扩展的外部模型连接注册；资源 ID 供 Agent 引用，上游模型名和凭据不属于 Agent。
 - **Environment**：Sandbox 和运行环境需求，不等于一台正在运行的沙箱。
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
 - **Work**：Session 的长期执行实体。Work 可以冻结、迁移或恢复，但不能与某个进程或 Worker 绑定。
@@ -145,7 +147,9 @@ agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 
 `user.tool_confirmation(allow|deny)`，或在 self-hosted 执行形态发送 `user.tool_result`。这些 Event
 是公开投影；Attempt、Effect 和一次性授权归 Harness Adapter 与 Ledger，不进入 Control State。
 
-Agent 支持 model、system prompt 和 toolset；Environment 的 cloud 配置由当前 Sandbox Engine
+Agent 支持 model、system prompt 和 toolset；创建 Agent 前，部署者通过 agentd 的 `/v1/models`
+注册外部模型连接，Agent 的 model ID 引用该资源。Model Registry 是开源部署所需的控制面扩展，
+不是 agentd 提供的模型推理服务。Environment 的 cloud 配置由当前 Sandbox Engine
 实现。MCP、Skills、Vault、Memory Store、Resource mount、Outcome、Multi-agent、Deployment 和
 Webhook 不属于当前服务边界。无法提供语义保证的能力返回明确的 `unsupported_feature`，不接收后
 静默降级。

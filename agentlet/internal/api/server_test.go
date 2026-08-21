@@ -82,7 +82,10 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 			Harness: "fake", HarnessVersion: "test", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		},
 		Agent: executionapi.AgentSnapshot{
-			ID: "assigned-agent", Name: "assigned", ModelID: "test-model", Version: 1,
+			ID: "assigned-agent", Name: "assigned",
+			Model: executionapi.ModelSnapshot{
+				ID: "test-model", Provider: "anthropic", UpstreamID: "test-model", APIKey: "secret",
+			}, Version: 1,
 		},
 		Environment: executionapi.EnvironmentSnapshot{
 			ID: "assigned-environment", Config: map[string]any{"type": "cloud"},

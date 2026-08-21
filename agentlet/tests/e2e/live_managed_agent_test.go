@@ -49,7 +49,6 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
-		APIKey: "test", BaseURL: model.URL(),
 		RequestTimeout: 2 * time.Minute, OperationTimeout: 15 * time.Second, ToolTimeout: time.Minute,
 		Ledger: storage.Ledger, Checkpoints: storage.Checkpoints, Sandbox: sandboxEngine,
 	})
@@ -66,7 +65,11 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 		_ = executionService.Shutdown(shutdownCtx)
 	})
 	agent, err := executionService.CreateAgent(ctx, service.Agent{
-		Name: "integration-" + time.Now().UTC().Format("20060102150405.000000000"), ModelID: "claude-sonnet-4-6",
+		Name: "integration-" + time.Now().UTC().Format("20060102150405.000000000"),
+		Model: harness.Model{
+			ID: "integration-model", Provider: "anthropic", UpstreamID: "claude-sonnet-4-6",
+			BaseURL: model.URL(), APIKey: "test",
+		},
 		System: "For every request, call the bash tool with command pwd exactly once, then answer the user.",
 		Tools:  []map[string]any{{"type": "agent_toolset_20260401"}},
 	})

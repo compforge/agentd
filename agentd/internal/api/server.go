@@ -55,6 +55,9 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
 		request.JSON(consts.StatusOK, map[string]any{"ok": true})
 	})
+	engine.POST("/v1/models", s.createModel)
+	engine.GET("/v1/models", s.listModels)
+	engine.GET("/v1/models/:model_id", s.getModel)
 	engine.POST("/v1/agents", s.createAgent)
 	engine.GET("/v1/agents", s.listAgents)
 	engine.GET("/v1/agents/:agent_id", s.getAgent)

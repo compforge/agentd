@@ -103,7 +103,8 @@ Harness Adapter 是 Agent Loop 与两个稳定能力边界之间的桥梁：
 
 当前 `AgentGoRunner`：
 
-- 根据 Session 中固定的 model、system prompt 和 toolset 创建 AgentGo runtime；
+- 根据 WorkSpec 中已解析的外部 Model 连接，以及 Session 固定的 system prompt 和 toolset 创建
+  AgentGo runtime；Model 的注册和凭据保管不属于 Adapter；
 - 从 Harness State 恢复 AgentGo message，并在每次 message commit 后追加新 revision；
 - 使用 Agent Ledger 的 AgentGo Adapter 记录 Run、Model Attempt 和 Tool Attempt；
 - 通过 Sandbox Engine 组装 AgentGo tools；

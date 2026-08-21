@@ -21,7 +21,7 @@ type Agent struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	ModelID     string            `json:"model_id"`
+	Model       harness.Model     `json:"model"`
 	System      string            `json:"system"`
 	Tools       []map[string]any  `json:"tools"`
 	Metadata    map[string]string `json:"metadata"`
@@ -90,7 +90,7 @@ func executionSession(session Session) harness.Session {
 	return harness.Session{
 		ID: session.ID,
 		Agent: harness.Agent{
-			ID: session.Agent.ID, ModelID: session.Agent.ModelID, System: session.Agent.System,
+			ID: session.Agent.ID, Model: session.Agent.Model, System: session.Agent.System,
 			Tools: session.Agent.Tools, Version: session.Agent.Version,
 		},
 		EnvironmentID:  session.EnvironmentID,

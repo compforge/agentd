@@ -124,7 +124,7 @@ func startAgentGoModelE2EWithKey(
 	)
 	t.Cleanup(func() { backend.close(t) })
 	runner, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
-		APIKey: apiKey, BaseURL: modelURL, RequestTimeout: requestTimeout,
+		RequestTimeout:   requestTimeout,
 		OperationTimeout: 2 * time.Second, ToolTimeout: 2 * time.Second,
 		Ledger: backend.ledger, Checkpoints: backend.checkpoints, Sandbox: noopSandbox{},
 	})
@@ -134,6 +134,7 @@ func startAgentGoModelE2EWithKey(
 	events := service.NewEventLog(backend.ledger)
 	executionService := service.New(backend.resources, events, runner)
 	_, client := startSQLiteE2EServer(t, executionService, events)
+	client.model = harness.Model{Provider: "anthropic", BaseURL: modelURL, APIKey: apiKey}
 	return backend, client
 }
 

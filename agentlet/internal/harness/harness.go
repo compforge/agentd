@@ -29,10 +29,20 @@ func (e *RequiresActionError) Error() string {
 // Agent is the immutable execution definition an Agentlet needs for one turn.
 type Agent struct {
 	ID      string
-	ModelID string
+	Model   Model
 	System  string
 	Tools   []map[string]any
 	Version int64
+}
+
+// Model is the control-plane-resolved external model connection for one Work.
+// It is execution input, not an Agentlet-owned resource.
+type Model struct {
+	ID         string
+	Provider   string
+	UpstreamID string
+	BaseURL    string
+	APIKey     string
 }
 
 // Session is the minimal execution context derived from agentd Control State.

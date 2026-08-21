@@ -16,6 +16,10 @@ import (
 	"github.com/compforge/agentd/internal/executionapi"
 )
 
+func testModel(id string) harness.Model {
+	return harness.Model{ID: id, Provider: "anthropic", UpstreamID: id, APIKey: "secret"}
+}
+
 func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
 	events := NewEventLog(agentledger.NewMemoryEventStore())
 	event := NewTurnEvent("input-1", "agent.message", map[string]any{"content": "done"})
@@ -78,7 +82,10 @@ func TestApplyWorkSpecCachesSnapshotAndEnforcesAssignmentFence(t *testing.T) {
 			Harness: "recording", HarnessVersion: "test", CreatedAt: now, UpdatedAt: now,
 		},
 		Agent: executionapi.AgentSnapshot{
-			ID: "agent-1", Name: "test", ModelID: "model-1", Version: 1,
+			ID: "agent-1", Name: "test",
+			Model: executionapi.ModelSnapshot{
+				ID: "model-1", Provider: "anthropic", UpstreamID: "model-1", APIKey: "secret",
+			}, Version: 1,
 		},
 		Environment: executionapi.EnvironmentSnapshot{
 			ID: "env-1", Config: map[string]any{"type": "cloud"},
@@ -143,7 +150,9 @@ func TestUnsafeRecoveryPausesSessionForRequiredAction(t *testing.T) {
 	repository := newMemoryRepository()
 	events := NewEventLog(agentledger.NewMemoryEventStore())
 	application := New(repository, events, unsafeHarness{})
-	agent, err := application.CreateAgent(ctx, Agent{Name: "test", ModelID: "test-model"})
+	agent, err := application.CreateAgent(ctx, Agent{
+		Name: "test", Model: testModel("test-model"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +243,9 @@ func TestReconcileRetriesInputAfterWorkerPersistenceFailure(t *testing.T) {
 		defer cancel()
 		_ = application.Shutdown(shutdownCtx)
 	})
-	agent, err := application.CreateAgent(ctx, Agent{Name: "test", ModelID: "test-model"})
+	agent, err := application.CreateAgent(ctx, Agent{
+		Name: "test", Model: testModel("test-model"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +324,9 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	repository := newMemoryRepository()
 	events := NewEventLog(agentledger.NewMemoryEventStore())
 	seed := New(repository, events, recordingHarness{})
-	agent, err := seed.CreateAgent(ctx, Agent{Name: "test", ModelID: "test-model"})
+	agent, err := seed.CreateAgent(ctx, Agent{
+		Name: "test", Model: testModel("test-model"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

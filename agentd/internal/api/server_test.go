@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,6 +109,41 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		_ = server.Shutdown(shutdownCtx)
 		<-serveErr
 	})
+	modelSecret := "model-secret-that-must-not-be-returned"
+	modelBody, err := json.Marshal(map[string]any{
+		"id": "claude-sonnet-4-6", "provider": "anthropic", "api_key": modelSecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelResponse, err := http.Post(
+		"http://"+listener.Addr().String()+"/v1/models", "application/json", bytes.NewReader(modelBody),
+	)
+	if err != nil {
+		t.Fatalf("create Model through control plane: %v", err)
+	}
+	createdModelBody, err := io.ReadAll(modelResponse.Body)
+	modelResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelResponse.StatusCode != http.StatusOK || bytes.Contains(createdModelBody, []byte(modelSecret)) {
+		t.Fatalf("create Model response status=%d body=%s", modelResponse.StatusCode, createdModelBody)
+	}
+	for _, path := range []string{"/v1/models/claude-sonnet-4-6", "/v1/models"} {
+		response, err := http.Get("http://" + listener.Addr().String() + path)
+		if err != nil {
+			t.Fatalf("read Model resource %s: %v", path, err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusOK || bytes.Contains(body, []byte(modelSecret)) {
+			t.Fatalf("read Model %s status=%d body=%s", path, response.StatusCode, body)
+		}
+	}
 
 	client := anthropic.NewClient(
 		option.WithAPIKey("test"), option.WithBaseURL("http://"+listener.Addr().String()),
@@ -166,6 +202,10 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if installed.Session.ID != session.ID || installed.Agent.ID != agent.ID ||
 		installed.Environment.ID != environment.ID || installed.AssignmentID == "" {
 		t.Fatalf("installed WorkSpec = %#v", installed)
+	}
+	if installed.Agent.Model.ID != "claude-sonnet-4-6" ||
+		installed.Agent.Model.Provider != "anthropic" || installed.Agent.Model.APIKey != modelSecret {
+		t.Fatalf("installed Model snapshot = %#v", installed.Agent.Model)
 	}
 
 	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})

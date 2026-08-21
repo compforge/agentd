@@ -248,12 +248,16 @@ DB Record GC 只处理已经 `retired`、Observer 已确认 Pod 不存在且超�
 ## Connector
 
 Connector 是 Agentlet 执行面的唯一入口。它按 Session 读取 placement，从当前 Worker observation
-解析 endpoint，并在转发动作前幂等安装 `WorkSpec`：
+解析 endpoint，并在转发动作前解析 Agent 引用的 Model，再幂等安装 `WorkSpec`：
 
 ```text
-execution: Session ID → placement + fence → Worker → fresh endpoint → ensure WorkSpec → wake/interrupt/state
+execution: Session ID → Agent + Model → placement + fence → Worker → fresh endpoint → ensure WorkSpec → wake/interrupt/state
 Event:     agentd API → shared Managed Event Ledger Adapter
 ```
+
+Model 是控制面资源。公开写 API 接受 provider、上游模型名、base URL 和 API key；公开 create/get/list
+响应只返回 `api_key_configured`，不回显凭据。Agent 只持久化 Model 资源 ID。Connector 构造 WorkSpec
+时才读取完整 Model 并随内部请求发送给当前 Agentlet；这些连接信息不写入 Event 或 Ledger。
 
 用户 ingress 由 agentd 在公开 API 边界直接写入共享 Ledger；Event list/stream 也由 agentd 直接读取，
 不经过 Connector，不要求 Session 有 placement，更不要求存在健康 Worker。Agentlet 只写入它在执行中
