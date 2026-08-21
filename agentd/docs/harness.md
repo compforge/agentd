@@ -76,8 +76,13 @@ Adapter 恢复同一 input 时必须保证：
 1. 未提交原生 user message 时才重新注入 Prompt；
 2. 已提交 input 但尚未完成时从原生上下文继续；
 3. 已存在完整 assistant message 时只幂等补齐 Managed Event；
-4. 无法证明结果的 Tool Attempt 不自动重放，而是返回 `ErrUnsafeRecovery`，由 Agentlet 上报并交给
-   agentd 终止和对账。
+4. 无法证明结果且不满足自动重试策略的 Tool Attempt 不自动重放，而是返回带精确 tool use 的
+   `RequiresActionError`；Agentlet 将其投影为 `idle/requires_action`，并把后续
+   `user.tool_confirmation` / `user.tool_result` 作为新的 Harness 输入交回 Adapter 对账。
+
+allow 不是 Session 级“强制恢复”开关，而是绑定 `ActionID + AttemptID + confirmation Event ID` 的
+一次性能力。Adapter 必须在外部执行前创建新 Attempt、写入确认 Event ID，并将旧 Attempt 以
+`outcome_unknown` 事实终结；若该新 Attempt 再次悬空，恢复器必须再次请求用户动作。
 
 Checkpoint、Ledger 的使用顺序和失败窗口见 [agentlet.md](agentlet.md)。`Interrupt` 只停止活跃执行；
 能否释放 runtime 取决于 Adapter 是否已到达可恢复的持久化边界。

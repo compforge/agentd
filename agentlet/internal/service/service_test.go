@@ -138,7 +138,7 @@ func TestApplyWorkSpecCachesSnapshotAndEnforcesAssignmentFence(t *testing.T) {
 	}
 }
 
-func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
+func TestUnsafeRecoveryPausesSessionForRequiredAction(t *testing.T) {
 	ctx := context.Background()
 	repository := newMemoryRepository()
 	events := NewEventLog(agentledger.NewMemoryEventStore())
@@ -193,15 +193,22 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Control.Status != "terminated" || current.Control.ResumeRevision != 3 {
+	if current.Control.Status != "idle" || current.Control.ResumeRevision != 3 {
 		t.Fatalf("control state = %#v", current.Control)
 	}
 	pending, err := events.UnprocessedUserMessages(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0]["id"] != queued["id"] {
-		t.Fatalf("pending inputs = %#v, want only queued input", pending)
+	if len(pending) != 0 {
+		t.Fatalf("pending inputs = %#v, queued messages must wait behind required action", pending)
+	}
+	blocking, err := events.UnresolvedToolUses(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocking) != 1 || blocking[0]["id"] != "event_attempt-1" {
+		t.Fatalf("blocking tool uses = %#v", blocking)
 	}
 }
 
@@ -433,7 +440,9 @@ func (unsafeHarness) Run(
 	TurnInput,
 	func(ManagedEvent) error,
 ) (TurnResult, error) {
-	return TurnResult{ResumeRevision: 3}, fmt.Errorf("%w: pending tool call", ErrUnsafeRecovery)
+	return TurnResult{ResumeRevision: 3}, &harness.RequiresActionError{ToolUses: []harness.BlockingToolUse{{
+		ID: "event_attempt-1", Name: "write", Input: map[string]any{"path": "README.md"},
+	}}}
 }
 
 func (unsafeHarness) Interrupt(string) {}

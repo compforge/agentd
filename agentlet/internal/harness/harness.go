@@ -3,11 +3,30 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	managedevent "github.com/compforge/agentd/internal/event"
 )
 
 var ErrUnsafeRecovery = errors.New("automatic recovery is unsafe")
+
+type BlockingToolUse struct {
+	ID    string
+	Name  string
+	Input map[string]any
+}
+
+// RequiresActionError is a recoverable idle boundary, not a terminal Harness
+// failure. Its tool uses are projected through the Managed Agents Event API.
+type RequiresActionError struct {
+	ToolUses []BlockingToolUse
+}
+
+func (e *RequiresActionError) Error() string {
+	return fmt.Sprintf("%s: %d tool use(s) require a user decision", ErrUnsafeRecovery, len(e.ToolUses))
+}
+
+func (e *RequiresActionError) Unwrap() error { return ErrUnsafeRecovery }
 
 // Agent is the immutable execution definition an Agentlet needs for one turn.
 type Agent struct {
@@ -29,8 +48,17 @@ type Session struct {
 }
 
 type TurnInput struct {
-	ID   string
-	Text string
+	ID             string
+	Text           string
+	ToolResolution *ToolResolution
+}
+
+type ToolResolution struct {
+	ToolUseID   string
+	Decision    string
+	DenyMessage string
+	Content     any
+	IsError     bool
 }
 
 type TurnResult struct {

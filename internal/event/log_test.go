@@ -66,3 +66,53 @@ func TestLogProjectsEventsAcrossProcesses(t *testing.T) {
 		t.Fatalf("actors = %#v, want one stable ingress Actor and one execution Actor", view.Actors)
 	}
 }
+
+func TestPendingToolResolutionUsesInternalConsumptionMarker(t *testing.T) {
+	ctx := context.Background()
+	log := NewLog(agentledger.NewMemoryEventStore())
+	toolUse := New("agent.tool_use", map[string]any{"name": "write", "input": map[string]any{}})
+	toolUse["id"] = "event_attempt-1"
+	if err := log.AppendExecution(ctx, "session-1", toolUse); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.AppendExecution(ctx, "session-1", New("session.status_idle", map[string]any{
+		"stop_reason": map[string]any{"type": "requires_action", "event_ids": []string{"event_attempt-1"}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	queued := New("user.message", map[string]any{"content": []map[string]any{{"type": "text", "text": "later"}}})
+	queued["processed_at"] = nil
+	if err := log.AppendIngress(ctx, "session-1", queued); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := log.PendingInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("queued message crossed required action: %#v", pending)
+	}
+	confirmation := New("user.tool_confirmation", map[string]any{
+		"tool_use_id": "event_attempt-1", "result": "allow",
+	})
+	if err := log.AppendIngress(ctx, "session-1", confirmation); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = log.PendingInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0]["id"] != confirmation["id"] || pending[0]["processed_at"] == nil {
+		t.Fatalf("pending resolution = %#v", pending)
+	}
+	if err := log.MarkProcessed(ctx, "session-1", confirmation["id"].(string)); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = log.PendingInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0]["id"] != queued["id"] {
+		t.Fatalf("queued input was not released after resolution: %#v", pending)
+	}
+}

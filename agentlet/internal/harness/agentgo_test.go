@@ -119,7 +119,7 @@ func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
 	}
 	ledger := agentledger.NewMemoryEventStore()
 	recorder, err := agentledger.OpenRecorder(context.Background(), agentledger.RecorderOptions{
-		Store: ledger, SessionID: "session-1", RunID: "run-1", Actor: agentledger.NewActor("agent", "agentgo"),
+		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: agentledger.NewActor("agent", "agentgo"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +138,118 @@ func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
 	)
 	if !errors.Is(err, ErrUnsafeRecovery) {
 		t.Fatalf("error = %v, want ErrUnsafeRecovery", err)
+	}
+	var required *RequiresActionError
+	if !errors.As(err, &required) || len(required.ToolUses) != 1 || required.ToolUses[0].ID == "" {
+		t.Fatalf("required action = %#v", required)
+	}
+}
+
+func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
+	ctx := context.Background()
+	ledger := agentledger.NewMemoryEventStore()
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: ledger, SessionID: "session-1", RunID: "input/original", Actor: agentledger.NewActor("agent", "agentgo"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := recorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, map[string]any{
+		"tool_call_id": "call-1", "tool_name": "write", "arguments": `{"path":"README.md"}`,
+	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
+	input := TurnInput{ID: "confirmation-1", ToolResolution: &ToolResolution{
+		ToolUseID: "event_" + first.AttemptID, Decision: "allow",
+	}}
+	plan, err := runner.planToolResolution(ctx, "session-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RetryAuthorization.AttemptID != first.AttemptID || plan.RetryAuthorization.DecisionID != input.ID {
+		t.Fatalf("retry authorization = %#v", plan.RetryAuthorization)
+	}
+
+	retry, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{
+		"tool_call_id": "call-1", "tool_name": "write", "arguments": `{"path":"README.md"}`,
+		"recovery_decision_id": input.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.Record(ctx, agentledger.EventTypeAttemptFailed, first.AttemptID, map[string]any{
+		"error": map[string]any{"type": "outcome_unknown"}, "superseded_by_attempt_id": retry.AttemptID,
+	}, first.RequestedEventID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.planToolResolution(ctx, "session-1", input)
+	var required *RequiresActionError
+	if !errors.As(err, &required) || len(required.ToolUses) != 1 || required.ToolUses[0].ID != "event_"+retry.AttemptID {
+		t.Fatalf("reused authorization error = %v, required = %#v", err, required)
+	}
+}
+
+func TestAgentGoResumeRetriesReadToolBoundary(t *testing.T) {
+	input := agentgo.UserMsg("inspect something")
+	input.Metadata = map[string]any{agentdInputID: "input-1"}
+	toolCall := agentgo.Message{
+		Role: agentgo.RoleAssistant,
+		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
+			ID: "call-1", Name: "read", Args: json.RawMessage(`{}`),
+		})},
+		Timestamp: time.Now(),
+	}
+	ledger := agentledger.NewMemoryEventStore()
+	recorder, err := agentledger.OpenRecorder(context.Background(), agentledger.RecorderOptions{
+		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: agentledger.NewActor("agent", "agentgo"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := recorder.StartTurn(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readEffect := agentledger.Effect{Kind: agentledger.EffectKindRead, Idempotency: agentledger.IdempotencyNotApplicable}
+	if _, err := recorder.BeforeToolCallWithEffect(context.Background(), turn.ID, map[string]any{"tool_call_id": "call-1"}, readEffect); err != nil {
+		t.Fatal(err)
+	}
+	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
+
+	action, err := runner.resumeAction(
+		context.Background(), "session-1", []agentgo.AgentMessage{input, toolCall}, "input-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != resumeContinue {
+		t.Fatalf("action = %v, want resumeContinue", action)
+	}
+}
+
+func TestAgentGoToolEffectsAreConservative(t *testing.T) {
+	tests := []struct {
+		name      string
+		want      agentledger.Effect
+		retryable bool
+	}{
+		{name: "read", want: agentledger.Effect{Kind: agentledger.EffectKindRead, Idempotency: agentledger.IdempotencyNotApplicable}, retryable: true},
+		{name: "write", want: agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone}},
+		{name: "bash", want: agentledger.UnknownEffect()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			effect := agentGoToolEffect(agentgo.ToolCall{Name: test.name})
+			if effect != test.want || canRetryToolEffect(effect) != test.retryable {
+				t.Fatalf("effect=%#v retryable=%t", effect, canRetryToolEffect(effect))
+			}
+		})
 	}
 }
 

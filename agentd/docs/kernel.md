@@ -140,6 +140,11 @@ agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 
 官方 SDK 针对 agentd 的契约测试验证。Agentlet 的 `/internal/v1` 只服务 agentd，不属于公开兼容面；
 调用方只依赖 agentd API。
 
+当 Harness 在不明确的 Tool 副作用处 fail-closed 时，兼容层使用官方 Event 握手而不增加私有恢复
+接口：Agentlet 输出 `agent.tool_use` 和 `session.status_idle(requires_action)`；用户发送
+`user.tool_confirmation(allow|deny)`，或在 self-hosted 执行形态发送 `user.tool_result`。这些 Event
+是公开投影；Attempt、Effect 和一次性授权归 Harness Adapter 与 Ledger，不进入 Control State。
+
 Agent 支持 model、system prompt 和 toolset；Environment 的 cloud 配置由当前 Sandbox Engine
 实现。MCP、Skills、Vault、Memory Store、Resource mount、Outcome、Multi-agent、Deployment 和
 Webhook 不属于当前服务边界。无法提供语义保证的能力返回明确的 `unsupported_feature`，不接收后

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/compforge/agentd/agentlet/internal/harness"
 	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
 )
 
@@ -238,7 +239,7 @@ func (a *Service) Wake(ctx context.Context, sessionID string) error {
 	if session.Control.Status == "terminated" {
 		return fmt.Errorf("%w: session %s is terminated", ErrConflict, sessionID)
 	}
-	pending, err := a.events.UnprocessedUserMessages(ctx, sessionID)
+	pending, err := a.events.PendingInputs(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("list pending inputs: %w", err)
 	}
@@ -281,7 +282,7 @@ func (a *Service) Recover(ctx context.Context) error {
 		if active {
 			continue
 		}
-		pending, err := a.events.UnprocessedUserMessages(ctx, session.ID)
+		pending, err := a.events.PendingInputs(ctx, session.ID)
 		if err != nil {
 			return fmt.Errorf("list pending inputs for session %q: %w", session.ID, err)
 		}
@@ -370,7 +371,7 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 		if a.ctx.Err() != nil {
 			return
 		}
-		pending, err := a.events.UnprocessedUserMessages(a.ctx, sessionID)
+		pending, err := a.events.PendingInputs(a.ctx, sessionID)
 		if err != nil {
 			a.handleWorkerFailure(sessionID, fmt.Errorf("list pending inputs: %w", err))
 			return
@@ -483,7 +484,7 @@ func (a *Service) process(
 
 	var outputErr error
 	var outputMu sync.Mutex
-	result, runErr := a.harness.Run(ctx, executionSession(session), TurnInput{ID: inputID, Text: textContent(input)}, func(event ManagedEvent) error {
+	result, runErr := a.harness.Run(ctx, executionSession(session), turnInput(input), func(event ManagedEvent) error {
 		err := a.events.AppendExecution(ctx, sessionID, event)
 		outputMu.Lock()
 		if outputErr == nil {
@@ -508,6 +509,39 @@ func (a *Service) process(
 	resume := resident.Snapshot().Spec.Session
 	session.Control.ResumeRef = resume.ResumeRef
 	session.Control.ResumeRevision = resume.ResumeRevision
+	var requiresAction *harness.RequiresActionError
+	if errors.As(runErr, &requiresAction) {
+		eventIDs := make([]string, 0, len(requiresAction.ToolUses))
+		for _, toolUse := range requiresAction.ToolUses {
+			value := NewManagedEvent("agent.tool_use", map[string]any{
+				"name": toolUse.Name, "input": toolUse.Input, "evaluated_permission": "ask",
+			})
+			value["id"] = toolUse.ID
+			if err := a.events.AppendExecution(ctx, sessionID, value); err != nil {
+				return false, fmt.Errorf("record required tool action: %w", err)
+			}
+			eventIDs = append(eventIDs, toolUse.ID)
+		}
+		if len(eventIDs) == 0 {
+			return false, fmt.Errorf("unsafe recovery did not identify a tool use: %w", runErr)
+		}
+		if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.status_idle", map[string]any{
+			"stop_reason": map[string]any{"type": "requires_action", "event_ids": eventIDs},
+		})); err != nil {
+			return false, fmt.Errorf("record required action state: %w", err)
+		}
+		transition(&session, "idle")
+		if err := a.repository.PutSession(ctx, session); err != nil {
+			return false, fmt.Errorf("persist requires-action idle state: %w", err)
+		}
+		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
+			return false, fmt.Errorf("mark unsafe input processed: %w", err)
+		}
+		a.logger.WarnContext(ctx, "paused Session for required tool action",
+			"session_id", sessionID, "input_event_id", inputID,
+			"resume_revision", session.Control.ResumeRevision, "tool_use_count", len(eventIDs))
+		return false, nil
+	}
 	if errors.Is(runErr, ErrUnsafeRecovery) {
 		if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "unsafe_recovery", "message": runErr.Error()},
@@ -524,11 +558,8 @@ func (a *Service) process(
 		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
 			return false, fmt.Errorf("mark unsafe input processed: %w", err)
 		}
-		a.logger.WarnContext(ctx, "terminated Session after unsafe recovery",
-			"session_id", sessionID, "input_event_id", inputID,
-			"resume_revision", session.Control.ResumeRevision)
-		// Termination applies to the whole session. Leave later inputs pending for
-		// manual reconciliation instead of letting this worker revive the session.
+		a.logger.ErrorContext(ctx, "terminated Session at unrecoverable Harness boundary",
+			"session_id", sessionID, "input_event_id", inputID, "error", runErr)
 		return false, nil
 	}
 
@@ -582,6 +613,27 @@ func textContent(event ManagedEvent) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func turnInput(event ManagedEvent) TurnInput {
+	id, _ := event["id"].(string)
+	input := TurnInput{ID: id, Text: textContent(event)}
+	eventType, _ := event["type"].(string)
+	if eventType != "user.tool_confirmation" && eventType != "user.tool_result" {
+		return input
+	}
+	resolution := &harness.ToolResolution{}
+	resolution.ToolUseID, _ = event["tool_use_id"].(string)
+	if eventType == "user.tool_confirmation" {
+		resolution.Decision, _ = event["result"].(string)
+		resolution.DenyMessage, _ = event["deny_message"].(string)
+	} else {
+		resolution.Decision = "result"
+		resolution.Content = event["content"]
+		resolution.IsError, _ = event["is_error"].(bool)
+	}
+	input.ToolResolution = resolution
+	return input
 }
 
 func newID(prefix string) string {
