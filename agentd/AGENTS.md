@@ -40,7 +40,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
 │   │   └── worker/
 │   │       ├── controllers.go # Worker 控制环组合与启动
-│   │       ├── observer/      # 周期拉取 Worker Pod 事实并持久化 observation
+│   │       ├── observer/      # 消费 Pod Informer cache 并持久化 Worker observation
 │   │       ├── reconciler/    # Worker row → Pod 与预热容量收敛
 │   │       ├── gc/            # Pod 与终态记录的独立回收
 │   │       └── k8s/           # Kubernetes Client 与 PodSnapshot substrate
@@ -76,6 +76,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Control State 中的 observation、Session placement 和容量做无 I/O 决策，不访问 Kubernetes 或
    Agentlet。Session Reconciler 是 placement 动作的唯一 owner；Worker Reconciler 实现 Worker Pod 并维护
    预热下限。两个 Reconciler 都可被其它组件即时通知，但通知只加速基于 DB 的收敛，不承载状态。
+   Worker Pod Informer 同样只触发 Observer 从 cache 重算，不把事件对象当作额外状态源。
    Connector 只按 placement fence 转发 WorkSpec、wake、interrupt 和状态读取。公开 Event 由 agentd
    直接读写共享 Ledger。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt

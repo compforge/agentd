@@ -49,7 +49,7 @@ Sandbox Control Plane，Sandbox 粘滞、恢复、容量和物理 placement 都�
 
 | 角色 | 职责 | 不负责 |
 |---|---|---|
-| Observer | 周期观察 Worker Pod，持久化存在、Ready、endpoint 等事实 | 创建资源、分配 Session |
+| Observer | 消费 Pod Informer cache，持久化存在、Ready、endpoint 等事实 | 创建资源、分配 Session |
 | Scheduler | 基于 Worker facts、容量与 Assignment 做纯 placement 决策 | 访问数据库/K8s、触发扩容 |
 | Session Reconciler | 把 Event demand 收敛为 Session placement，必要时发布 Worker row | 创建 Pod、宣告 Ready |
 | Worker Reconciler | 把 Worker row 实现为 Pod，并维护预热下限 | 读取 Event、决定 Session placement |

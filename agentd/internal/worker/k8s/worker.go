@@ -35,21 +35,28 @@ func (c *Client) ListAgentletPods(ctx context.Context) ([]PodSnapshot, error) {
 	}
 	snapshots := make([]PodSnapshot, 0, len(pods.Items))
 	for i := range pods.Items {
-		pod := &pods.Items[i]
-		snapshots = append(snapshots, PodSnapshot{
-			ID: pod.Labels[WorkerIDLabel], UID: string(pod.UID), Name: pod.Name, IP: pod.Status.PodIP,
-			Managed: pod.Labels[ManagedLabel] == "true",
-			Phase:   pod.Status.Phase, Ready: pod.DeletionTimestamp == nil && podReady(pod),
-			Unschedulable: podUnschedulable(pod),
-		})
+		snapshots = append(snapshots, snapshotFromPod(&pods.Items[i]))
 	}
+	sortPodSnapshots(snapshots)
+	return snapshots, nil
+}
+
+func snapshotFromPod(pod *corev1.Pod) PodSnapshot {
+	return PodSnapshot{
+		ID: pod.Labels[WorkerIDLabel], UID: string(pod.UID), Name: pod.Name, IP: pod.Status.PodIP,
+		Managed: pod.Labels[ManagedLabel] == "true",
+		Phase:   pod.Status.Phase, Ready: pod.DeletionTimestamp == nil && podReady(pod),
+		Unschedulable: podUnschedulable(pod),
+	}
+}
+
+func sortPodSnapshots(snapshots []PodSnapshot) {
 	sort.Slice(snapshots, func(i, j int) bool {
 		if snapshots[i].ID == snapshots[j].ID {
 			return snapshots[i].Name < snapshots[j].Name
 		}
 		return snapshots[i].ID < snapshots[j].ID
 	})
-	return snapshots, nil
 }
 
 func (c *Client) EnsureWorkerPod(

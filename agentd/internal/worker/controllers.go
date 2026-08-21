@@ -105,7 +105,8 @@ func New(
 }
 
 func (c *Controllers) AttachObserver(sink observer.Sink, notifier observer.Notifier) error {
-	source, err := observer.NewKubernetesSource(c.kubernetesClient, c.config.Port, c.config.Capacity)
+	podInformer := c.kubernetesClient.NewAgentletPodInformer()
+	source, err := observer.NewKubernetesSource(podInformer, c.config.Port, c.config.Capacity)
 	if err != nil {
 		return err
 	}

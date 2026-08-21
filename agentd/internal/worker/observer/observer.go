@@ -27,8 +27,9 @@ type Config struct {
 	Logger         *slog.Logger
 }
 
-// Observer owns the periodic source-to-Worker reconciliation loop. It only
-// records observed facts; Kubernetes owns Pod lifecycle and Scheduler owns
+// Observer owns the informer-driven source-to-Worker reconciliation loop. A
+// periodic cache scan remains the missed-event and failed-write safety net. It
+// only records observed facts; Kubernetes owns Pod lifecycle and Scheduler owns
 // placement decisions.
 type Observer struct {
 	source         Source
@@ -37,6 +38,7 @@ type Observer struct {
 	interval       time.Duration
 	requestTimeout time.Duration
 	logger         *slog.Logger
+	notifications  chan struct{}
 }
 
 func New(source Source, sink Sink, notifier Notifier, config Config) (*Observer, error) {
@@ -52,10 +54,27 @@ func New(source Source, sink Sink, notifier Notifier, config Config) (*Observer,
 	return &Observer{
 		source: source, sink: sink, notifier: notifier, interval: config.Interval,
 		requestTimeout: config.RequestTimeout, logger: config.Logger,
+		notifications: make(chan struct{}, 1),
 	}, nil
 }
 
+// Notify requests an early cache reconciliation without blocking the informer
+// callback. Worker facts remain in the informer cache, so bursts may coalesce.
+func (o *Observer) Notify() {
+	select {
+	case o.notifications <- struct{}{}:
+	default:
+	}
+}
+
 func (o *Observer) Run(ctx context.Context) {
+	if err := o.source.Start(ctx, o.Notify); err != nil {
+		if ctx.Err() == nil {
+			o.logger.ErrorContext(ctx, "start Worker Pod informer", "error", err)
+		}
+		return
+	}
+	o.logger.InfoContext(ctx, "Worker Pod informer cache synced")
 	o.reconcileWithTimeout(ctx)
 	ticker := time.NewTicker(o.interval)
 	defer ticker.Stop()
@@ -64,6 +83,8 @@ func (o *Observer) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			o.reconcileWithTimeout(ctx)
+		case <-o.notifications:
 			o.reconcileWithTimeout(ctx)
 		}
 	}

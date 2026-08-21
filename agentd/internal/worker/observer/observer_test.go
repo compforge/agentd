@@ -14,7 +14,26 @@ type fakeSource struct {
 	workers []WorkerSnapshot
 }
 
+func (fakeSource) Start(context.Context, func()) error { return nil }
+
 func (f fakeSource) ListWorkers(context.Context) ([]WorkerSnapshot, error) { return f.workers, nil }
+
+type eventSource struct {
+	started chan struct{}
+	calls   chan struct{}
+	notify  func()
+}
+
+func (f *eventSource) Start(_ context.Context, notify func()) error {
+	f.notify = notify
+	close(f.started)
+	return nil
+}
+
+func (f *eventSource) ListWorkers(context.Context) ([]WorkerSnapshot, error) {
+	f.calls <- struct{}{}
+	return nil, nil
+}
 
 type fakeSink struct {
 	workers map[string]model.Worker
@@ -60,6 +79,37 @@ func TestReconcileUpdatesPresentAndMissingWorkers(t *testing.T) {
 	assertStatus(t, sink.workers["uid-old"], false, false)
 	if got := notifier.calls.Load(); got != 2 {
 		t.Fatalf("Session Reconciler notifications = %d, want 2", got)
+	}
+}
+
+func TestInformerEventTriggersReconcileBeforeFallbackScan(t *testing.T) {
+	source := &eventSource{started: make(chan struct{}), calls: make(chan struct{}, 2)}
+	controller, err := New(source, &fakeSink{workers: map[string]model.Worker{}}, nil, Config{
+		Interval: time.Hour, RequestTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go controller.Run(ctx)
+	select {
+	case <-source.started:
+	case <-time.After(time.Second):
+		t.Fatal("Worker informer did not start")
+	}
+	waitForReconcile(t, source.calls)
+
+	source.notify()
+	waitForReconcile(t, source.calls)
+}
+
+func waitForReconcile(t *testing.T, calls <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Worker observation reconcile")
 	}
 }
 
