@@ -15,6 +15,7 @@ const (
 	ReasonAvailable  Reason = "available"
 	ReasonNoCapacity Reason = "no_capacity"
 
+	currentAssignmentBonus  = 20
 	lastWorkerAffinityBonus = 10
 )
 
@@ -39,9 +40,10 @@ type Decision struct {
 }
 
 type Score struct {
-	CapacityHeadroom int
-	LastWorker       int
-	Total            int
+	CapacityHeadroom  int
+	CurrentAssignment int
+	LastWorker        int
+	Total             int
 }
 
 type placementCandidate struct {
@@ -60,30 +62,27 @@ func New(observationMaxAge time.Duration) *Scheduler {
 	return &Scheduler{observationMaxAge: observationMaxAge}
 }
 
-// Schedule retains a schedulable existing placement. Unbound Sessions score
-// every admitted candidate by capacity headroom and a small last-Worker bonus;
-// affinity reduces needless movement without overriding material load skew.
+// Schedule scores every admitted candidate by projected capacity headroom.
+// The current Assignment and last Worker add decreasing soft-affinity bonuses;
+// both reduce needless movement without overriding material load skew.
 func (s *Scheduler) Schedule(
 	now time.Time,
 	existingWorkerID string,
 	lastWorkerID string,
 	candidates []Candidate,
 ) Decision {
-	if existingWorkerID != "" {
-		for _, candidate := range candidates {
-			if candidate.WorkerID == existingWorkerID && s.schedulable(now, candidate) {
-				return Decision{WorkerID: existingWorkerID, Reason: ReasonExisting}
-			}
-		}
-	}
 	admitted := make([]placementCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if !s.schedulable(now, candidate) || candidate.AssignedCount >= int64(candidate.Capacity) {
+		if !s.schedulable(now, candidate) || candidate.Capacity <= 0 {
+			continue
+		}
+		isCurrent := candidate.WorkerID == existingWorkerID
+		if !isCurrent && candidate.AssignedCount >= int64(candidate.Capacity) {
 			continue
 		}
 		admitted = append(admitted, placementCandidate{
 			workerID: candidate.WorkerID,
-			score:    scoreCandidate(lastWorkerID, candidate),
+			score:    scoreCandidate(existingWorkerID, lastWorkerID, candidate),
 		})
 	}
 	if len(admitted) == 0 {
@@ -96,20 +95,31 @@ func (s *Scheduler) Schedule(
 		return admitted[i].workerID < admitted[j].workerID
 	})
 	reason := ReasonAvailable
-	if admitted[0].score.LastWorker > 0 {
+	if admitted[0].score.CurrentAssignment > 0 {
+		reason = ReasonExisting
+	} else if admitted[0].score.LastWorker > 0 {
 		reason = ReasonAffinity
 	}
 	return Decision{WorkerID: admitted[0].workerID, Reason: reason, Score: admitted[0].score}
 }
 
-func scoreCandidate(lastWorkerID string, candidate Candidate) Score {
-	available := int64(candidate.Capacity) - candidate.AssignedCount
+func scoreCandidate(existingWorkerID, lastWorkerID string, candidate Candidate) Score {
+	projectedAssigned := candidate.AssignedCount
+	if candidate.WorkerID != existingWorkerID {
+		projectedAssigned++
+	}
+	available := int64(candidate.Capacity) - projectedAssigned
+	if available < 0 {
+		available = 0
+	}
 	headroom := int(available * 100 / int64(candidate.Capacity))
 	score := Score{CapacityHeadroom: headroom}
-	if candidate.WorkerID == lastWorkerID {
+	if candidate.WorkerID == existingWorkerID {
+		score.CurrentAssignment = currentAssignmentBonus
+	} else if candidate.WorkerID == lastWorkerID {
 		score.LastWorker = lastWorkerAffinityBonus
 	}
-	score.Total = score.CapacityHeadroom + score.LastWorker
+	score.Total = score.CapacityHeadroom + score.CurrentAssignment + score.LastWorker
 	return score
 }
 

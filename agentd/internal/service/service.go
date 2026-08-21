@@ -115,7 +115,7 @@ func (a *Service) ListWorkers(ctx context.Context) ([]model.Worker, error) {
 // free Work capacity. The transaction locks the schedulable Worker set so two
 // concurrent schedulers cannot consume the same final slot.
 //
-// +spec=`A Session reuses its live Assignment; otherwise schedulable candidates are scored by capacity headroom plus a small last-Worker affinity bonus, affinity never reserves capacity, and no-capacity demand is durable before Lifecycler is notified`
+// +spec=`Schedulable candidates are scored by projected capacity headroom plus decreasing current-Assignment and last-Worker affinity bonuses; affinity never reserves capacity or prevents movement, and no-capacity demand is durable before Lifecycler is notified`
 // +link=agentd/docs/agentd.md
 func (a *Service) Assign(ctx context.Context, sessionID string) (model.Assignment, error) {
 	if strings.TrimSpace(sessionID) == "" {

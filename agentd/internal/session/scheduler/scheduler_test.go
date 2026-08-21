@@ -5,14 +5,25 @@ import (
 	"time"
 )
 
-func TestScheduleRetainsExistingWorker(t *testing.T) {
+func TestSchedulePrefersCurrentWorkerAtEqualProjectedLoad(t *testing.T) {
 	now := time.Now().UTC()
 	decision := New(time.Minute).Schedule(now, "worker-b", "", []Candidate{
-		readyCandidate("worker-a", now, 0, 4),
-		readyCandidate("worker-b", now, 4, 4),
+		readyCandidate("worker-a", now, 1, 4),
+		readyCandidate("worker-b", now, 2, 4),
 	})
 	if decision.WorkerID != "worker-b" || decision.Reason != ReasonExisting {
 		t.Fatalf("Schedule() = %+v, want existing worker-b", decision)
+	}
+}
+
+func TestScheduleMovesFromCurrentWorkerWhenHeadroomOutweighsAffinity(t *testing.T) {
+	now := time.Now().UTC()
+	decision := New(time.Minute).Schedule(now, "worker-b", "worker-b", []Candidate{
+		readyCandidate("worker-a", now, 0, 4),
+		readyCandidate("worker-b", now, 4, 4),
+	})
+	if decision.WorkerID != "worker-a" || decision.Reason != ReasonAvailable {
+		t.Fatalf("Schedule() = %+v, want available worker-a", decision)
 	}
 }
 

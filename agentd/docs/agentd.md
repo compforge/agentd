@@ -114,28 +114,28 @@ Event 是 durable demand，内存 notification 只降低延迟。多个 agentd �
 Service 在数据库事务中锁定 Worker，加载 DB 中的 Worker observation、当前 Session binding 和绑定数，再把 typed candidates
 交给 Scheduler。Scheduler 是无 I/O 的纯 placement 策略：
 
-1. 保留仍可调度的既有 Assignment；
-2. Assignment 已释放时，对通过硬过滤的候选按 capacity headroom 加 `last_worker_id` 小幅 affinity
-   bonus 评分；
-3. headroom 差距足够大时允许选择其它 Worker，不能为了粘滞长期堆高单点负载；
+1. 对通过硬过滤的候选计算迁移后的 projected capacity headroom；
+2. 当前 Assignment 和 `last_worker_id` 分别提供由高到低的 affinity bonus，二者都是软约束；
+3. headroom 差距足够大时允许选择其它 Worker，当前 Assignment 不能为了粘滞长期堆高单点负载；
 4. 相同分数按 Worker ID 保持确定顺序；
 5. 没有候选时返回 `no capacity`，不直接创建 Pod。
 
 ```text
 Session 需要执行
-  ├─ live Assignment ───────────────► reuse
-  └─ missing / stale Assignment
-       → load and lock candidates
-       → Scheduler decision
-       ├─ hard filter: active + Ready + fresh + free capacity
-       ├─ score: capacity headroom + last Worker affinity
-       │    └─ winner → update worker_id + last_worker_id + assignment_id
-       └─ no capacity → retain rescheduling Session and wake Lifecycler
+  → load and lock candidates
+  → Scheduler decision
+  ├─ hard filter: active + Ready + fresh + placement capacity
+  ├─ score: projected capacity headroom
+  │        + current Assignment affinity
+  │        + last Worker affinity
+  │    ├─ current Worker wins → reuse Assignment
+  │    └─ other Worker wins → update worker_id + last_worker_id + assignment_id
+  └─ no capacity → retain rescheduling Session and wake Lifecycler
 ```
 
-Affinity 只减少 Harness State 恢复、模型调用重做和工具副作用对账成本，不参考 Sandbox locality。
-Sandbox 的粘滞和物理位置由 Sandbox Engine 自己屏蔽；旧 Worker 不可用或已满时，Scheduler 直接选择
-其它候选，`last_worker_id` 不能阻止漂移或占住容量。
+两级 Affinity 都只减少 Harness State 恢复、模型调用重做和工具副作用对账成本，不参考 Sandbox
+locality。Sandbox 的粘滞和物理位置由 Sandbox Engine 自己屏蔽；旧 Worker 不可用、负载明显更高或已满
+时，Scheduler 可以选择其它候选，当前 Assignment 和 `last_worker_id` 都不能阻止漂移或占住容量。
 
 ## Worker Lifecycler
 
