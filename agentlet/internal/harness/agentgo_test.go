@@ -136,8 +136,8 @@ func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
 	_, err = runner.resumeAction(
 		context.Background(), "session-1", []agentgo.AgentMessage{input, toolCall}, "input-1",
 	)
-	if !errors.Is(err, ErrUnsafeRecovery) {
-		t.Fatalf("error = %v, want ErrUnsafeRecovery", err)
+	if errors.Is(err, ErrUnsafeRecovery) {
+		t.Fatalf("required user action was classified as terminal unsafe recovery: %v", err)
 	}
 	var required *RequiresActionError
 	if !errors.As(err, &required) || len(required.ToolUses) != 1 || required.ToolUses[0].ID == "" {

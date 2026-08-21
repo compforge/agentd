@@ -23,10 +23,8 @@ type RequiresActionError struct {
 }
 
 func (e *RequiresActionError) Error() string {
-	return fmt.Sprintf("%s: %d tool use(s) require a user decision", ErrUnsafeRecovery, len(e.ToolUses))
+	return fmt.Sprintf("user action required for %d tool use(s)", len(e.ToolUses))
 }
-
-func (e *RequiresActionError) Unwrap() error { return ErrUnsafeRecovery }
 
 // Agent is the immutable execution definition an Agentlet needs for one turn.
 type Agent struct {
