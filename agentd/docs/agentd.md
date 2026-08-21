@@ -67,8 +67,10 @@ Worker 和 Session 有独立 Observer。两者只采集事实，不做 placement
 ### Worker Observer
 
 agentd 创建的 Worker Pod 必须同时带有 `agentd.compforge.dev/managed=true` 和
-`agentd.compforge.dev/worker-id=<worker UUID>`。Observer 通过 `agentd/internal/worker/k8s` 周期性列出这些
-Pod，并把事实写入 Worker。Agentlet 不主动注册或发送 heartbeat，也不存在外部 Worker 写入 API。
+`agentd.compforge.dev/worker-id=<worker UUID>`。`agentd/internal/worker/k8s` 用带 label selector 的 Pod
+Informer 维护本地 cache；Add、Update、Delete 事件只向 Worker Observer 发送可合并通知，Observer 每轮
+从 cache 重建全量快照并把事实写入 Worker。低频 cache 扫描负责重试失败写入和兜底收敛。Agentlet
+不主动注册或发送 heartbeat，也不存在外部 Worker 写入 API。
 
 Worker identity 不等于 Pod UID。Pod 名、UID、IP 和 Ready 都是 `observer_status` 中的外部事实。
 Kubernetes 可以重启 Pod 内容器；Pod 消失则旧 Worker 退役，Session Reconciler 必要时发布新的 Worker
@@ -77,7 +79,8 @@ Session 按普通 checkpoint 恢复路径收敛。agentd 不实现 Worker 原地
 
 Scheduler 只消费 observation 足够新、`exists=true`、`ready=true` 且具有 endpoint 的 Worker。
 Observer status 与 lifecycle phase 正交：前者描述 Kubernetes 里的外部事实，后者描述 agentd 正在
-采取的动作。Kubernetes substrate 只提供 `PodSnapshot`，不能成为第二个事实写入者。
+采取的动作。Informer cache 只提供 `PodSnapshot`，Worker Observer 仍是事实的唯一写入者；Worker
+Reconciler 创建前的 Pending/Unschedulable 背压检查则直接读取 Kubernetes，不使用可能滞后的 cache。
 
 ### Session Observer
 

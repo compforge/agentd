@@ -21,10 +21,12 @@ type WorkerSnapshot struct {
 }
 
 type Source interface {
+	Start(context.Context, func()) error
 	ListWorkers(context.Context) ([]WorkerSnapshot, error)
 }
 
 type podSource interface {
+	Start(context.Context, func()) error
 	ListAgentletPods(context.Context) ([]k8s.PodSnapshot, error)
 }
 
@@ -32,6 +34,10 @@ type KubernetesSource struct {
 	pods     podSource
 	port     int
 	capacity int
+}
+
+func (s *KubernetesSource) Start(ctx context.Context, notify func()) error {
+	return s.pods.Start(ctx, notify)
 }
 
 func NewKubernetesSource(pods podSource, port, capacity int) (*KubernetesSource, error) {

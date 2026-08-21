@@ -27,6 +27,8 @@ type podSource struct {
 	destroyed []string
 }
 
+func (*podSource) Start(context.Context, func()) error { return nil }
+
 func (s *podSource) ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error) {
 	return s.pods, nil
 }
