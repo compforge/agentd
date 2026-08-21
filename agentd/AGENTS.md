@@ -22,7 +22,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   └── agentlet/              # 节点执行二进制入口
 ├── deploy/
 │   ├── docker/                 # agentd 与 agentlet 多阶段镜像构建
-│   └── k8s/                    # Helm Chart、Worker 双容器模板与弹性设计
+│   └── k8s/                    # Quick Start Helm Chart、Worker 模板与弹性设计
 ├── internal/
 │   ├── event/                  # 共享 Ledger 上的 Managed Event 投影与写入边界
 │   ├── executionapi/           # agentd → Agentlet 内部执行协议
@@ -79,8 +79,9 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。
-6. AgentGo 运行在 Agentlet 进程。Sandbox Engine 作为可替换的 sidecar 或远端服务运行，不与
-   AgentGo 共享调用栈或本地文件路径。
+6. AgentGo 运行在 Agentlet 进程。Agentlet 根据稳定 Session 身份调用 Sandbox Engine；agentd 不持有
+   SandboxKey、实例引用或物理位置。Quick Start 可以共置 sidecar，正式部署由独立 Sandbox Control
+   Plane 保证执行环境可用。
 7. 所有外部 HTTP、模型和存储调用显式配置超时；子进程退出和服务关闭必须收敛
    正在执行的 Session。
 
@@ -91,7 +92,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 - `docs/agentlet.md` — Agentlet 执行、Checkpoint / Ledger 接入与恢复顺序
 - `docs/harness.md` — Harness 执行边界、适配契约、恢复语义与 AgentGo 实现
 - `docs/sandbox-engine.md` — Sandbox Engine 能力契约、资源生命周期与隔离要求
-- `../deploy/k8s/README.md` — Helm 部署形态、Worker 双容器模板与扩缩容流程
+- `../deploy/k8s/README.md` — Quick Start Helm 形态、Worker 模板与扩缩容流程
 - `https://platform.claude.com/docs/en/managed-agents/overview` — 上游 API 概念与行为基线
 - `https://github.com/opensandbox-group/OpenSandbox/tree/main/specs` — Sandbox Lifecycle 与 Execd 设计参考
 - `https://github.com/compforge/agent-ledger/tree/main/spec` — Ledger 事件、追加与 Adapter 契约

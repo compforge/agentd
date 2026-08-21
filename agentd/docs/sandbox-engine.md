@@ -50,8 +50,12 @@ Sandbox Engine 不直接写 Ledger，也不根据 Tool 结果决定是否重试�
 Sandbox 的可恢复性属于 Sandbox Engine 的能力边界。agentd 只决定 Session 何时需要继续执行，并把
 稳定的 Session 身份随 WorkSpec 传给 Agentlet；Agentlet 作为 caller 将其解释为 `SandboxKey`。
 Workspace 如何持久化、Sandbox instance 如何重建或迁移、恢复后如何重新解析 endpoint，均由 Engine
-按 key 保证。真实环境接入 sandctl 等具备控制面与持久化能力的 Engine 时，agentd 直接使用其能力，
-不再实现一套 sandbox 恢复控制器。
+按 key 保证。真实环境接入 sandctl 等具备控制面与持久化能力的 Engine 时，Agentlet 直接通过 Adapter
+使用其能力，agentd 不实现一套 sandbox 恢复控制器。
+
+Agent Control Plane 与 Sandbox Control Plane 独立调度。agentd 只为减少 Harness 恢复、模型调用重做
+和工具副作用对账而尽量保留现有 Assignment，不读取 Sandbox locality，也不因 Bed、容器或虚拟机位置
+选择 Worker。Sandbox Engine 必须向 Agentlet 屏蔽物理位置变化，并按 key 保证执行环境可用。
 
 最小 Kubernetes 部署把 Hostel 与 Agentlet 放入同一个 Worker Pod，只是为了在没有外部 Sandbox
 服务时提供开箱即用的 Engine。这个部署便利不改变所有权边界，也不能据此要求 agentd 在 Worker Pod
@@ -63,15 +67,15 @@ OpenSandbox 将控制面和执行面分开，这个划分帮助 agentd 明确自
 
 | 协议面 | OpenSandbox 契约 | agentd 使用方式 |
 | --- | --- | --- |
-| Lifecycle | 创建、查询、暂停、恢复、续期和删除 Sandbox；从 image 或 snapshot 启动 | agentd 决定资源策略，Agentlet 通过 Engine 执行并上报绑定 |
+| Lifecycle | 创建、查询、暂停、恢复、续期和删除 Sandbox；从 image 或 snapshot 启动 | Sandbox Control Plane 决定资源策略，Agentlet 只按 key 调用 Engine |
 | Runtime configuration | entrypoint、环境变量、CPU/内存/GPU、volume、network policy、TTL 和扩展字段 | Environment 提供不可变需求，Engine Adapter 转换为创建参数 |
 | Endpoint | 解析 Sandbox 内端口的访问地址和访问凭据 | Adapter 解析 Execd 或其它服务 endpoint，不把地址持久化为 Session 身份 |
 | Execd | 命令、文件、目录、执行上下文、SSE 输出和系统指标 | Harness 的 Tool/Workspace API 通过 Engine 调用 |
 
 OpenSandbox 的 Sandbox 状态以 `Pending`、`Running`、`Pausing`、`Paused`、`Resuming`、`Stopping`、
 `Terminated` 和 `Failed` 表达资源生命周期。它们不同于 agentd Session 的 `running`、`idle`、
-`rescheduling` 和 `terminated`：前者描述计算资源，后者描述长期 Agent 是否应该执行。Controller 可以
-根据策略协调两者，但不能把 Sandbox 状态直接投影成 Session 状态。
+`rescheduling` 和 `terminated`：前者描述计算资源，后者描述长期 Agent 是否应该执行。Sandbox 状态
+不能直接投影成 Session 状态，也不能成为 agentd Worker 调度事实。
 
 agentd 不把 Sandbox 实现作为自身差异化能力。当 OpenSandbox 形成稳定、广泛采用且能够表达 agentd
 所需语义的行业规范时，应优先兼容规范并复用其 SDK，而不是继续扩展私有协议。内部
@@ -92,7 +96,7 @@ Control Plane 与 Harness。所有实现使用同一组 Engine 契约测试验�
 `agentlet/internal/sandbox/engine.Engine` 暴露 Agentlet 当前需要的最小能力。以下操作中的 sandbox
 参数都是 Engine 契约定义、caller 传入和解释的 `SandboxKey`，不是 Engine 分配的 resource ID：
 
-1. **可用性**：`Start` 确认 Engine 服务可用；`Ensure` 幂等地创建、解析或重新连接 Sandbox。
+1. **可用性**：`Ensure` 幂等地创建、解析或重新连接 Sandbox；调用成功即表示当前 key 可用。
 2. **Workspace**：提供 `Stat`、`ReadFile`、`ReadDir`、`WriteFile` 和 `MkdirAll`，供 Harness 的文件工具使用。
 3. **执行**：`Execute` 在指定 Workspace 中运行带工作目录和超时的命令，并返回输出、退出码和终止原因。
 
@@ -101,9 +105,8 @@ Control Plane 与 Harness。所有实现使用同一组 Engine 契约测试验�
 只使用 `/workspace` 内的路径，不依赖 Agentlet 所在主机的本地路径。
 
 OpenSandbox 对 pause/resume、delete、TTL renewal、snapshot/restore 和 endpoint resolution 的设计可供
-后续资源策略参考。agentd 当前没有对应的 Controller 策略，所以 Go 契约暂不暴露这些能力。这不是让
-agentd 猜测底层行为：当资源冻结与回收进入产品流程时，应增加显式能力和 capability declaration，
-不能把删除实例等同于冻结 Session，也不能要求不支持 snapshot 的 Engine 假装成功。
+Sandbox Engine 实现参考。Agentlet 当前只需要“按 key 随时可用”的语义，所以 Go 契约不暴露这些
+物理资源动作；它们由 Sandbox Control Plane 收口，不能让 agentd 根据 Session 状态猜测底层行为。
 
 ## 主流程
 
@@ -164,8 +167,9 @@ Engine 实现至少应满足以下要求：
 - **可观测性**：记录 Engine、Sandbox ID、Execution ID、耗时和终止原因，同时避免记录敏感输入输出；
 - **远端安全**：远端 Engine 必须配置认证、加密传输、连接池、请求超时和容量上限。
 
-这些要求由具体 Engine 和部署环境落实。agentd 负责策略和调度，Agentlet 负责配置、调用和验证能力；
-两者都不能用一个宽泛的 Engine 接口掩盖实现无法提供的隔离或持久性保证。
+这些要求由具体 Engine 和部署环境落实。Sandbox Control Plane 负责资源策略和调度，Agentlet 负责
+配置、调用和验证能力；agentd 不感知这组物理事实。各组件都不能用一个宽泛的 Engine 接口掩盖实现
+无法提供的隔离或持久性保证。
 
 ## Hostel Adapter
 
@@ -175,8 +179,9 @@ Hostel 的设计参考了 OpenSandbox，`agentlet/internal/sandbox/hostel` 是�
 - 一个 Session ID 对应一个 Bed ID；
 - `Ensure` 创建或重新连接 Bed，并等待其进入可用状态；
 - 文件操作和命令流沿用 OpenSandbox Execd 语义，通过 Hostel HTTP API 完成；
-- 本地 Engine 推荐作为 Worker Pod sidecar 运行，由 Kubernetes 管理进程生命周期和 readiness；
-  Agentlet 只通过 endpoint 使用它，不负责启动或保活 Engine。远端 Engine 继续使用相同接口。
+- Quick Start 把 Hostel 作为 Worker Pod sidecar 运行，由 Kubernetes 管理进程生命周期和 readiness；
+  Agentlet 只通过 endpoint 使用它，不负责启动或保活 Engine。正式部署由独立 Sandbox Control Plane
+  提供相同接口。
 
 Hostel 的 Bed 命名、endpoint 和协议细节只存在于 Adapter 内部。接入其它 Engine 时，可以继续参考
 OpenSandbox 的 Sandbox、Execution 和 Workspace 设计，但只需实现 Agentlet 的 `sandbox.Engine` 契约并

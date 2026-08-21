@@ -41,17 +41,13 @@ func Run(logger *slog.Logger) error {
 	}
 
 	sandboxEngine, err := sandbox.NewEngine(sandbox.Config{
-		Endpoint:       config.sandboxEndpoint,
-		RequestTimeout: config.sandboxRequestTimeout, StartupTimeout: config.sandboxStartupTimeout,
+		Endpoint: config.sandboxEndpoint, RequestTimeout: config.sandboxRequestTimeout,
 	})
 	if err != nil {
 		return err
 	}
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := sandboxEngine.Start(processCtx); err != nil {
-		return err
-	}
 
 	agentHarness, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		APIKey: os.Getenv("ANTHROPIC_API_KEY"), BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
@@ -131,7 +127,6 @@ type config struct {
 	sandboxEndpoint        string
 	storageTimeout         time.Duration
 	sandboxRequestTimeout  time.Duration
-	sandboxStartupTimeout  time.Duration
 	modelRequestTimeout    time.Duration
 	ledgerOperationTimeout time.Duration
 	toolTimeout            time.Duration
@@ -173,7 +168,6 @@ func loadConfig() (config, error) {
 		destination *time.Duration
 	}{
 		{"AGENTD_SANDBOX_REQUEST_TIMEOUT", 30 * time.Second, &value.sandboxRequestTimeout},
-		{"AGENTD_SANDBOX_STARTUP_TIMEOUT", 30 * time.Second, &value.sandboxStartupTimeout},
 		{"AGENTD_MODEL_REQUEST_TIMEOUT", 2 * time.Minute, &value.modelRequestTimeout},
 		{"AGENTD_LEDGER_OPERATION_TIMEOUT", 30 * time.Second, &value.ledgerOperationTimeout},
 		{"AGENTD_TOOL_TIMEOUT", 2 * time.Minute, &value.toolTimeout},

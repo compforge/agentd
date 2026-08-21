@@ -18,7 +18,6 @@ type SandboxKey struct {
 // must treat them as opaque lookup keys for local or remote sandbox resources.
 type Engine interface {
 	Name() string
-	Start(context.Context) error
 	Ensure(ctx context.Context, sandboxKey SandboxKey) error
 	Stat(ctx context.Context, sandboxKey SandboxKey, path string) (FileInfo, error)
 	ReadFile(ctx context.Context, sandboxKey SandboxKey, path string) ([]byte, error)

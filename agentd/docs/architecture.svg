@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
   <title id="title">agentd control plane and workers</title>
-  <desc id="desc">A client or SDK calls the agentd control plane. agentd persists durable state in a database and schedules sessions to workers of different capacities. The larger worker expands Agentlet, several agent harness executions, and the Sandbox Engine; the smaller worker shows the same workload in compact form.</desc>
+  <desc id="desc">A client or SDK calls the agentd control plane. agentd persists durable state in a database and schedules sessions to workers of different capacities. The larger worker expands Agentlet, several agent harness executions, and the Sandbox Adapter; the smaller worker shows the same workload in compact form.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
       <path d="M 1 1 L 11 6 L 1 11" fill="none" stroke="#111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -71,8 +71,8 @@
 
   <rect x="1250" y="155" width="105" height="210" rx="14" fill="#fff7e8" stroke="#111827" stroke-width="2.8"/>
   <text x="1302" y="215" text-anchor="middle" class="body">Sandbox</text>
-  <text x="1302" y="247" text-anchor="middle" class="body">Engine</text>
-  <text x="1302" y="303" text-anchor="middle" class="small">Hostel</text>
+  <text x="1302" y="247" text-anchor="middle" class="body">Adapter</text>
+  <text x="1302" y="303" text-anchor="middle" class="small">Engine client</text>
 
   <path d="M 1195 267 H 1250" class="flow"/>
   <text x="1222" y="244" text-anchor="middle" class="small">tools</text>
@@ -84,7 +84,7 @@
   <rect x="1060" y="545" width="185" height="45" rx="11" class="inner"/>
   <text x="1152" y="574" text-anchor="middle" class="small">Agent / Harness</text>
   <rect x="1260" y="545" width="65" height="45" rx="11" fill="#fff7e8" stroke="#111827" stroke-width="2.2"/>
-  <text x="1292" y="574" text-anchor="middle" class="small">SE</text>
+  <text x="1292" y="574" text-anchor="middle" class="small">SA</text>
 
   <path d="M 1192 620 V 690" class="flow"/>
   <text x="1210" y="663" class="label">persist</text>

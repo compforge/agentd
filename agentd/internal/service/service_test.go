@@ -65,12 +65,62 @@ func TestAssignBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	if err := application.Release(ctx, "session-1"); err != nil {
 		t.Fatalf("Release(): %v", err)
 	}
+	released, err := repository.GetSession(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.LastWorkerID != "worker-a" || released.WorkerID != "" || released.AssignmentID != "" {
+		t.Fatalf("released Session affinity = %+v, want last worker-a", released)
+	}
 	replacement, err := application.Assign(ctx, "session-4")
 	if err != nil {
 		t.Fatalf("Assign() after release: %v", err)
 	}
 	if replacement.WorkerID != "worker-a" {
 		t.Fatalf("replacement.WorkerID = %q, want worker-a", replacement.WorkerID)
+	}
+}
+
+func TestAssignPrefersLastWorkerWithoutReservingIt(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	observeReadyWorker(t, application, "worker-a", 2, now)
+	observeReadyWorker(t, application, "worker-b", 2, now)
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-on-a", Metadata: map[string]string{}, Status: model.SessionStatusRunning,
+		AssignmentID: "assignment-on-a", WorkerID: "worker-a", LastWorkerID: "worker-a",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-on-b", Metadata: map[string]string{}, Status: model.SessionStatusRunning,
+		AssignmentID: "assignment-on-b", WorkerID: "worker-b", LastWorkerID: "worker-b",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-sticky", Metadata: map[string]string{}, Status: model.SessionStatusIdle,
+		LastWorkerID: "worker-b", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assignedOnB, err := repository.CountWorkerSessions(ctx, "worker-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignedOnB != 1 {
+		t.Fatalf("worker-b assigned Sessions = %d, want affinity-only Session not counted", assignedOnB)
+	}
+
+	assignment, err := application.Assign(ctx, "session-sticky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment.WorkerID != "worker-b" {
+		t.Fatalf("affinity assignment WorkerID = %q, want worker-b", assignment.WorkerID)
 	}
 }
 
@@ -267,6 +317,7 @@ func TestObserveSessionUsesAssignmentFenceAndMonotonicResumeRevision(t *testing.
 		t.Fatal(err)
 	}
 	if observed.Status != model.SessionStatusIdle || observed.AssignmentID != "" || observed.WorkerID != "" ||
+		observed.LastWorkerID != "worker-1" ||
 		observed.Revision != 3 {
 		t.Fatalf("released observed state = %#v", observed)
 	}

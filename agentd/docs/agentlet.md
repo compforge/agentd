@@ -15,7 +15,7 @@ Agentlet
   ├─ Work Manager
   ├─ Harness Adapter ── AgentGo / future harness
   ├─ Persistence ────── Checkpoint / Agent Ledger
-  └─ Sandbox Adapter ── local sidecar / remote engine
+  └─ Sandbox Adapter ── remote engine / quick-start sidecar
 ```
 
 ## Assignment 门禁
@@ -102,12 +102,14 @@ Checkpoint 和 Ledger 不伪装成 exactly-once，而是通过稳定 ID、条件
 
 ## Sandbox Engine
 
-Sandbox Engine Adapter 位于 Agentlet。Engine 可以是同一 Worker Pod 的 sidecar，也可以是远端服务；
-Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不把具体实现名称暴露给 agentd。
+Sandbox Engine Adapter 位于 Agentlet。Agentlet 根据稳定 Session 身份构造 `SandboxKey`，在 Harness
+使用工具前调用 `Ensure`；这个 key 和 Engine 返回的临时连接信息都不进入 WorkSpec 或 Control State。
+Engine 可以是远端服务，也可以是同一 Worker Pod 的 sidecar，具体实现名称不暴露给 agentd。
 
-当前 Kubernetes 目标拓扑在 Worker Pod 内运行 Agentlet 和 Hostel 两个容器，Agentlet 通过 localhost
-调用 sidecar。两个容器由 Kubernetes 分别管理，Pod readiness 同时反映执行 API 与 Sandbox Engine
-是否可用。Sandbox 能力与资源边界见 [sandbox-engine.md](sandbox-engine.md)。
+正式部署由独立 Sandbox Control Plane 保证执行环境可用，Sandbox 的粘滞、恢复和物理位置不参与
+agentd 的 Worker placement。当前 Helm Chart 只为 Quick Start 在 Worker Pod 内共置 Agentlet 与
+Hostel；双容器是最小部署实现，不是 Agentlet 或 Worker 的稳定定义。Sandbox 能力与资源边界见
+[sandbox-engine.md](sandbox-engine.md)。
 
 ## 进程与容量
 
@@ -131,4 +133,4 @@ Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不�
 3. Agentlet 不暴露、代理或查询公开 Event API，只写自身产生的执行事实。
 4. Agentlet 不解释全局 Control State，只消费请求携带的执行切片。
 5. Harness Adapter 拥有原生状态语义；Agent Ledger 拥有规范化执行事实。
-6. Sandbox Engine 拥有隔离资源；Agentlet 只通过 Adapter 使用它。
+6. Sandbox Engine 拥有隔离资源及其 placement；Agentlet 只构造 key 并通过 Adapter 使用它。

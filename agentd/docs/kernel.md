@@ -87,8 +87,10 @@ Agentlet 能访问 Ledger，就让它承担公开 Event API。
 Sandbox instance 的持久化、重建和迁移能力属于 Sandbox Engine。agentd 只决定 Session 的执行时机，
 并把稳定的 Session 身份随 WorkSpec 传给 Agentlet；它不保存 `SandboxRef`，也不实现 sandbox 恢复。
 `SandboxKey` 是 Engine 契约定义的参数，由直接 caller Agentlet 传入并解释，Engine 不解析其格式。
-Hostel 与 Agentlet 同 Pod 是最小部署适配，接入 sandctl 等外部 Engine 时由其按 key 准备并恢复
-sandbox。详见 `sandbox-engine.md`。
+Agentlet 漂移的成本只计算 Harness 恢复、模型调用和工具副作用对账，不计算 Sandbox 的物理粘滞；
+Sandbox Engine 必须按 key 屏蔽位置变化并保证执行环境可用。Hostel 与 Agentlet 同 Pod 只是 Quick
+Start 适配，正式部署由 sandctl 一类独立 Sandbox Control Plane 准备并恢复 sandbox。详见
+`sandbox-engine.md`。
 
 agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程模型。
 

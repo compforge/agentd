@@ -2,6 +2,7 @@
 package scheduler
 
 import (
+	"sort"
 	"strings"
 	"time"
 )
@@ -10,8 +11,11 @@ type Reason string
 
 const (
 	ReasonExisting   Reason = "existing"
+	ReasonAffinity   Reason = "affinity"
 	ReasonAvailable  Reason = "available"
 	ReasonNoCapacity Reason = "no_capacity"
+
+	lastWorkerAffinityBonus = 10
 )
 
 type Observation struct {
@@ -31,6 +35,18 @@ type Candidate struct {
 type Decision struct {
 	WorkerID string
 	Reason   Reason
+	Score    Score
+}
+
+type Score struct {
+	CapacityHeadroom int
+	LastWorker       int
+	Total            int
+}
+
+type placementCandidate struct {
+	workerID string
+	score    Score
 }
 
 // Scheduler owns only Session-to-Worker placement policy. Worker Observer and
@@ -44,9 +60,15 @@ func New(observationMaxAge time.Duration) *Scheduler {
 	return &Scheduler{observationMaxAge: observationMaxAge}
 }
 
-// Schedule retains a schedulable existing placement. Otherwise it selects the
-// least-loaded Worker with free capacity, using Worker ID as a stable tie-break.
-func (s *Scheduler) Schedule(now time.Time, existingWorkerID string, candidates []Candidate) Decision {
+// Schedule retains a schedulable existing placement. Unbound Sessions score
+// every admitted candidate by capacity headroom and a small last-Worker bonus;
+// affinity reduces needless movement without overriding material load skew.
+func (s *Scheduler) Schedule(
+	now time.Time,
+	existingWorkerID string,
+	lastWorkerID string,
+	candidates []Candidate,
+) Decision {
 	if existingWorkerID != "" {
 		for _, candidate := range candidates {
 			if candidate.WorkerID == existingWorkerID && s.schedulable(now, candidate) {
@@ -54,21 +76,41 @@ func (s *Scheduler) Schedule(now time.Time, existingWorkerID string, candidates 
 			}
 		}
 	}
-
-	best := Candidate{AssignedCount: -1}
+	admitted := make([]placementCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if !s.schedulable(now, candidate) || candidate.AssignedCount >= int64(candidate.Capacity) {
 			continue
 		}
-		if best.AssignedCount < 0 || candidate.AssignedCount < best.AssignedCount ||
-			(candidate.AssignedCount == best.AssignedCount && candidate.WorkerID < best.WorkerID) {
-			best = candidate
-		}
+		admitted = append(admitted, placementCandidate{
+			workerID: candidate.WorkerID,
+			score:    scoreCandidate(lastWorkerID, candidate),
+		})
 	}
-	if best.AssignedCount < 0 {
+	if len(admitted) == 0 {
 		return Decision{Reason: ReasonNoCapacity}
 	}
-	return Decision{WorkerID: best.WorkerID, Reason: ReasonAvailable}
+	sort.SliceStable(admitted, func(i, j int) bool {
+		if admitted[i].score.Total != admitted[j].score.Total {
+			return admitted[i].score.Total > admitted[j].score.Total
+		}
+		return admitted[i].workerID < admitted[j].workerID
+	})
+	reason := ReasonAvailable
+	if admitted[0].score.LastWorker > 0 {
+		reason = ReasonAffinity
+	}
+	return Decision{WorkerID: admitted[0].workerID, Reason: reason, Score: admitted[0].score}
+}
+
+func scoreCandidate(lastWorkerID string, candidate Candidate) Score {
+	available := int64(candidate.Capacity) - candidate.AssignedCount
+	headroom := int(available * 100 / int64(candidate.Capacity))
+	score := Score{CapacityHeadroom: headroom}
+	if candidate.WorkerID == lastWorkerID {
+		score.LastWorker = lastWorkerAffinityBonus
+	}
+	score.Total = score.CapacityHeadroom + score.LastWorker
+	return score
 }
 
 func (s *Scheduler) schedulable(now time.Time, candidate Candidate) bool {

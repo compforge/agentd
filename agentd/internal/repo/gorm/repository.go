@@ -76,6 +76,7 @@ type sessionRow struct {
 	ObserverStatus []byte  `gorm:"type:json"`
 	AssignmentID   *string `gorm:"size:64"`
 	WorkerID       *string `gorm:"size:64;index"`
+	LastWorkerID   *string `gorm:"size:64"`
 	AssignedAt     *time.Time
 	CreatedAt      time.Time `gorm:"not null"`
 	UpdatedAt      time.Time `gorm:"not null"`
@@ -420,7 +421,8 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 		ResumeRef: session.ResumeRef, ResumeRevision: session.ResumeRevision,
 		ObserverStatus: session.ObserverStatus,
 		AssignmentID:   optionalString(session.AssignmentID), WorkerID: optionalString(session.WorkerID),
-		AssignedAt: session.AssignedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
+		LastWorkerID: optionalString(session.LastWorkerID),
+		AssignedAt:   session.AssignedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 	}, nil
 }
 
@@ -433,7 +435,8 @@ func (r sessionRow) session() (model.Session, error) {
 		ResumeRef: r.ResumeRef, ResumeRevision: r.ResumeRevision,
 		ObserverStatus: r.ObserverStatus,
 		AssignmentID:   stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID),
-		AssignedAt: r.AssignedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		LastWorkerID: stringValue(r.LastWorkerID),
+		AssignedAt:   r.AssignedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if err := json.Unmarshal(r.Metadata, &value.Metadata); err != nil {
 		return model.Session{}, fmt.Errorf("decode session %q metadata: %w", r.ID, err)

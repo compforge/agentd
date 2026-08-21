@@ -1,15 +1,16 @@
-# Kubernetes 部署与 Worker 弹性
+# Kubernetes Quick Start 与 Worker 弹性
 
-本文描述 agentd 在 Kubernetes 上的目标部署形态。Helm 安装一个可多副本的 agentd Deployment；
-agentd 根据持久化的 Session 需求创建 Worker，并在 Worker 空闲后回收。一个 Worker 就是一个独立
-Pod，Pod 内固定包含 Agentlet 与 Sandbox Engine 两个容器。
+本文描述 agentd 在 Kubernetes 上便于试用的最小部署形态，不定义生产环境的 Sandbox 拓扑。Helm
+安装一个可多副本的 agentd Deployment；agentd 根据持久化的 Session 需求创建 Worker，并在 Worker
+空闲后回收。一个 Worker 就是一个独立 Pod；当前模板为开箱即用而固定包含 Agentlet 与 Hostel 两个
+容器。
 
 Helm Chart 位于 `deploy/k8s/agentd`，负责安装 agentd workload、namespace RBAC 和 Worker
 PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Lifecycler 和 Pod GC；Connector
 只按 Assignment 转发 WorkSpec、wake、interrupt 和状态请求。agentd 直接读写共享 Ledger 上的
 持久 Event，不经过 Worker。
 
-## 部署拓扑
+## Quick Start 拓扑
 
 ```text
                         ┌──────────────────────────────┐
@@ -41,7 +42,8 @@ Pod UID、endpoint 与 Ready 是 Observer facts。Kubernetes 可以重启 Pod �
 
 当前 Sandbox Engine 实现使用 Hostel，但外部部署契约只称 Sandbox Engine。Agentlet 通过
 `http://127.0.0.1:8080` 访问 sidecar；两个容器分别由自己的 PID 1 管理，Pod Ready 要求两者的
-readiness probe 都通过。
+readiness probe 都通过。这个共置形态只用于最小安装；正式环境可以让 Sandbox Engine 接入独立的
+Sandbox Control Plane，Sandbox 粘滞、恢复、容量和物理 placement 都不属于本 Chart 或 agentd。
 
 ## Control Plane 角色
 
@@ -132,7 +134,7 @@ Helm Chart 应安装：
 - 一个 agentd Deployment、Service 和 ServiceAccount；
 - agentd 与所有 Agentlet 共用的 MySQL DSN Secret，以及模型连接配置；
 - 默认最小部署所需的单实例 MySQL Deployment、Service 与 PVC；
-- Worker Pod 模板，包括两个容器、资源限制、探针、ServiceAccount、volume 和 placement；
+- Quick Start Worker Pod 模板，包括 Agentlet、Hostel sidecar、资源限制、探针、volume 和 placement；
 - agentd 管理 Worker 所需的 namespace、managed labels 和 Worker PodTemplate；
 - 最小 RBAC：观察、创建和删除受管 Worker Pod。
 

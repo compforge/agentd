@@ -38,7 +38,8 @@ Worker 只持久化稳定身份、`capacity`、lifecycle phase 和 Observer fact
 
 `sessions` 是持久化需求和当前绑定的唯一事实表：`rescheduling` 且 `worker_id` 为空表示等待容量；
 `worker_id` 非空表示当前计算位置。`assignment_id` 随每次重新绑定生成，作为 Agentlet 请求的 fence。
-Assignment 仍是 API 和执行协议中的值对象，但不再单独建表。
+`last_worker_id` 记录最近一次执行位置，是不占容量、不表达所有权的 affinity hint。Assignment 仍是
+API 和执行协议中的值对象，但不再单独建表。
 
 Session 除身份、Agent/Environment 版本、公开 `status`、当前 Assignment 和安全恢复点外，还保存
 `observer_status`。它记录某个 Assignment 最近一次成功观测的 `observed_at`、`exists`、执行状态和
@@ -83,8 +84,9 @@ Agentlet `/state`，再把结果提交给 Control State。它不调用 `Ensure`�
 
 每次提交同时受两个 fence 保护：`assignment_id` 必须仍匹配当前绑定，`observed_at` 不能早于已经保存的
 事实。通过 fence 后，ResumeRevision 只能单调前进。idle 或 terminated 表示该 Assignment 已不再占用
-执行容量，Session observation、公开状态、ResumeRef 和 Assignment 释放在同一数据库事务内提交；最后
-一个绑定释放后，Worker 才开始计算 idle TTL。多个 agentd 副本可以并行观察，较旧响应不会覆盖新事实。
+执行容量，Session observation、公开状态、ResumeRef、`last_worker_id` 和 Assignment 释放在同一数据库
+事务内提交；最后一个绑定释放后，Worker 才开始计算 idle TTL。多个 agentd 副本可以并行观察，较旧
+响应不会覆盖新事实。
 
 ## Session Reconciler
 
@@ -113,9 +115,11 @@ Service 在数据库事务中锁定 Worker，加载 DB 中的 Worker observation
 交给 Scheduler。Scheduler 是无 I/O 的纯 placement 策略：
 
 1. 保留仍可调度的既有 Assignment；
-2. 否则选择负载最低且仍有容量的 active Worker；
-3. 相同负载按 Worker ID 保持确定顺序；
-4. 没有候选时返回 `no capacity`，不直接创建 Pod。
+2. Assignment 已释放时，对通过硬过滤的候选按 capacity headroom 加 `last_worker_id` 小幅 affinity
+   bonus 评分；
+3. headroom 差距足够大时允许选择其它 Worker，不能为了粘滞长期堆高单点负载；
+4. 相同分数按 Worker ID 保持确定顺序；
+5. 没有候选时返回 `no capacity`，不直接创建 Pod。
 
 ```text
 Session 需要执行
@@ -123,9 +127,15 @@ Session 需要执行
   └─ missing / stale Assignment
        → load and lock candidates
        → Scheduler decision
-       ├─ candidate → update sessions.worker_id + assignment_id
+       ├─ hard filter: active + Ready + fresh + free capacity
+       ├─ score: capacity headroom + last Worker affinity
+       │    └─ winner → update worker_id + last_worker_id + assignment_id
        └─ no capacity → retain rescheduling Session and wake Lifecycler
 ```
+
+Affinity 只减少 Harness State 恢复、模型调用重做和工具副作用对账成本，不参考 Sandbox locality。
+Sandbox 的粘滞和物理位置由 Sandbox Engine 自己屏蔽；旧 Worker 不可用或已满时，Scheduler 直接选择
+其它候选，`last_worker_id` 不能阻止漂移或占住容量。
 
 ## Worker Lifecycler
 
@@ -257,9 +267,10 @@ Assignment，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wo
   通过 DB lease、phase CAS 与幂等动作协调；
 - Kubernetes 管理已创建 Worker Pod 的健壮性和重建；
 - SRE 通过 workload 模板管理镜像、资源、placement 约束、故障域和集群容量；
-- Agentlet 管理已分配 Session 的 Harness runtime 和 Sandbox Engine 使用，不拥有全局 placement。
+- Agentlet 管理已分配 Session 的 Harness runtime 和 Sandbox Engine 使用，不拥有全局 Worker
+  placement；Sandbox 的物理 placement 由独立 Sandbox Control Plane 拥有，不进入 agentd 调度。
 
-Helm 部署形态、Worker 双容器模板和弹性流程见
+Quick Start Helm 形态、Worker 模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
 Session Observer、Session Reconciler 与 Record GC 始终运行。启用 Kubernetes Worker source 后，

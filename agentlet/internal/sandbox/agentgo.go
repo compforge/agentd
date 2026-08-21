@@ -15,11 +15,20 @@ import (
 	"github.com/compforge/agentgo/tools"
 )
 
-func NewAgentGoToolset(
+// PrepareAgentGoToolset derives the Sandbox Engine identity inside Agentlet and
+// makes the workspace available before the Harness can issue a tool call. The
+// control plane only supplies the stable Session identity and never observes
+// the derived key or a provider resource reference.
+func PrepareAgentGoToolset(
+	ctx context.Context,
 	sandboxEngine engine.Engine,
-	sandboxKey engine.SandboxKey,
+	sessionID string,
 	defaultTimeout time.Duration,
-) []agentgo.Tool {
+) ([]agentgo.Tool, error) {
+	sandboxKey := engine.SandboxKey{Value: sessionID}
+	if err := sandboxEngine.Ensure(ctx, sandboxKey); err != nil {
+		return nil, fmt.Errorf("prepare sandbox for Session %q: %w", sessionID, err)
+	}
 	workspace := &agentGoWorkspace{engine: sandboxEngine, sandboxKey: sandboxKey}
 	readState := tools.NewFileReadState()
 	return []agentgo.Tool{
@@ -29,7 +38,7 @@ func NewAgentGoToolset(
 		tools.NewEdit("/workspace", readState, tools.WithFS(workspace)),
 		newGlobTool(sandboxEngine, sandboxKey, defaultTimeout),
 		newGrepTool(sandboxEngine, sandboxKey, defaultTimeout),
-	}
+	}, nil
 }
 
 type agentGoWorkspace struct {
