@@ -41,7 +41,7 @@ database:
       rootPassword: agentd-root
     persistence:
       enabled: true
-      size: 8Gi
+      size: 10Gi
       storageClass: ""
     resources: {}
 
@@ -73,6 +73,8 @@ worker:
       repository: ghcr.io/compforge/hostel
       tag: latest
       pullPolicy: IfNotPresent
+    args:
+      - -addr=:8080
     resources: {}
     securityContext: {}
   podAnnotations: {}

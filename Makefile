@@ -1,7 +1,7 @@
-.PHONY: fix lint test test-e2e test-model-integration test-integration build run run-agentd run-agentlet
+.PHONY: fix lint test test-e2e test-model-integration test-integration test-perf build run run-agentd run-agentlet
 
 fix:
-	gofmt -w $$(find agentd agentlet cmd internal -name '*.go' -not -path '*/vendor/*')
+	gofmt -w $$(find agentd agentlet cmd internal tests -name '*.go' -not -path '*/vendor/*')
 
 lint:
 	go vet ./...
@@ -11,13 +11,17 @@ test:
 
 # E2E is a user-triggered system assessment, not part of the daily development checks.
 test-e2e:
-	go test -tags=e2e ./agentd/tests/e2e ./agentlet/tests/e2e -count=1 -v
+	go test -tags=e2e ./tests/e2e ./agentd/tests/e2e ./agentlet/tests/e2e -count=1 -v
 
 test-model-integration:
 	AGENTD_REQUIRE_INTEGRATION=1 go test -tags=e2e ./agentlet/tests/e2e -run TestManagedAgentAnswersThroughRealModel -count=1 -v
 
 test-integration:
 	AGENTD_REQUIRE_INTEGRATION=1 go test -tags=e2e ./agentlet/tests/e2e -run TestManagedAgentMySQLSandboxRoundTripAndRestart -count=1 -v
+
+# Perf is intentionally explicit: edit/copy the target profile before running it.
+test-perf:
+	cd tests/perf && uv run python -m perf_harness.cli run managed-agent-turn.yaml
 
 build:
 	go build ./...

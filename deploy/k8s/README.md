@@ -170,7 +170,7 @@ database:
     enabled: true
     persistence:
       enabled: true
-      size: 8Gi
+      size: 10Gi
 
 agentd:
   extraEnv: [] # 仅在需要覆盖 config.go 默认值时添加
@@ -183,6 +183,8 @@ worker:
   sandboxEngine:
     image:
       repository: ghcr.io/compforge/hostel
+    args:
+      - -addr=:8080
 ```
 
 Worker 容量由 `worker.capacity` 统一下发给 agentd 和 Agentlet，避免控制面已分配但执行节点拒绝的
@@ -202,4 +204,5 @@ agentd:
 `AGENTD_WORKER_MIN_IDLE` 默认 `0`，只在需要额外预热空闲容量时覆盖。
 
 Chart 把 Worker PodTemplate 挂载到 agentd，由 Provisioner materialize 为独立 Worker Pod；Helm
-本身不创建或回收 Worker。
+本身不创建或回收 Worker。顶层 `imagePullSecrets` 同时下发给 agentd Deployment 和动态创建的
+Worker Pod；默认 Hostel 通过 `worker.sandboxEngine.args` 显式监听 Agentlet 使用的 `8080` 端口。

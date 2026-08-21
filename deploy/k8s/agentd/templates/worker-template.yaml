@@ -20,6 +20,10 @@ data:
       {{- end }}
     spec:
       automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       restartPolicy: Always
       terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
       securityContext:
@@ -74,6 +78,10 @@ data:
         - name: sandbox-engine
           image: "{{ .Values.worker.sandboxEngine.image.repository }}:{{ .Values.worker.sandboxEngine.image.tag }}"
           imagePullPolicy: {{ .Values.worker.sandboxEngine.image.pullPolicy }}
+          {{- with .Values.worker.sandboxEngine.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: sandbox-http
               containerPort: 8080
