@@ -54,24 +54,16 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		id, _ := value["id"].(string)
 		blockingIDs[id] = true
 	}
-	resolvedInRequest := make(map[string]bool)
+	if err := validateIngressSequence(ingress, blockingIDs); err != nil {
+		s.writeError(request, err)
+		return
+	}
 	var hasInput, hasMessage, hasInterrupt, hasToolResult bool
 	for _, item := range ingress {
 		hasMessage = hasMessage || item.Type == "user.message"
 		hasInterrupt = hasInterrupt || item.Type == "user.interrupt"
 		hasInput = hasInput || item.Type != "user.interrupt"
 		hasToolResult = hasToolResult || item.Type == "user.tool_result"
-		if item.Type == "user.tool_confirmation" || item.Type == "user.tool_result" {
-			if !blockingIDs[item.ToolUseID] || resolvedInRequest[item.ToolUseID] {
-				s.writeError(request, fmt.Errorf("%w: tool_use_id %q is not awaiting user action", service.ErrConflict, item.ToolUseID))
-				return
-			}
-			resolvedInRequest[item.ToolUseID] = true
-		}
-	}
-	if hasMessage && len(blockingIDs) > 0 {
-		s.writeError(request, fmt.Errorf("%w: Session requires tool action before accepting a new message", service.ErrConflict))
-		return
 	}
 	if hasToolResult {
 		environment, err := s.service.GetEnvironment(ctx, session.EnvironmentID)
@@ -135,6 +127,27 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		}
 	}
 	writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+}
+
+func validateIngressSequence(ingress []view.IngressEvent, blockingIDs map[string]bool) error {
+	remaining := make(map[string]bool, len(blockingIDs))
+	for id := range blockingIDs {
+		remaining[id] = true
+	}
+	for _, item := range ingress {
+		switch item.Type {
+		case "user.tool_confirmation", "user.tool_result":
+			if !remaining[item.ToolUseID] {
+				return fmt.Errorf("%w: tool_use_id %q is not awaiting user action", service.ErrConflict, item.ToolUseID)
+			}
+			delete(remaining, item.ToolUseID)
+		case "user.message":
+			if len(remaining) > 0 {
+				return fmt.Errorf("%w: Session requires tool action before accepting a new message", service.ErrConflict)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
