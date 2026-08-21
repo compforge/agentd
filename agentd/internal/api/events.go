@@ -49,33 +49,6 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		hasMessage = hasMessage || item.Type == "user.message"
 		hasInterrupt = hasInterrupt || item.Type == "user.interrupt"
 	}
-	var target *connector.Target
-	if hasMessage {
-		execution, err := s.service.PrepareExecution(ctx, sessionID)
-		if err != nil {
-			s.writeError(request, err)
-			return
-		}
-		resolved := connector.Target{Endpoint: execution.Endpoint, Work: execution.Work}
-		if err := s.connector.Ensure(ctx, resolved); err != nil {
-			s.writeError(request, fmt.Errorf("%w: prepare Agentlet execution: %v", service.ErrUnavailable, err))
-			return
-		}
-		target = &resolved
-	} else if hasInterrupt {
-		if execution, err := s.service.CurrentExecution(ctx, sessionID); err == nil {
-			resolved := connector.Target{Endpoint: execution.Endpoint, Work: execution.Work}
-			if err := s.connector.Ensure(ctx, resolved); err != nil {
-				s.writeError(request, fmt.Errorf("%w: prepare Agentlet interrupt: %v", service.ErrUnavailable, err))
-				return
-			}
-			target = &resolved
-		} else if !errors.Is(err, service.ErrNoAssignment) {
-			s.writeError(request, err)
-			return
-		}
-	}
-
 	accepted := make([]managedevent.ManagedEvent, 0, len(ingress))
 	for _, item := range ingress {
 		value := managedevent.New(item.Type, nil)
@@ -90,14 +63,25 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		accepted = append(accepted, value)
 	}
 
-	if target != nil && hasMessage {
-		if err := s.connector.Wake(ctx, *target); err != nil {
-			s.writeError(request, fmt.Errorf("%w: wake Agentlet Session: %v", service.ErrUnavailable, err))
+	if hasMessage {
+		s.executionNotifier.Notify()
+	}
+	if hasInterrupt {
+		execution, err := s.service.CurrentExecution(ctx, sessionID)
+		if errors.Is(err, service.ErrNoAssignment) {
+			writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
 			return
 		}
-	}
-	if target != nil && hasInterrupt {
-		if err := s.connector.Interrupt(ctx, *target); err != nil {
+		if err != nil {
+			s.writeError(request, err)
+			return
+		}
+		target := connector.Target{Endpoint: execution.Endpoint, Work: execution.Work}
+		if err := s.connector.Ensure(ctx, target); err != nil {
+			s.writeError(request, fmt.Errorf("%w: prepare Agentlet interrupt: %v", service.ErrUnavailable, err))
+			return
+		}
+		if err := s.connector.Interrupt(ctx, target); err != nil {
 			s.writeError(request, fmt.Errorf("%w: interrupt Agentlet Session: %v", service.ErrUnavailable, err))
 			return
 		}

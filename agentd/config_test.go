@@ -47,6 +47,9 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	t.Setenv("AGENTD_SESSION_OBSERVER_INTERVAL", "9s")
 	t.Setenv("AGENTD_SESSION_OBSERVER_REQUEST_TIMEOUT", "4s")
 	t.Setenv("AGENTD_SESSION_OBSERVER_CONCURRENCY", "6")
+	t.Setenv("AGENTD_SESSION_RECONCILER_INTERVAL", "11s")
+	t.Setenv("AGENTD_SESSION_RECONCILER_REQUEST_TIMEOUT", "35s")
+	t.Setenv("AGENTD_SESSION_RECONCILER_CONCURRENCY", "7")
 
 	config, err := loadConfig()
 	if err != nil {
@@ -73,6 +76,10 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	if config.sessionObserverInterval != 9*time.Second ||
 		config.sessionObserverTimeout != 4*time.Second || config.sessionObserverConcurrency != 6 {
 		t.Fatalf("Session Observer config = %+v", config)
+	}
+	if config.sessionReconcilerInterval != 11*time.Second ||
+		config.sessionReconcilerTimeout != 35*time.Second || config.sessionReconcilerConcurrency != 7 {
+		t.Fatalf("Session Reconciler config = %+v", config)
 	}
 }
 

@@ -245,6 +245,7 @@ func TestReconcileRetriesInputAfterWorkerPersistenceFailure(t *testing.T) {
 	input := NewManagedEvent("user.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "retry me"}},
 	})
+	input["processed_at"] = nil
 	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}

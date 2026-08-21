@@ -44,6 +44,9 @@ type config struct {
 	sessionObserverInterval      time.Duration
 	sessionObserverTimeout       time.Duration
 	sessionObserverConcurrency   int
+	sessionReconcilerInterval    time.Duration
+	sessionReconcilerTimeout     time.Duration
+	sessionReconcilerConcurrency int
 	connectorRequestTimeout      time.Duration
 	connectorDialTimeout         time.Duration
 	connectorHeaderTimeout       time.Duration
@@ -95,6 +98,9 @@ func loadConfig() (config, error) {
 		sessionObserverInterval:      5 * time.Second,
 		sessionObserverTimeout:       5 * time.Second,
 		sessionObserverConcurrency:   8,
+		sessionReconcilerInterval:    5 * time.Second,
+		sessionReconcilerTimeout:     30 * time.Second,
+		sessionReconcilerConcurrency: 8,
 		connectorRequestTimeout:      30 * time.Second,
 		connectorDialTimeout:         5 * time.Second,
 		connectorHeaderTimeout:       10 * time.Second,
@@ -154,6 +160,11 @@ func loadConfig() (config, error) {
 	); err != nil {
 		return config{}, err
 	}
+	if value.sessionReconcilerConcurrency, err = positiveIntEnv(
+		"AGENTD_SESSION_RECONCILER_CONCURRENCY", value.sessionReconcilerConcurrency,
+	); err != nil {
+		return config{}, err
+	}
 	if value.connectorMaxIdleConns, err = positiveIntEnv(
 		"AGENTD_CONNECTOR_MAX_IDLE_CONNS", value.connectorMaxIdleConns,
 	); err != nil {
@@ -175,6 +186,8 @@ func loadConfig() (config, error) {
 		{"AGENTD_WORKER_OBSERVER_REQUEST_TIMEOUT", &value.observerTimeout},
 		{"AGENTD_SESSION_OBSERVER_INTERVAL", &value.sessionObserverInterval},
 		{"AGENTD_SESSION_OBSERVER_REQUEST_TIMEOUT", &value.sessionObserverTimeout},
+		{"AGENTD_SESSION_RECONCILER_INTERVAL", &value.sessionReconcilerInterval},
+		{"AGENTD_SESSION_RECONCILER_REQUEST_TIMEOUT", &value.sessionReconcilerTimeout},
 		{"AGENTD_WORKER_IDLE_TTL", &value.workerIdleTTL},
 		{"AGENTD_WORKER_LIFECYCLER_INTERVAL", &value.workerLifecyclerInterval},
 		{"AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", &value.workerControllerTimeout},

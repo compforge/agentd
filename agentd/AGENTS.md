@@ -36,6 +36,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   │   ├── session/
 │   │   │   ├── connector/     # 已分配 Session 的 Agentlet 数据面
 │   │   │   ├── observer/      # 只读 Agentlet 状态并持久化 Session observation
+│   │   │   ├── reconciler/    # 将 Ledger 中待处理输入收敛为 Assignment 与 wake
 │   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
 │   │   └── worker/
 │   │       ├── controllers.go # Worker 控制环组合与启动

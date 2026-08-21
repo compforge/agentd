@@ -17,8 +17,13 @@ type Server struct {
 	service           *service.Service
 	events            *managedevent.Log
 	connector         *connector.Client
+	executionNotifier ExecutionNotifier
 	logger            *slog.Logger
 	eventPollInterval time.Duration
+}
+
+type ExecutionNotifier interface {
+	Notify()
 }
 
 type Option func(*Server)
@@ -31,11 +36,13 @@ func New(
 	controlService *service.Service,
 	events *managedevent.Log,
 	agentletConnector *connector.Client,
+	executionNotifier ExecutionNotifier,
 	logger *slog.Logger,
 	options ...Option,
 ) *Server {
 	server := &Server{
-		service: controlService, events: events, connector: agentletConnector, logger: logger,
+		service: controlService, events: events, connector: agentletConnector,
+		executionNotifier: executionNotifier, logger: logger,
 		eventPollInterval: 500 * time.Millisecond,
 	}
 	for _, option := range options {

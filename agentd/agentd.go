@@ -14,6 +14,7 @@ import (
 	control "github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	sessionreconciler "github.com/compforge/agentd/agentd/internal/session/reconciler"
 	"github.com/compforge/agentd/agentd/internal/worker"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
 	managedevent "github.com/compforge/agentd/internal/event"
@@ -84,6 +85,14 @@ func Run(logger *slog.Logger) error {
 		return err
 	}
 	defer agentletConnector.CloseIdleConnections()
+	events := managedevent.NewLog(storage.Ledger)
+	sessionReconciler, err := sessionreconciler.New(controlService, events, agentletConnector, sessionreconciler.Config{
+		Interval: config.sessionReconcilerInterval, RequestTimeout: config.sessionReconcilerTimeout,
+		Concurrency: config.sessionReconcilerConcurrency, Logger: logger,
+	})
+	if err != nil {
+		return err
+	}
 	sessionSource, err := sessionobserver.NewAgentletSource(controlService, agentletConnector)
 	if err != nil {
 		return err
@@ -107,7 +116,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithSenseClientDisconnection(true),
 	)
 	api.New(
-		controlService, managedevent.NewLog(storage.Ledger), agentletConnector, logger,
+		controlService, events, agentletConnector, sessionReconciler, logger,
 		api.WithEventPollInterval(config.eventPollInterval),
 	).Register(httpServer.Engine)
 
@@ -122,6 +131,7 @@ func Run(logger *slog.Logger) error {
 		workerControllers.Run(processCtx)
 	}
 	go sessionObserver.Run(processCtx)
+	go sessionReconciler.Run(processCtx)
 	go recordGC.Run(processCtx)
 	select {
 	case err := <-serveErr:

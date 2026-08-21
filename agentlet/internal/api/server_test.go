@@ -152,7 +152,14 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(stored) >= 2 && stored[1]["type"] == "agent.message" {
+		foundOutput := false
+		for _, event := range stored {
+			if event["type"] == "agent.message" {
+				foundOutput = true
+				break
+			}
+		}
+		if foundOutput {
 			break
 		}
 		if time.Now().After(deadline) {

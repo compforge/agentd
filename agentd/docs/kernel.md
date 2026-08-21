@@ -78,11 +78,17 @@ Agentlet 执行。
 | 调度 | 创建 Worker、选择 placement、维护 Assignment | 不选择 Worker，也不修改全局 Assignment |
 | 执行 | 通过 `wake`、`interrupt` 发出带 Assignment 门禁的执行意图 | 校验 Assignment，驱动 Harness 并观测本地执行状态 |
 | Harness 与 Sandbox | 只依赖能力契约 | 拥有 Adapter、短命 Harness runtime 和 Sandbox Engine 调用 |
-| 恢复 | 决定何时、在哪里重新分配和唤醒 Work | 根据 Checkpoint 与 Ledger 在当前 Assignment 内恢复执行 |
+| 恢复 | 决定何时、在哪里重新分配和唤醒 Work | 恢复 Harness，并调用 Sandbox Engine 提供的恢复能力 |
 
 判断一项能力归属时，先看它是**全局控制事实**还是**单次分配内的执行实现**：前者属于
 agentd，后者属于 Agentlet。共享数据库只是部署和一致性手段，不改变这个边界；尤其不能因为
 Agentlet 能访问 Ledger，就让它承担公开 Event API。
+
+Sandbox instance 的持久化、重建和迁移能力属于 Sandbox Engine。agentd 只决定 Session 的执行时机，
+并把稳定的 Session 身份随 WorkSpec 传给 Agentlet；它不保存 `SandboxRef`，也不实现 sandbox 恢复。
+`SandboxKey` 是 Engine 契约定义的参数，由直接 caller Agentlet 传入并解释，Engine 不解析其格式。
+Hostel 与 Agentlet 同 Pod 是最小部署适配，接入 sandctl 等外部 Engine 时由其按 key 准备并恢复
+sandbox。详见 `sandbox-engine.md`。
 
 agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程模型。
 
@@ -104,7 +110,8 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 
 1. 应用通过 agentd 创建可版本化的 Agent 和 Environment，再创建锁定两者具体版本的
    Session；
-2. 用户 Event 持久化后才确认接收，Controller 生成待执行意图；
+2. 用户 Event 持久化后才确认接收；Session Reconciler 以未处理 Event 为 durable demand，内存通知
+   只用于降低唤醒延迟；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
    Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
 4. agentd 直接从共享 Ledger 读取持久 Event；Connector 只把携带 Assignment 的 wake、

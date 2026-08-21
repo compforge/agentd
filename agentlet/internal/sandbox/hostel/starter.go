@@ -41,32 +41,42 @@ func (e *Engine) Start(ctx context.Context) error {
 	return e.starter.Start(ctx)
 }
 
-func (e *Engine) Ensure(ctx context.Context, sandboxID string) error {
-	return e.client.EnsureBed(ctx, sandboxID)
+func (e *Engine) Ensure(ctx context.Context, sandboxKey engine.SandboxKey) error {
+	return e.client.EnsureBed(ctx, sandboxKey.Value)
 }
 
-func (e *Engine) Stat(ctx context.Context, sandboxID, path string) (engine.FileInfo, error) {
-	return e.client.Stat(ctx, sandboxID, path)
+func (e *Engine) Stat(ctx context.Context, sandboxKey engine.SandboxKey, path string) (engine.FileInfo, error) {
+	return e.client.Stat(ctx, sandboxKey.Value, path)
 }
 
-func (e *Engine) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error) {
-	return e.client.ReadFile(ctx, sandboxID, path)
+func (e *Engine) ReadFile(ctx context.Context, sandboxKey engine.SandboxKey, path string) ([]byte, error) {
+	return e.client.ReadFile(ctx, sandboxKey.Value, path)
 }
 
-func (e *Engine) ReadDir(ctx context.Context, sandboxID, path string) ([]engine.DirEntry, error) {
-	return e.client.ReadDir(ctx, sandboxID, path)
+func (e *Engine) ReadDir(ctx context.Context, sandboxKey engine.SandboxKey, path string) ([]engine.DirEntry, error) {
+	return e.client.ReadDir(ctx, sandboxKey.Value, path)
 }
 
-func (e *Engine) WriteFile(ctx context.Context, sandboxID, path string, data []byte, mode os.FileMode) error {
-	return e.client.WriteFile(ctx, sandboxID, path, data, mode)
+func (e *Engine) WriteFile(
+	ctx context.Context,
+	sandboxKey engine.SandboxKey,
+	path string,
+	data []byte,
+	mode os.FileMode,
+) error {
+	return e.client.WriteFile(ctx, sandboxKey.Value, path, data, mode)
 }
 
-func (e *Engine) MkdirAll(ctx context.Context, sandboxID, path string, mode os.FileMode) error {
-	return e.client.MkdirAll(ctx, sandboxID, path, mode)
+func (e *Engine) MkdirAll(ctx context.Context, sandboxKey engine.SandboxKey, path string, mode os.FileMode) error {
+	return e.client.MkdirAll(ctx, sandboxKey.Value, path, mode)
 }
 
-func (e *Engine) Execute(ctx context.Context, sandboxID string, command engine.Command) (engine.CommandResult, error) {
-	return e.client.Run(ctx, sandboxID, command)
+func (e *Engine) Execute(
+	ctx context.Context,
+	sandboxKey engine.SandboxKey,
+	command engine.Command,
+) (engine.CommandResult, error) {
+	return e.client.Run(ctx, sandboxKey.Value, command)
 }
 
 // Starter only waits for the Sandbox Engine endpoint to become ready. The

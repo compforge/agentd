@@ -26,6 +26,7 @@ import (
 	"github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	sessionreconciler "github.com/compforge/agentd/agentd/internal/session/reconciler"
 	managedevent "github.com/compforge/agentd/internal/event"
 	"github.com/compforge/agentd/internal/executionapi"
 	"gorm.io/driver/sqlite"
@@ -75,6 +76,12 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatal(err)
 	}
 	defer agentletConnector.CloseIdleConnections()
+	executionReconciler, err := sessionreconciler.New(controlService, events, agentletConnector, sessionreconciler.Config{
+		Interval: time.Second, RequestTimeout: time.Second, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -90,7 +97,8 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		hertzserver.WithSenseClientDisconnection(true),
 	)
 	api.New(
-		controlService, events, agentletConnector, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		controlService, events, agentletConnector, executionReconciler,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	).Register(server.Engine)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Run() }()
@@ -149,7 +157,10 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		}},
 	})
 	if err != nil {
-		t.Fatalf("persist Event and wake assigned Agentlet: %v", err)
+		t.Fatalf("persist Event for asynchronous execution: %v", err)
+	}
+	if err := executionReconciler.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile durable Event into Agentlet execution: %v", err)
 	}
 	installed := worker.work()
 	if installed.Session.ID != session.ID || installed.Agent.ID != agent.ID ||
