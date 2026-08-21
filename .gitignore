@@ -3,3 +3,8 @@
 .DS_Store
 .idea/
 .worktrees/
+/tests/perf/.venv/
+/tests/perf/runs/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

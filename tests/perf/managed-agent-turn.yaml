@@ -1,0 +1,63 @@
+name: agentd-managed-agent-turn
+extensions: [agentd_perf.managed_agent]
+strict_slo: true
+
+subject:
+  name: agentd
+  base_url: http://127.0.0.1:8020
+  headers:
+    x-api-key: test
+    anthropic-beta: managed-agents-2026-04-01
+  k8s:
+    kubeconfig: ~/.kube/REPLACE_WITH_TARGET
+    namespace: agentd
+    app_label: app.kubernetes.io/name=agentd
+
+resources:
+  - {}
+
+workload:
+  name: managed_agent
+  model: claude-sonnet-4-6
+  pool_size: 10
+  timeout_s: 180
+  poll_interval_s: 0.5
+  use_sandbox_tools: true
+
+caseset: ./cases/turn.yaml
+cases:
+  - {id: sandbox_turn, weight: 1}
+
+load:
+  model: open
+  max_inflight: 10
+  graceful_stop_s: 180
+  abort_on_error_rate: 0.05
+  breaker_min_n: 10
+  stages:
+    - {name: ramp-0.1, ramp_to: 0.1, over_s: 30}
+    - {name: hold-0.1, hold: 0.1, for_s: 120}
+    - {name: ramp-0.25, ramp_to: 0.25, over_s: 30}
+    - {name: hold-0.25, hold: 0.25, for_s: 180}
+
+observe:
+  - name: agentd
+    probes: [top, restart, limits, pods]
+  - name: worker
+    k8s:
+      kubeconfig: ~/.kube/REPLACE_WITH_TARGET
+      namespace: agentd
+      app_label: app.kubernetes.io/name=agentlet
+    probes: [top, restart, limits, pods]
+
+slo:
+  - {metric: request.error_rate.value, lt: 0.01}
+  - {metric: request.drop_rate.value, lte: 0}
+  - {metric: 'request.error_rate{turn_kind="sandbox"}.value', lt: 0.01}
+  - {metric: 'request.duration_ms{turn_kind="sandbox"}.p95', lt: 180000}
+  - {metric: 'restart.restarts{service="agentd"}.increase', lte: 0}
+  - {metric: 'restart.restarts{service="worker"}.increase', lte: 0}
+
+observe_interval_s: 5
+cooldown_s: 30
+runs_dir: ./runs

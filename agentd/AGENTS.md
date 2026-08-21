@@ -27,6 +27,9 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   ├── event/                  # 共享 Ledger 上的 Managed Event 投影与写入边界
 │   ├── executionapi/           # agentd → Agentlet 内部执行协议
 │   └── persistence/            # 两个进程共用的 SQLite/MySQL、Ledger 与 Checkpoint 组装
+├── tests/
+│   ├── e2e/                    # 仅通过公开 API 验收整个已部署系统
+│   └── perf/                   # CaseSet、负载 profile、SLO 与系统观测
 ├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
 │   │   ├── api/               # Control Plane HTTP 适配
@@ -97,6 +100,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 - `docs/harness.md` — Harness 执行边界、适配契约、恢复语义与 AgentGo 实现
 - `docs/sandbox-engine.md` — Sandbox Engine 能力契约、资源生命周期与隔离要求
 - `../deploy/k8s/README.md` — Quick Start Helm 形态、Worker 模板与扩缩容流程
+- `../tests/README.md` — 系统级 E2E / perf 边界、触发方式与子套件索引
 - `https://platform.claude.com/docs/en/managed-agents/overview` — 上游 API 概念与行为基线
 - `https://github.com/opensandbox-group/OpenSandbox/tree/main/specs` — Sandbox Lifecycle 与 Execd 设计参考
 - `https://github.com/compforge/agent-ledger/tree/main/spec` — Ledger 事件、追加与 Adapter 契约
