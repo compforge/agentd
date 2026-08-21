@@ -70,11 +70,6 @@ type TurnInput = harness.TurnInput
 
 type TurnResult = harness.TurnResult
 
-type IncomingEvent struct {
-	Type    string
-	Content []map[string]any
-}
-
 type ManagedEvent = harness.ManagedEvent
 
 type Repository interface {

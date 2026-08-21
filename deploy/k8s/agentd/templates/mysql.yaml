@@ -1,0 +1,111 @@
+{{- if and (not .Values.database.dsn) .Values.database.mysql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentd.mysqlName" . }}
+  labels:
+    {{- include "agentd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "agentd.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: database
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+{{- if .Values.database.mysql.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentd.mysqlName" . }}
+  labels:
+    {{- include "agentd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.database.mysql.persistence.storageClass }}
+  storageClassName: {{ .Values.database.mysql.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.database.mysql.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentd.mysqlName" . }}
+  labels:
+    {{- include "agentd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentd.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agentd.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: mysql
+          image: "{{ .Values.database.mysql.image.repository }}:{{ .Values.database.mysql.image.tag }}"
+          imagePullPolicy: {{ .Values.database.mysql.image.pullPolicy }}
+          env:
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentd.databaseSecretName" . }}
+                  key: database
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentd.databaseSecretName" . }}
+                  key: username
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentd.databaseSecretName" . }}
+                  key: password
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentd.databaseSecretName" . }}
+                  key: root-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          readinessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          resources:
+            {{- toYaml .Values.database.mysql.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.database.mysql.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "agentd.mysqlName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

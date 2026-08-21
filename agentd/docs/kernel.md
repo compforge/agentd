@@ -27,13 +27,18 @@ Claude-compatible API / Baton / scheduled trigger
               agentd / Control Plane
        resource / scheduling / routing / reconcile
               │ internal execution API + Assignment
-                         ▼
-                      Agentlet
-          runtime / freeze / restore
-           │              │              │
-           ▼              ▼              ▼
-     Harness Adapter  Sandbox Engine  Agent Ledger
-       AgentGo ...    local/remote    durable facts
+              │                         ▼
+              │                      Agentlet
+              │             runtime / freeze / restore
+              │                │              │
+              │                ▼              ▼
+              │          Harness Adapter  Sandbox Engine
+              │            AgentGo ...    local/remote
+              │
+              └───────────────┬───────────────┘
+                              ▼
+                         Agent Ledger
+                         durable facts
 ```
 
 - **Harness** 是演员：执行模型循环、工具调用和上下文处理。AgentGo 是首个实现，后续可接入
@@ -42,12 +47,42 @@ Claude-compatible API / Baton / scheduled trigger
   业务编排提供，不进入 agentd 内核。
 - **agentd** 是 Control Plane 的代码与服务边界，做全局资源、placement 和请求路由；详细边界见
   `agentd.md`。
-- **Agentlet** 只执行分配到本实例的 Session，拥有 Harness、Checkpoint、Ledger 与 Sandbox 的执行侧
-  编排；详细边界见 `agentlet.md`。
+- **Agentlet** 只执行分配到本实例的 Session，拥有 Harness、Checkpoint 与 Sandbox 的执行侧
+  编排，并写入它亲自产生的执行事实；详细边界见 `agentlet.md`。
 - **Sandbox Engine** 提供隔离的文件、进程和资源生命周期，可以接入本地或远端引擎；能力和资源
   边界见 `sandbox-engine.md`。
 - **Agent Ledger** 记录不可变的执行事实和副作用边界。它帮助恢复判断、审计和追踪，但不保存
   Harness State，也不替 agentd 做调度决策。
+
+一个完整部署中的 agentd 与所有 Agentlet 必须连接同一个逻辑数据库，并通过同一个 Managed Event
+Ledger Adapter 访问 Event 投影；共享存储不等于共享写入责任。边界遵循“谁产生，谁写入”：
+
+- agentd 只写入它在公开 API 边界接收的 ingress 事实，如 `user.message` 和
+  `user.interrupt`；
+- Agentlet 只写入 Harness 执行、恢复和输出产生的 execution 事实，包括模型、
+  工具、Checkpoint 提交与 Agent 输出；
+- Managed Event Ledger Adapter 统一拥有 lane schema、幂等键、并发追加和对外投影语义，
+  agentd 和 Agentlet 都不伪装成对方写事实。
+
+因此 Agentlet 内部协议只传递 WorkSpec、wake、interrupt 和 observed state，不再代理公开
+Event 读写。agentd 直接从共享 Ledger 提供 Event list/stream，并在持久化 ingress 后通知
+Agentlet 执行。
+
+### agentd 与 Agentlet 的职能边界
+
+| 能力 | agentd | Agentlet |
+|------|--------|----------|
+| Managed Agents API | 拥有公开协议、View Model 和兼容性 | 不暴露公开 API |
+| Event | 接收并持久化用户 ingress，直接提供 list/stream | 不接收、不代理、不查询公开 Event；只写自身产生的执行事实 |
+| Session 与资源 | 拥有全局事实、期望状态和对外读模型 | 仅缓存当前 Assignment 所需的执行快照 |
+| 调度 | 创建 Worker、选择 placement、维护 Assignment | 不选择 Worker，也不修改全局 Assignment |
+| 执行 | 通过 `wake`、`interrupt` 发出带 Assignment 门禁的执行意图 | 校验 Assignment，驱动 Harness 并观测本地执行状态 |
+| Harness 与 Sandbox | 只依赖能力契约 | 拥有 Adapter、短命 Harness runtime 和 Sandbox Engine 调用 |
+| 恢复 | 决定何时、在哪里重新分配和唤醒 Work | 根据 Checkpoint 与 Ledger 在当前 Assignment 内恢复执行 |
+
+判断一项能力归属时，先看它是**全局控制事实**还是**单次分配内的执行实现**：前者属于
+agentd，后者属于 Agentlet。共享数据库只是部署和一致性手段，不改变这个边界；尤其不能因为
+Agentlet 能访问 Ledger，就让它承担公开 Event API。
 
 agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程模型。
 
@@ -72,8 +107,8 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 2. 用户 Event 持久化后才确认接收，Controller 生成待执行意图；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
    Lifecycler 根据持久化需求创建 Worker，Observer 确认 Ready 后再持久化 Assignment；
-4. Connector 把执行请求转换为携带 Assignment 的内部请求；持久 Event 读取则通过任意健康 Worker
-   访问 Agentlet 共享持久层，不创建或依赖 Assignment；
+4. agentd 直接从共享 Ledger 读取持久 Event；Connector 只把携带 Assignment 的 wake、
+   interrupt 和状态请求转换为 Agentlet 内部调用；
 5. Agentlet 接受执行请求后通过 Harness Adapter 创建或恢复短命 runtime；
 6. Harness 执行模型循环，工具调用通过 Sandbox Engine 进入对应 Session 的隔离环境；
 7. Harness 输出投影为持久化 Event，并提交最新恢复点；
@@ -97,6 +132,19 @@ Webhook 不属于当前服务边界。无法提供语义保证的能力返回明
 静默降级。
 
 兼容核心资源和行为可以复用现有客户端与 SDK；agentd 不复制尚未具备运行语义的完整产品面。
+
+Claude 兼容面与 agentd 内部模型必须显式隔离：
+
+- **API View Model** 只表达 Claude Managed Agents 的 request、response、分页和 error
+  envelope，可随官方 API 演进；
+- **Domain Model** 表达 agentd 自身的 Session、Worker、Assignment 和调度语义，不承诺
+  与公开 JSON 同形；
+- **DB Model** 是 Repository 内部的持久化行与索引形状，可随 agentd 业务和迁移需求
+  调整，不直接暴露给 handler。
+
+Handler 负责 API View 与 Domain command/result 的显式转换，Repository 负责 Domain 与 DB
+row 的显式转换。官方 API 增加字段不意味着机械扩表，存储结构变化也不得泄漏
+到兼容协议。
 
 ## 持久化、恢复与审计
 

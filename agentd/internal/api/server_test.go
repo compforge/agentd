@@ -19,12 +19,14 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
+	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentd/internal/api"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	"github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	managedevent "github.com/compforge/agentd/internal/event"
 	"github.com/compforge/agentd/internal/executionapi"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -34,7 +36,8 @@ import (
 func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	worker := &fakeAgentlet{workerID: "worker-1"}
+	events := managedevent.NewLog(agentledger.NewMemoryEventStore())
+	worker := &fakeAgentlet{workerID: "worker-1", events: events}
 	workerServer := httptest.NewServer(worker)
 	defer workerServer.Close()
 
@@ -87,7 +90,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		hertzserver.WithSenseClientDisconnection(true),
 	)
 	api.New(
-		controlService, agentletConnector, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		controlService, events, agentletConnector, slog.New(slog.NewTextHandler(io.Discard, nil)),
 	).Register(server.Engine)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Run() }()
@@ -146,7 +149,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		}},
 	})
 	if err != nil {
-		t.Fatalf("send Event through assigned Agentlet: %v", err)
+		t.Fatalf("persist Event and wake assigned Agentlet: %v", err)
 	}
 	installed := worker.work()
 	if installed.Session.ID != session.ID || installed.Agent.ID != agent.ID ||
@@ -156,9 +159,9 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 
 	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
 	if err != nil {
-		t.Fatalf("list Event through assigned Agentlet: %v", err)
+		t.Fatalf("list Event from shared Ledger: %v", err)
 	}
-	if len(page.Data) != 1 || page.Data[0].Type != "agent.message" {
+	if len(page.Data) != 2 || page.Data[0].Type != "user.message" || page.Data[1].Type != "agent.message" {
 		t.Fatalf("listed Events = %#v", page.Data)
 	}
 
@@ -170,7 +173,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		cancelStream()
 		t.Fatalf("stream Event through assigned Agentlet: %v", stream.Err())
 	}
-	if stream.Current().Type != "agent.message" {
+	if stream.Current().Type != "user.message" {
 		cancelStream()
 		t.Fatalf("streamed Event = %#v", stream.Current())
 	}
@@ -212,7 +215,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatalf("list Events after Assignment release: %v", err)
 	}
-	if len(page.Data) != 1 || page.Data[0].Type != "agent.message" {
+	if len(page.Data) != 2 || page.Data[1].Type != "agent.message" {
 		t.Fatalf("Events after Assignment release = %#v", page.Data)
 	}
 }
@@ -222,7 +225,7 @@ type fakeAgentlet struct {
 	workerID string
 	workSpec executionapi.WorkSpec
 	state    executionapi.SessionState
-	hasEvent bool
+	events   *managedevent.Log
 }
 
 func (a *fakeAgentlet) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -256,7 +259,7 @@ func (a *fakeAgentlet) ServeHTTP(response http.ResponseWriter, request *http.Req
 			return
 		}
 		writeFakeJSON(response, a.state)
-	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/events"):
+	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/wake"):
 		if !a.currentAssignment(request) {
 			http.Error(response, "stale Assignment", http.StatusBadRequest)
 			return
@@ -264,29 +267,28 @@ func (a *fakeAgentlet) ServeHTTP(response http.ResponseWriter, request *http.Req
 		a.state.Status = "idle"
 		a.state.ResumeRef = "checkpoint-7"
 		a.state.ResumeRevision = 7
-		a.hasEvent = true
-		writeFakeJSON(response, map[string]any{"data": []any{map[string]any{
-			"id": "event-user-1", "type": "user.message", "processed_at": time.Now().UTC(),
-			"content": []any{map[string]any{"type": "text", "text": "hello"}},
-		}}})
-	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/events/stream"):
-		if request.Header.Get(executionapi.AssignmentHeader) != "" {
-			http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
+		pending, err := a.events.UnprocessedUserMessages(request.Context(), a.workSpec.Session.ID)
+		if err != nil || len(pending) == 0 {
+			http.Error(response, "missing durable input", http.StatusInternalServerError)
 			return
 		}
-		response.Header().Set("Content-Type", "text/event-stream")
-		encoded, _ := json.Marshal(fakeAgentMessage())
-		_, _ = fmt.Fprintf(response, "event: agent.message\ndata: %s\n\n", encoded)
-	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/events"):
-		if request.Header.Get(executionapi.AssignmentHeader) != "" {
-			http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
+		inputID, _ := pending[0]["id"].(string)
+		if err := a.events.AppendExecution(
+			request.Context(), a.workSpec.Session.ID,
+			managedevent.NewTurn(inputID, "agent.message", map[string]any{
+				"content": []any{map[string]any{"type": "text", "text": "done"}},
+			}),
+		); err != nil {
+			http.Error(response, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		data := []any{}
-		if a.hasEvent {
-			data = append(data, fakeAgentMessage())
+		if err := a.events.MarkProcessed(request.Context(), a.workSpec.Session.ID, inputID); err != nil {
+			http.Error(response, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		writeFakeJSON(response, map[string]any{"data": data, "next_page": nil})
+		writeFakeJSON(response, map[string]any{"ok": true})
+	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/interrupt"):
+		writeFakeJSON(response, map[string]any{"ok": true})
 	default:
 		http.NotFound(response, request)
 	}
@@ -301,13 +303,6 @@ func (a *fakeAgentlet) work() executionapi.WorkSpec {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.workSpec
-}
-
-func fakeAgentMessage() map[string]any {
-	return map[string]any{
-		"id": "event-agent-1", "type": "agent.message", "processed_at": time.Now().UTC(),
-		"content": []any{map[string]any{"type": "text", "text": "done"}},
-	}
 }
 
 func writeFakeJSON(response http.ResponseWriter, value any) {

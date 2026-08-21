@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agentd
-description: Managed Agent control plane and elastic Worker Pod template
+description: Managed Agent control plane, shared database, and elastic Worker Pod template
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

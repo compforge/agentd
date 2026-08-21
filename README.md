@@ -56,8 +56,9 @@ The public Managed Agents API is exposed by agentd on port `8020`. Agentlet list
 inside each Worker Pod and serves only agentd under `/internal/v1`; clients should not connect to it
 directly.
 
-The default Helm values install one agentd replica backed by ephemeral SQLite. Production and
-multi-replica deployments require external MySQL storage. The Helm topology is currently a preview
+The default Helm values install one agentd replica and a shared MySQL Deployment backed by a PVC;
+agentd and every Agentlet use the same database. Production deployments can replace the built-in
+database with an external MySQL DSN. The Helm topology is currently a preview
 while Assignment release and cross-Worker recovery are being completed. See
 [`deploy/k8s/README.md`](deploy/k8s/README.md) for the topology, persistence options, image settings,
 and current limitations.

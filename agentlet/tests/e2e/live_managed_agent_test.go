@@ -12,9 +12,9 @@ import (
 
 	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentd/agentlet/internal/harness"
-	"github.com/compforge/agentd/agentlet/internal/persistence"
 	"github.com/compforge/agentd/agentlet/internal/sandbox"
 	"github.com/compforge/agentd/agentlet/internal/service"
+	"github.com/compforge/agentd/internal/persistence"
 )
 
 func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
@@ -61,7 +61,8 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	}
 
 	resources := service.NewMemoryRepository()
-	executionService := service.New(resources, service.NewEventLog(storage.Ledger), agentHarness)
+	events := service.NewEventLog(storage.Ledger)
+	executionService := service.New(resources, events, agentHarness)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -83,13 +84,9 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executionService.SendEvents(ctx, session.ID, []service.IncomingEvent{{
-		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "Reply with READY."}},
-	}}); err != nil {
-		t.Fatal(err)
-	}
+	appendAndWake(t, ctx, events, executionService, session.ID, "Reply with READY.")
 	waitForIdle(t, ctx, executionService, session.ID)
-	firstMessages := assistantMessageCount(t, ctx, executionService, session.ID)
+	firstMessages := assistantMessageCount(t, ctx, events, session.ID)
 	if firstMessages == 0 {
 		t.Fatal("first turn produced no assistant message")
 	}
@@ -99,19 +96,15 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted := service.New(resources, service.NewEventLog(storage.Ledger), agentHarness)
+	restarted := service.New(resources, events, agentHarness)
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = restarted.Shutdown(shutdownCtx)
 	})
-	if _, err := restarted.SendEvents(ctx, session.ID, []service.IncomingEvent{{
-		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "Reply with RESUMED."}},
-	}}); err != nil {
-		t.Fatal(err)
-	}
+	appendAndWake(t, ctx, events, restarted, session.ID, "Reply with RESUMED.")
 	waitForIdle(t, ctx, restarted, session.ID)
-	if count := assistantMessageCount(t, ctx, restarted, session.ID); count <= firstMessages {
+	if count := assistantMessageCount(t, ctx, events, session.ID); count <= firstMessages {
 		t.Fatalf("assistant messages after restart = %d, want more than %d", count, firstMessages)
 	}
 	model.assertRequests(t, 4)
@@ -194,14 +187,34 @@ func waitForIdle(t *testing.T, ctx context.Context, executionService *service.Se
 	}
 }
 
-func assistantMessageCount(t *testing.T, ctx context.Context, executionService *service.Service, sessionID string) int {
+func appendAndWake(
+	t *testing.T,
+	ctx context.Context,
+	events *service.EventLog,
+	executionService *service.Service,
+	sessionID string,
+	message string,
+) {
 	t.Helper()
-	events, err := executionService.ListEvents(ctx, sessionID)
+	input := service.NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": message}},
+	})
+	if err := events.AppendIngress(ctx, sessionID, input); err != nil {
+		t.Fatal(err)
+	}
+	if err := executionService.Wake(ctx, sessionID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assistantMessageCount(t *testing.T, ctx context.Context, events *service.EventLog, sessionID string) int {
+	t.Helper()
+	stored, err := events.List(ctx, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	count := 0
-	for _, event := range events {
+	for _, event := range stored {
 		if event["type"] == "agent.message" {
 			count++
 		}

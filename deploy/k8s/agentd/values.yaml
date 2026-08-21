@@ -25,13 +25,27 @@ model:
   apiKey: ""
   baseURL: ""
 
-agentlet:
-  database:
-    dsn: ""
+database:
+  # Set an external DSN to skip the built-in MySQL workload.
+  dsn: ""
+  mysql:
+    enabled: true
+    image:
+      repository: mysql
+      tag: "8.4"
+      pullPolicy: IfNotPresent
+    auth:
+      database: agentd
+      username: agentd
+      password: agentd
+      rootPassword: agentd-root
+    persistence:
+      enabled: true
+      size: 8Gi
+      storageClass: ""
+    resources: {}
 
 agentd:
-  database:
-    dsn: ""
   # Defaults come from agentd/config.go. Add only intentional overrides here.
   extraEnv: []
   resources: {}

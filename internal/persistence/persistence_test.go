@@ -18,7 +18,7 @@ func TestOpenFallsBackToSQLite(t *testing.T) {
 	if backend.Provider != "sqlite" {
 		t.Fatalf("Provider = %q, want sqlite", backend.Provider)
 	}
-	if backend.Ledger == nil || backend.Checkpoints == nil {
+	if backend.Database == nil || backend.Ledger == nil || backend.Checkpoints == nil {
 		t.Fatal("SQLite backend did not initialize all stores")
 	}
 }

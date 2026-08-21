@@ -6,7 +6,8 @@ Pod，Pod 内固定包含 Agentlet 与 Sandbox Engine 两个容器。
 
 Helm Chart 位于 `deploy/k8s/agentd`，负责安装 agentd workload、namespace RBAC 和 Worker
 PodTemplate。agentd 启动时加载模板，并常驻运行 Worker Observer、Lifecycler 和 Pod GC；Connector
-按 Assignment 转发执行请求，并通过任意健康 Worker 读取共享持久 Event。
+只按 Assignment 转发 WorkSpec、wake、interrupt 和状态请求。agentd 直接读写共享 Ledger 上的
+持久 Event，不经过 Worker。
 
 ## 部署拓扑
 
@@ -17,8 +18,8 @@ Client ── Agent API ──►│ agentd Deployment (replicas=N)│
                         │ Observer   Scheduler         │
                         │ Lifecycler Connector         │
                         └──────┬───────────┬───────────┘
-                               │ K8s API   │ Agent API
-                   Ensure/Destroy│         │ forward/stream
+                               │ K8s API   │ internal API
+                   Ensure/Destroy│         │ WorkSpec/wake/state
                                ▼           ▼
                          Worker Pod
                     ┌────────────────────────────┐
@@ -28,6 +29,9 @@ Client ── Agent API ──►│ agentd Deployment (replicas=N)│
                     │  Sandbox Engine :8080      │
                     └────────────────────────────┘
 ```
+
+agentd Deployment 与所有 Worker Pod 通过同一个 MySQL Service 访问 Control State、Checkpoint 和
+Agent Ledger。默认 Chart 创建单实例 MySQL Deployment 与 PVC；配置外部 DSN 时不创建内置 MySQL。
 
 每个 Worker 使用独立 Pod，不放进共享 Deployment。这样 agentd 可以精确 drain 和删除一个空闲
 Worker，不会让 Kubernetes 在缩容时选中仍承载 Session 的 Pod。Worker 使用 agentd 生成的 UUID，
@@ -47,12 +51,12 @@ readiness probe 都通过。
 | Scheduler | 基于 Worker facts、容量与 Assignment 做纯 placement 决策 | 访问数据库/K8s、触发扩容 |
 | Lifecycler | 根据持久化需求收敛 Worker 供给，推进 creating/active/draining/retired | 宣告 Ready、转发请求 |
 | Provisioner | 幂等 `Ensure` / `Destroy` 一个 Worker Pod | 容量决策、调度 |
-| Connector | 按 Assignment 转发执行流量；通过健康 endpoint 读取共享持久 Event | 改 Assignment、管理生命周期 |
+| Connector | 按 Assignment 转发 WorkSpec、wake、interrupt 和状态读取 | Event API、改 Assignment、管理生命周期 |
 
 这组边界借鉴 sandctl 的 lifecycle / observer / connector 分工：动作、事实和数据面分别只有一个
 owner。Lifecycler 调用 Provisioner 成功只表示 Kubernetes 接受了期望状态，只有 Observer 可以把
-Worker 标为 Ready。执行流量从 Assignment 解析当前 Worker；Event 读取可选择任意健康 Worker。
-endpoint 是一次路由结果，不是新的持久化 identity。
+Worker 标为 Ready。执行流量从 Assignment 解析当前 Worker；公开 Event 由 agentd 直接访问共享
+Ledger。endpoint 是一次路由结果，不是新的持久化 identity。
 
 ## 扩容
 
@@ -126,27 +130,26 @@ agentd 可以运行多个副本，每个副本都提供 API、Scheduler 和 Conn
 Helm Chart 应安装：
 
 - 一个 agentd Deployment、Service 和 ServiceAccount；
-- agentd 与 Agentlet 各自的可选 MySQL DSN，以及模型连接配置；
+- agentd 与所有 Agentlet 共用的 MySQL DSN Secret，以及模型连接配置；
+- 默认最小部署所需的单实例 MySQL Deployment、Service 与 PVC；
 - Worker Pod 模板，包括两个容器、资源限制、探针、ServiceAccount、volume 和 placement；
 - agentd 管理 Worker 所需的 namespace、managed labels 和 Worker PodTemplate；
 - 最小 RBAC：观察、创建和删除受管 Worker Pod。
 
 Helm 不预创建固定数量的匿名 Worker，也不直接参与 Session placement。SRE 通过 values 决定镜像、
 资源、亲和性、污点容忍、网络策略、配额和集群容量；agentd 只在这些部署约束内调整 Worker 数量。
-默认安装使用单副本 agentd 和容器本地 SQLite，不创建 PVC；这适合开发、试用和控制面联调，Pod
-重建后数据会丢失。生产环境或多副本 agentd 通过 `agentd.database.dsn` 配置外部 MySQL；Chart
-会拒绝“多副本但没有外置 DB”的配置。Agentlet 未配置 MySQL 时也使用 Worker Pod 内的 SQLite；
-它只能用于单 Worker 的最小体验，Worker 被删除或重建后，Session、Checkpoint 与 Ledger 会一起丢失。
-多 Worker 部署必须让所有 Agentlet 连接同一 Agentlet database，才能由任意 Worker 提供 Event list/stream
-和安全恢复。agentd 与 Agentlet 没有共享表契约；两者可以使用同一 MySQL 实例中的不同 database，也
-可以使用完全独立的数据库和凭据。
+默认安装使用单副本 agentd，并创建一个单实例 MySQL Deployment、ClusterIP Service 和 PVC。agentd
+与所有 Agentlet 从同一个 Secret 获取 DSN，因此 Worker 回收或迁移不会丢失 Event、Checkpoint 与
+Ledger。内置 MySQL 用于最小部署和开发体验，不提供高可用；生产环境应通过 `database.dsn` 接入托管
+或独立运维的 MySQL，设置该值后 Chart 自动跳过内置 MySQL。Chart 不允许既关闭内置 MySQL、又不提供
+外部 DSN，因为 Kubernetes 下彼此隔离的本地 SQLite 无法满足共享 Ledger 契约。
 
 ```bash
 helm upgrade --install agentd deploy/k8s/agentd \
   --namespace agentd --create-namespace
 ```
 
-使用外部 MySQL 时在自定义 values 中分别配置两个 DSN：
+使用外部 MySQL 时在自定义 values 中配置一个共享 DSN：
 
 ```bash
 helm upgrade --install agentd deploy/k8s/agentd \
@@ -159,14 +162,16 @@ helm upgrade --install agentd deploy/k8s/agentd \
 ```yaml
 replicaCount: 1
 
-agentd:
-  database:
-    dsn: "" # 空值时 agentd 使用本地 SQLite
-  extraEnv: [] # 仅在需要覆盖 config.go 默认值时添加
+database:
+  dsn: "" # 非空时使用外部 MySQL，并跳过内置 MySQL
+  mysql:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 8Gi
 
-agentlet:
-  database:
-    dsn: "" # 空值时 Agentlet 使用本地 SQLite，Worker 删除后数据丢失
+agentd:
+  extraEnv: [] # 仅在需要覆盖 config.go 默认值时添加
 
 worker:
   capacity: 1 # 同时约束控制面 placement 和单个 Agentlet 的 Work reservation
@@ -191,7 +196,7 @@ agentd:
       value: "2"
 ```
 
-`AGENTD_WORKER_MIN_COUNT` 默认且最小为 `1`，确保没有执行需求时仍保留一个可用 Agentlet 数据面。
+`AGENTD_WORKER_MIN_COUNT` 当前默认且最小为 `1`，用于保留一个预热执行节点；Event 读取不依赖它。
 `AGENTD_WORKER_MIN_IDLE` 默认 `0`，只在需要额外预热空闲容量时覆盖。
 
 Chart 把 Worker PodTemplate 挂载到 agentd，由 Provisioner materialize 为独立 Worker Pod；Helm

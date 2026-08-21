@@ -3,17 +3,15 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/compforge/agentd/internal/executionapi"
 )
 
-func TestClientInstallsWorkAndForwardsAssignedRequests(t *testing.T) {
+func TestClientInstallsWorkAndCallsAssignedSessionActions(t *testing.T) {
 	t.Parallel()
 	var installed executionapi.WorkSpec
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -39,17 +37,12 @@ func TestClientInstallsWorkAndForwardsAssignedRequests(t *testing.T) {
 			_ = json.NewEncoder(response).Encode(executionapi.SessionState{
 				AssignmentID: "assignment-1", Status: "idle", ResumeRef: "checkpoint-7", ResumeRevision: 7,
 			})
-		case "/internal/v1/sessions/session-1/events":
-			if request.URL.Query().Get("limit") != "10" || request.Header.Get("X-Request-ID") != "request-1" {
-				http.Error(response, "forwarded request metadata", http.StatusBadRequest)
+		case "/internal/v1/sessions/session-1/wake", "/internal/v1/sessions/session-1/interrupt":
+			if request.Method != http.MethodPost {
+				http.Error(response, "method", http.StatusMethodNotAllowed)
 				return
 			}
-			body, _ := io.ReadAll(request.Body)
-			response.Header().Set("Content-Type", "application/json")
-			_, _ = response.Write(body)
-		case "/internal/v1/sessions/session-1/events/stream":
-			response.Header().Set("Content-Type", "text/event-stream")
-			_, _ = response.Write([]byte("event: message\ndata: {\"type\":\"agent.message\"}\n\n"))
+			_, _ = response.Write([]byte(`{"ok":true}`))
 		default:
 			http.NotFound(response, request)
 		}
@@ -86,66 +79,10 @@ func TestClientInstallsWorkAndForwardsAssignedRequests(t *testing.T) {
 		t.Fatalf("Session state = %#v", state)
 	}
 
-	response, err := client.Forward(
-		context.Background(), target, http.MethodPost,
-		"/internal/v1/sessions/session-1/events", "limit=10", []byte(`{"events":[]}`),
-		http.Header{"X-Request-ID": []string{"request-1"}}, false,
-	)
-	if err != nil {
+	if err := client.Wake(context.Background(), target); err != nil {
 		t.Fatal(err)
 	}
-	body, readErr := io.ReadAll(response.Body)
-	response.Body.Close()
-	if readErr != nil || string(body) != `{"events":[]}` {
-		t.Fatalf("forwarded response = %q, error = %v", body, readErr)
-	}
-
-	response, err = client.Forward(
-		context.Background(), target, http.MethodGet,
-		"/internal/v1/sessions/session-1/events/stream", "", nil, nil, true,
-	)
-	if err != nil {
+	if err := client.Interrupt(context.Background(), target); err != nil {
 		t.Fatal(err)
-	}
-	body, readErr = io.ReadAll(response.Body)
-	response.Body.Close()
-	if readErr != nil || !strings.Contains(string(body), `"type":"agent.message"`) {
-		t.Fatalf("streamed response = %q, error = %v", body, readErr)
-	}
-}
-
-func TestClientForwardsEventReadsWithoutAssignment(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Header.Get(executionapi.WorkerHeader) != "worker-2" {
-			http.Error(response, "wrong Worker", http.StatusBadRequest)
-			return
-		}
-		if request.Header.Get(executionapi.AssignmentHeader) != "" {
-			http.Error(response, "unexpected Assignment", http.StatusBadRequest)
-			return
-		}
-		_, _ = response.Write([]byte(`{"data":[],"next_page":null}`))
-	}))
-	defer server.Close()
-
-	client, err := New(Config{
-		RequestTimeout: time.Second, DialTimeout: time.Second, ResponseHeaderTimeout: time.Second,
-		IdleConnTimeout: time.Second, MaxIdleConns: 4, MaxIdleConnsPerHost: 2,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.CloseIdleConnections()
-	response, err := client.ForwardEventRead(
-		context.Background(), EventTarget{Endpoint: server.URL, WorkerID: "worker-2"},
-		http.MethodGet, "/internal/v1/sessions/session-1/events", "", nil, false,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("Event read status = %d", response.StatusCode)
 	}
 }

@@ -53,6 +53,7 @@ type config struct {
 	readTimeout                  time.Duration
 	idleTimeout                  time.Duration
 	shutdownTimeout              time.Duration
+	eventPollInterval            time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -103,6 +104,7 @@ func loadConfig() (config, error) {
 		readTimeout:                  30 * time.Second,
 		idleTimeout:                  2 * time.Minute,
 		shutdownTimeout:              15 * time.Second,
+		eventPollInterval:            500 * time.Millisecond,
 	}
 	if value.workerNamespace == "" {
 		value.workerNamespace = "default"
@@ -188,6 +190,7 @@ func loadConfig() (config, error) {
 		{"AGENTD_HTTP_READ_TIMEOUT", &value.readTimeout},
 		{"AGENTD_HTTP_IDLE_TIMEOUT", &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", &value.shutdownTimeout},
+		{"AGENTD_EVENT_STREAM_POLL_INTERVAL", &value.eventPollInterval},
 	}
 	for _, item := range durations {
 		parsed, err := durationEnv(item.name, *item.value)

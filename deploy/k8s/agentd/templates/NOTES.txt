@@ -1,12 +1,7 @@
-{{- if .Values.agentd.database.dsn }}
-agentd uses the configured external MySQL database.
+{{- if .Values.database.dsn }}
+agentd and all Agentlets use the configured external MySQL database.
 {{- else }}
-agentd uses ephemeral SQLite at /tmp/agentd.db. This mode supports one agentd replica only.
-{{- end }}
-{{- if .Values.agentlet.database.dsn }}
-Agentlet uses the configured external MySQL database.
-{{- else }}
-Agentlet uses ephemeral SQLite. Deleting its Worker Pod loses Session state, Ledger, and Checkpoints.
+agentd and all Agentlets share the built-in MySQL Deployment and its PVC.
 {{- end }}
 
 Health endpoint:

@@ -139,6 +139,12 @@ func TestRetiredWorkerRecordOutlivesPodThenExpires(t *testing.T) {
 
 func openRepository(t *testing.T) *gormrepo.GORMRepository {
 	t.Helper()
+	repository, _ := openRepositoryDatabase(t)
+	return repository
+}
+
+func openRepositoryDatabase(t *testing.T) (*gormrepo.GORMRepository, *gorm.DB) {
+	t.Helper()
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -149,5 +155,5 @@ func openRepository(t *testing.T) *gormrepo.GORMRepository {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repository
+	return repository, database
 }

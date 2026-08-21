@@ -23,6 +23,10 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ├── deploy/
 │   ├── docker/                 # agentd 与 agentlet 多阶段镜像构建
 │   └── k8s/                    # Helm Chart、Worker 双容器模板与弹性设计
+├── internal/
+│   ├── event/                  # 共享 Ledger 上的 Managed Event 投影与写入边界
+│   ├── executionapi/           # agentd → Agentlet 内部执行协议
+│   └── persistence/            # 两个进程共用的 SQLite/MySQL、Ledger 与 Checkpoint 组装
 ├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
 │   │   ├── api/               # Control Plane HTTP 适配
@@ -48,10 +52,9 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 └── agentlet/
     ├── agentlet.go            # Agentlet 依赖组装与服务生命周期
     ├── internal/
-    │   ├── api/               # 仅供 agentd 调用的内部执行 HTTP/SSE 适配
+    │   ├── api/               # 仅供 agentd 调用的 WorkSpec/wake/interrupt/state HTTP 适配
     │   ├── service/           # Session Work 生命周期与进程内执行快照
     │   ├── harness/           # Harness 契约及 adapter；AgentGo 是首个实现
-    │   ├── persistence/       # SQLite/MySQL 下的 Ledger 与 Checkpoint Store 组装
     │   ├── sandbox/           # Sandbox Engine 能力契约与默认 Adapter
     │   └── work/              # Assignment fence 下的进程内 Work 与唤醒合并
     └── tests/e2e/             # 显式 e2e build tag；恢复契约与 live 组件联调
@@ -70,8 +73,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Session 数调度；Agentlet 不主动注册或发心跳。
 4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
    Control State 中的 observation、Assignment 和容量做无 I/O placement，不访问 Kubernetes 或
-   Agentlet。Lifecycler 管理 Worker 供给；Connector 按 Assignment 转发执行流量，并通过任意健康
-   Worker 读取 Agentlet 共享持久层中的 Event。
+   Agentlet。Lifecycler 管理 Worker 供给；Connector 只按 Assignment 转发 WorkSpec、wake、interrupt
+   和状态读取。公开 Event 由 agentd 直接读写共享 Ledger。
 5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
    判断是否安全继续；同一 input 不重复注入，结果不明确的 Tool Attempt 不自动重放，Session
    转为 `terminated` 等待人工对账。

@@ -230,83 +230,33 @@ func (a *Service) ListSessions(ctx context.Context) ([]Session, error) {
 	return a.repository.ListSessions(ctx)
 }
 
-func (a *Service) SendEvents(ctx context.Context, sessionID string, incoming []IncomingEvent) ([]ManagedEvent, error) {
+func (a *Service) Wake(ctx context.Context, sessionID string) error {
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateIncoming(incoming); err != nil {
-		return nil, err
+		return err
 	}
 	if session.Control.Status == "terminated" {
-		return nil, fmt.Errorf("%w: session %s is terminated", ErrConflict, sessionID)
+		return fmt.Errorf("%w: session %s is terminated", ErrConflict, sessionID)
 	}
-	for _, item := range incoming {
-		if item.Type == "user.message" {
-			if err := a.ensureWork(session); err != nil {
-				return nil, err
-			}
-			break
-		}
+	pending, err := a.events.UnprocessedUserMessages(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("list pending inputs: %w", err)
 	}
-	accepted := make([]ManagedEvent, 0, len(incoming))
-	for _, item := range incoming {
-		switch item.Type {
-		case "user.message":
-			event := NewManagedEvent(item.Type, map[string]any{"content": item.Content})
-			event["processed_at"] = nil
-			if err := a.events.Append(ctx, sessionID, event); err != nil {
-				return nil, err
-			}
-			accepted = append(accepted, event)
-			transition(&session, "running")
-			if err := a.repository.PutSession(ctx, session); err != nil {
-				return nil, err
-			}
-			if err := a.enqueue(session); err != nil {
-				return nil, err
-			}
-		case "user.interrupt":
-			event := NewManagedEvent(item.Type, nil)
-			if err := a.events.Append(ctx, sessionID, event); err != nil {
-				return nil, err
-			}
-			accepted = append(accepted, event)
-			a.harness.Interrupt(sessionID)
-		}
+	if len(pending) == 0 {
+		return nil
 	}
-	return accepted, nil
+	if err := a.ensureWork(session); err != nil {
+		return err
+	}
+	return a.enqueue(session)
 }
 
-func validateIncoming(events []IncomingEvent) error {
-	if len(events) == 0 {
-		return invalid("events must not be empty")
+func (a *Service) Interrupt(ctx context.Context, sessionID string) error {
+	if _, err := a.repository.GetSession(ctx, sessionID); err != nil {
+		return err
 	}
-	for _, event := range events {
-		switch event.Type {
-		case "user.message":
-			if len(event.Content) == 0 {
-				return invalid("user.message content must not be empty")
-			}
-			for _, block := range event.Content {
-				if block["type"] != "text" {
-					return fmt.Errorf("%w: user.message content type %q", ErrUnsupported, block["type"])
-				}
-			}
-		case "user.interrupt":
-		default:
-			return fmt.Errorf("%w: event type %q", ErrUnsupported, event.Type)
-		}
-	}
+	a.harness.Interrupt(sessionID)
 	return nil
-}
-
-func (a *Service) ListEvents(ctx context.Context, sessionID string) ([]ManagedEvent, error) {
-	return a.events.List(ctx, sessionID)
-}
-
-func (a *Service) LoadEvents(ctx context.Context, sessionID string, afterSeq int64) ([]ManagedEvent, int64, error) {
-	return a.events.Load(ctx, sessionID, afterSeq)
 }
 
 // Recover reconciles durable inputs left by a replaced process or stopped worker.
@@ -351,7 +301,7 @@ func (a *Service) Recover(ctx context.Context) error {
 			}
 		}
 		inputID, _ := pending[0]["id"].(string)
-		if err := a.events.Append(ctx, session.ID, NewTurnEvent(inputID, "session.status_rescheduled", nil)); err != nil {
+		if err := a.events.AppendExecution(ctx, session.ID, NewTurnEvent(inputID, "session.status_rescheduled", nil)); err != nil {
 			return fmt.Errorf("record rescheduled session %q: %w", session.ID, err)
 		}
 		if err := a.ensureWork(session); err != nil {
@@ -517,14 +467,14 @@ func (a *Service) process(
 		return false, fmt.Errorf("persist running state: %w", err)
 	}
 	inputID, _ := input["id"].(string)
-	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_running", nil)); err != nil {
+	if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.status_running", nil)); err != nil {
 		return false, fmt.Errorf("record running state: %w", err)
 	}
 
 	var outputErr error
 	var outputMu sync.Mutex
 	result, runErr := a.harness.Run(ctx, executionSession(session), TurnInput{ID: inputID, Text: textContent(input)}, func(event ManagedEvent) error {
-		err := a.events.Append(ctx, sessionID, event)
+		err := a.events.AppendExecution(ctx, sessionID, event)
 		outputMu.Lock()
 		if outputErr == nil {
 			outputErr = err
@@ -549,7 +499,7 @@ func (a *Service) process(
 	session.Control.ResumeRef = resume.ResumeRef
 	session.Control.ResumeRevision = resume.ResumeRevision
 	if errors.Is(runErr, ErrUnsafeRecovery) {
-		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
+		if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "unsafe_recovery", "message": runErr.Error()},
 		})); err != nil {
 			return false, fmt.Errorf("record unsafe recovery: %w", err)
@@ -558,7 +508,7 @@ func (a *Service) process(
 		if err := a.repository.PutSession(ctx, session); err != nil {
 			return false, fmt.Errorf("persist terminated state: %w", err)
 		}
-		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_terminated", nil)); err != nil {
+		if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.status_terminated", nil)); err != nil {
 			return false, fmt.Errorf("record terminated state: %w", err)
 		}
 		if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {
@@ -571,14 +521,14 @@ func (a *Service) process(
 
 	stopReason := map[string]any{"type": "end_turn"}
 	if runErr != nil {
-		if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
+		if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.error", map[string]any{
 			"error": map[string]any{"type": "runtime_error", "message": runErr.Error()},
 		})); err != nil {
 			return false, fmt.Errorf("record harness error: %w", err)
 		}
 		stopReason = map[string]any{"type": "retries_exhausted"}
 	}
-	if err := a.events.Append(ctx, sessionID, NewTurnEvent(inputID, "session.status_idle", map[string]any{"stop_reason": stopReason})); err != nil {
+	if err := a.events.AppendExecution(ctx, sessionID, NewTurnEvent(inputID, "session.status_idle", map[string]any{"stop_reason": stopReason})); err != nil {
 		return false, fmt.Errorf("record idle state: %w", err)
 	}
 	if err := a.events.MarkProcessed(ctx, sessionID, inputID); err != nil {

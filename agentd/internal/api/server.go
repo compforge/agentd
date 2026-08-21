@@ -3,22 +3,45 @@ package api
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
 	"github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
+	managedevent "github.com/compforge/agentd/internal/event"
 )
 
 type Server struct {
-	service   *service.Service
-	connector *connector.Client
-	logger    *slog.Logger
+	service           *service.Service
+	events            *managedevent.Log
+	connector         *connector.Client
+	logger            *slog.Logger
+	eventPollInterval time.Duration
 }
 
-func New(controlService *service.Service, agentletConnector *connector.Client, logger *slog.Logger) *Server {
-	return &Server{service: controlService, connector: agentletConnector, logger: logger}
+type Option func(*Server)
+
+func WithEventPollInterval(interval time.Duration) Option {
+	return func(server *Server) { server.eventPollInterval = interval }
+}
+
+func New(
+	controlService *service.Service,
+	events *managedevent.Log,
+	agentletConnector *connector.Client,
+	logger *slog.Logger,
+	options ...Option,
+) *Server {
+	server := &Server{
+		service: controlService, events: events, connector: agentletConnector, logger: logger,
+		eventPollInterval: 500 * time.Millisecond,
+	}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 func (s *Server) Register(engine *route.Engine) {
