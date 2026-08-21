@@ -33,8 +33,8 @@ Session 和 Event 的产品语义保持不变。
 | `Interrupt` | 请求停止当前 Session 的活跃 runtime；它本身不代表状态已经安全持久化 |
 
 `Run` 的输入带稳定 input ID。Adapter 返回最新 Harness State revision；输出通过 callback 投影为
-Managed Event，由 Agentlet 上报并由 agentd 持久化。接口不暴露原生 message、model、tool 或远端
-session 类型。
+Managed Event，由 Agentlet 直接写入共享 Ledger，再由 agentd 对外投影。接口不暴露原生 message、
+model、tool 或远端 session 类型。
 
 一个 Agentlet 可以支持一个或多个 Harness 实现。agentd 创建 Assignment 时固定 Harness 名称和
 版本；Agentlet 必须根据已固定的身份选择实现，不能在恢复时静默切换。
@@ -126,5 +126,5 @@ session ID，只要能够满足同样的运行、状态、审计和隔离语义�
 1. Session 的长期身份和执行时机属于 agentd，不能绑定某个 Agentlet 或 Harness runtime。
 2. Harness 原生类型和状态格式不能泄漏到公开 API、Control Plane、Ledger 协议或 Sandbox Engine。
 3. Session 固定的 Harness 名称与版本必须参与恢复兼容性判断。
-4. Harness 输出先成为可幂等识别的 Managed Event，再由 Agentlet 上报、agentd 对外提供。
+4. Harness 输出先成为可幂等识别的 Managed Event，再由 Agentlet 写入共享 Ledger、agentd 对外提供。
 5. 状态可恢复不等于副作用可重放；结果不明确的 Tool Attempt 必须先对账。

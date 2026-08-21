@@ -15,9 +15,9 @@ import (
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	"github.com/compforge/agentd/agentlet/internal/api"
 	"github.com/compforge/agentd/agentlet/internal/harness"
-	"github.com/compforge/agentd/agentlet/internal/persistence"
 	"github.com/compforge/agentd/agentlet/internal/sandbox"
 	"github.com/compforge/agentd/agentlet/internal/service"
+	"github.com/compforge/agentd/internal/persistence"
 )
 
 // Run starts the Agentlet execution service and blocks until it stops.
@@ -86,7 +86,6 @@ func Run(logger *slog.Logger) error {
 	api.New(
 		executionService, logger,
 		api.WithWorkerID(config.workerID),
-		api.WithEventPollInterval(config.eventPollInterval),
 	).Register(httpServer.Engine)
 	serveErr := make(chan error, 1)
 	go func() {
@@ -140,7 +139,6 @@ type config struct {
 	idleTimeout            time.Duration
 	shutdownTimeout        time.Duration
 	reconcileInterval      time.Duration
-	eventPollInterval      time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -183,7 +181,6 @@ func loadConfig() (config, error) {
 		{"AGENTD_HTTP_IDLE_TIMEOUT", 2 * time.Minute, &value.idleTimeout},
 		{"AGENTD_SHUTDOWN_TIMEOUT", 15 * time.Second, &value.shutdownTimeout},
 		{"AGENTD_RECONCILE_INTERVAL", 5 * time.Second, &value.reconcileInterval},
-		{"AGENTD_EVENT_STREAM_POLL_INTERVAL", 500 * time.Millisecond, &value.eventPollInterval},
 		{"AGENTD_STORAGE_OPERATION_TIMEOUT", 5 * time.Second, &value.storageTimeout},
 		{"AGENTD_MYSQL_CONN_MAX_LIFETIME", 30 * time.Minute, &value.mysqlConnMaxLifetime},
 	}

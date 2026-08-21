@@ -11,9 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	agentledger "github.com/compforge/agent-ledger/go"
@@ -27,8 +24,9 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	resources := service.NewMemoryRepository()
+	events := service.NewEventLog(agentledger.NewMemoryEventStore())
 	executionService := service.New(
-		resources, service.NewEventLog(agentledger.NewMemoryEventStore()), fakeHarness{},
+		resources, events, fakeHarness{},
 		service.WithWorkCapacity(2),
 	)
 	t.Cleanup(func() {
@@ -68,122 +66,14 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 	if publicResponse.StatusCode != http.StatusNotFound {
 		t.Fatalf("public Agentlet API status = %d, want 404", publicResponse.StatusCode)
 	}
-	client := anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL("http://"+listener.Addr().String()+"/internal"))
-
-	agent, err := client.Beta.Agents.New(ctx, anthropic.BetaAgentNewParams{
-		Name:  "contract-test",
-		Model: anthropic.BetaManagedAgentsModelConfigParams{ID: anthropic.BetaManagedAgentsModelClaudeSonnet4_6},
-	})
+	internalResourceResponse, err := http.Get("http://" + listener.Addr().String() + "/internal/v1/agents")
 	if err != nil {
-		t.Fatalf("create agent through official SDK: %v", err)
+		t.Fatal(err)
 	}
-	if agent.ID == "" || agent.Name != "contract-test" {
-		t.Fatalf("unexpected agent: %#v", agent)
+	defer internalResourceResponse.Body.Close()
+	if internalResourceResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("Agentlet resource API status = %d, want 404", internalResourceResponse.StatusCode)
 	}
-	if _, err := client.Beta.Agents.Get(ctx, agent.ID, anthropic.BetaAgentGetParams{}); err != nil {
-		t.Fatalf("get agent through official SDK: %v", err)
-	}
-	agents, err := client.Beta.Agents.List(ctx, anthropic.BetaAgentListParams{})
-	if err != nil {
-		t.Fatalf("list agents through official SDK: %v", err)
-	}
-	if len(agents.Data) != 1 {
-		t.Fatalf("list agents through official SDK: data=%d", len(agents.Data))
-	}
-
-	unrestricted := anthropic.NewBetaUnrestrictedNetworkParam()
-	environment, err := client.Beta.Environments.New(ctx, anthropic.BetaEnvironmentNewParams{
-		Name: "contract-test",
-		Config: anthropic.BetaEnvironmentNewParamsConfigUnion{OfCloud: &anthropic.BetaCloudConfigParams{
-			Networking: anthropic.BetaCloudConfigParamsNetworkingUnion{OfUnrestricted: &unrestricted},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("create environment through official SDK: %v", err)
-	}
-	if environment.ID == "" {
-		t.Fatalf("environment id is empty: %#v", environment)
-	}
-	if _, err := client.Beta.Environments.Get(ctx, environment.ID, anthropic.BetaEnvironmentGetParams{}); err != nil {
-		t.Fatalf("get environment through official SDK: %v", err)
-	}
-	environments, err := client.Beta.Environments.List(ctx, anthropic.BetaEnvironmentListParams{})
-	if err != nil {
-		t.Fatalf("list environments through official SDK: %v", err)
-	}
-	if len(environments.Data) != 1 {
-		t.Fatalf("list environments through official SDK: data=%d", len(environments.Data))
-	}
-
-	session, err := client.Beta.Sessions.New(ctx, anthropic.BetaSessionNewParams{
-		Agent:         anthropic.BetaSessionNewParamsAgentUnion{OfString: param.NewOpt(agent.ID)},
-		EnvironmentID: environment.ID,
-	})
-	if err != nil {
-		t.Fatalf("create session through official SDK: %v", err)
-	}
-	if session.ID == "" || session.Status != anthropic.BetaManagedAgentsSessionStatusIdle {
-		t.Fatalf("unexpected session: %#v", session)
-	}
-	if _, err := client.Beta.Sessions.Get(ctx, session.ID, anthropic.BetaSessionGetParams{}); err != nil {
-		t.Fatalf("get session through official SDK: %v", err)
-	}
-	sessions, err := client.Beta.Sessions.List(ctx, anthropic.BetaSessionListParams{})
-	if err != nil {
-		t.Fatalf("list sessions through official SDK: %v", err)
-	}
-	if len(sessions.Data) != 1 {
-		t.Fatalf("list sessions through official SDK: data=%d", len(sessions.Data))
-	}
-
-	_, err = client.Beta.Sessions.Events.Send(ctx, session.ID, anthropic.BetaSessionEventSendParams{
-		Events: []anthropic.BetaManagedAgentsEventParamsUnion{{
-			OfUserMessage: &anthropic.BetaManagedAgentsUserMessageEventParams{
-				Type: anthropic.BetaManagedAgentsUserMessageEventParamsTypeUserMessage,
-				Content: []anthropic.BetaManagedAgentsUserMessageEventParamsContentUnion{{
-					OfText: &anthropic.BetaManagedAgentsTextBlockParam{Type: anthropic.BetaManagedAgentsTextBlockTypeText, Text: "hello"},
-				}},
-			},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("send event through official SDK: %v", err)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		page, listErr := client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
-		if listErr != nil {
-			t.Fatalf("list events through official SDK: %v", listErr)
-		}
-		foundAgentMessage := false
-		for _, event := range page.Data {
-			foundAgentMessage = foundAgentMessage || event.Type == "agent.message"
-		}
-		if foundAgentMessage {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for harness output; got %d events", len(page.Data))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	streamCtx, cancelStream := context.WithTimeout(ctx, 2*time.Second)
-	stream := client.Beta.Sessions.Events.StreamEvents(streamCtx, session.ID, anthropic.BetaSessionEventStreamParams{})
-	if !stream.Next() {
-		cancelStream()
-		t.Fatalf("stream events through official SDK: %v", stream.Err())
-	}
-	if stream.Current().Type == "" {
-		cancelStream()
-		t.Fatal("streamed event type is empty")
-	}
-	if err := stream.Close(); err != nil {
-		cancelStream()
-		t.Fatalf("close event stream: %v", err)
-	}
-	cancelStream()
 
 	workSpec := executionapi.WorkSpec{
 		AssignmentID: "assignment-1", WorkerID: "worker-1",
@@ -220,6 +110,55 @@ func TestAgentdInternalExecutionAPI(t *testing.T) {
 	workResponse.Body.Close()
 	if workResponse.StatusCode != http.StatusOK {
 		t.Fatalf("install assigned Work status = %d", workResponse.StatusCode)
+	}
+	eventResponse, err := http.Get(
+		"http://" + listener.Addr().String() + "/internal/v1/sessions/assigned-session/events",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventResponse.Body.Close()
+	if eventResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("Agentlet Event API status = %d, want 404", eventResponse.StatusCode)
+	}
+	input := service.NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "hello"}},
+	})
+	input["processed_at"] = nil
+	if err := events.AppendIngress(ctx, workSpec.Session.ID, input); err != nil {
+		t.Fatal(err)
+	}
+	wakeRequest, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+listener.Addr().String()+"/internal/v1/sessions/assigned-session/wake",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeRequest.Header.Set(executionapi.AssignmentHeader, "assignment-1")
+	wakeRequest.Header.Set(executionapi.WorkerHeader, "worker-1")
+	wakeResponse, err := http.DefaultClient.Do(wakeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeResponse.Body.Close()
+	if wakeResponse.StatusCode != http.StatusOK {
+		t.Fatalf("wake assigned Work status = %d", wakeResponse.StatusCode)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stored, err := events.List(ctx, workSpec.Session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stored) >= 2 && stored[1]["type"] == "agent.message" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for harness output; got %d events", len(stored))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	stateRequest, err := http.NewRequest(

@@ -23,8 +23,8 @@ github.com/cloudwego/hertz v0.10.4 h1:xJxomApZYR67cROevam6SrtUBDvhcI4ZZhx/WgvpHw
 github.com/cloudwego/hertz v0.10.4/go.mod h1:tZXEi/4o7R0Ho9yw5V2C+k/wVx3S8+wuuiJGDMopnpg=
 github.com/cloudwego/netpoll v0.7.2 h1:4qDBGQ6CG2SvEXhZSDxMdtqt/NLDxjAVk0PC/biKiJo=
 github.com/cloudwego/netpoll v0.7.2/go.mod h1:PI+YrmyS7cIr0+SD4seJz3Eo3ckkXdu2ZVKBLhURLNU=
-github.com/compforge/agent-ledger/go v0.0.0-20260820070952-00558be0ea9c h1:zMWzq9qH9fFe19GmH0sfQ/bAE53ly8ag+uiqOb+hAZ0=
-github.com/compforge/agent-ledger/go v0.0.0-20260820070952-00558be0ea9c/go.mod h1:J/UK6FtOpr8WZzhOKPe3y4+I0VgnEthPZ/exkaH3iYM=
+github.com/compforge/agent-ledger/go v0.0.0-20260821024327-bd6d406ec6e0 h1:gEE6K4Dti+C4nu/naiQHHYoHypNQU5sTsg1tNXerEcc=
+github.com/compforge/agent-ledger/go v0.0.0-20260821024327-bd6d406ec6e0/go.mod h1:J/UK6FtOpr8WZzhOKPe3y4+I0VgnEthPZ/exkaH3iYM=
 github.com/compforge/agentgo v0.0.1 h1:e3JiF7za1xN9NdGw4M8BFH9vdVwMJuD/K55eNSclK1I=
 github.com/compforge/agentgo v0.0.1/go.mod h1:5EkjADRpln5pwK2wd1cNwUwndq2VQDbeefybMVNMhpk=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=

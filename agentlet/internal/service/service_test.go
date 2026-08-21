@@ -19,10 +19,10 @@ import (
 func TestEventLogAppendIsIdempotentByEventID(t *testing.T) {
 	events := NewEventLog(agentledger.NewMemoryEventStore())
 	event := NewTurnEvent("input-1", "agent.message", map[string]any{"content": "done"})
-	if err := events.Append(context.Background(), "session-1", event); err != nil {
+	if err := events.AppendExecution(context.Background(), "session-1", event); err != nil {
 		t.Fatal(err)
 	}
-	if err := events.Append(context.Background(), "session-1", event); err != nil {
+	if err := events.AppendExecution(context.Background(), "session-1", event); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := events.List(context.Background(), "session-1")
@@ -38,13 +38,13 @@ func TestEventLogLoadsEventsAcrossAgentletInstances(t *testing.T) {
 	ctx := context.Background()
 	store := agentledger.NewMemoryEventStore()
 	writer := NewEventLog(store)
-	reader := New(NewMemoryRepository(), NewEventLog(store), recordingHarness{})
+	reader := NewEventLog(store)
 
 	first := NewManagedEvent("agent.message", map[string]any{"content": "first"})
-	if err := writer.Append(ctx, "session-1", first); err != nil {
+	if err := writer.AppendExecution(ctx, "session-1", first); err != nil {
 		t.Fatal(err)
 	}
-	events, cursor, err := reader.LoadEvents(ctx, "session-1", 0)
+	events, cursor, err := reader.Load(ctx, "session-1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +53,10 @@ func TestEventLogLoadsEventsAcrossAgentletInstances(t *testing.T) {
 	}
 
 	second := NewManagedEvent("agent.message", map[string]any{"content": "second"})
-	if err := writer.Append(ctx, "session-1", second); err != nil {
+	if err := writer.AppendExecution(ctx, "session-1", second); err != nil {
 		t.Fatal(err)
 	}
-	events, nextCursor, err := reader.LoadEvents(ctx, "session-1", cursor)
+	events, nextCursor, err := reader.Load(ctx, "session-1", cursor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,14 +159,14 @@ func TestUnsafeRecoveryTerminatesSession(t *testing.T) {
 		"content": []map[string]any{{"type": "text", "text": "resume"}},
 	})
 	input["processed_at"] = nil
-	if err := events.Append(ctx, session.ID, input); err != nil {
+	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}
 	queued := NewManagedEvent("user.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": "do not run"}},
 	})
 	queued["processed_at"] = nil
-	if err := events.Append(ctx, session.ID, queued); err != nil {
+	if err := events.AppendIngress(ctx, session.ID, queued); err != nil {
 		t.Fatal(err)
 	}
 	resident, _, err := application.works.Ensure(WorkSpec{
@@ -242,13 +242,16 @@ func TestReconcileRetriesInputAfterWorkerPersistenceFailure(t *testing.T) {
 	if err := application.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := application.SendEvents(ctx, session.ID, []IncomingEvent{{
-		Type: "user.message", Content: []map[string]any{{"type": "text", "text": "retry me"}},
-	}})
-	if err != nil {
+	input := NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "retry me"}},
+	})
+	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}
-	inputID, _ := accepted[0]["id"].(string)
+	if err := application.Wake(ctx, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	inputID, _ := input["id"].(string)
 	for attempt := 0; attempt < 2; attempt++ {
 		select {
 		case input := <-harness.inputs:
@@ -327,7 +330,7 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		"content": []map[string]any{{"type": "text", "text": "resume me"}},
 	})
 	input["processed_at"] = nil
-	if err := events.Append(ctx, session.ID, input); err != nil {
+	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}
 

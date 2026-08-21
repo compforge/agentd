@@ -10,18 +10,26 @@ import (
 	"testing"
 	"time"
 
+	ledgergorm "github.com/compforge/agent-ledger/go/stores/gorm"
 	"github.com/compforge/agentd/agentd/internal/model"
 	control "github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
+	managedevent "github.com/compforge/agentd/internal/event"
 	"github.com/compforge/agentd/internal/executionapi"
 )
 
 func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	ctx := context.Background()
-	repository := openRepository(t)
+	repository, database := openRepositoryDatabase(t)
+	ledger, err := ledgergorm.New(database, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
 	var assignmentID string
-	eventReadWithoutAssignment := false
 	agentlet := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/internal/v1/sessions/session-e2e/state":
@@ -35,14 +43,6 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 				AssignmentID: assignmentID, Status: "idle",
 				ResumeRef: "checkpoint-e2e", ResumeRevision: 3,
 			})
-		case request.Method == http.MethodGet && request.URL.Path == "/internal/v1/sessions/session-e2e/events":
-			if request.Header.Get(executionapi.AssignmentHeader) != "" {
-				http.Error(response, "Event read carried Assignment", http.StatusBadRequest)
-				return
-			}
-			eventReadWithoutAssignment = true
-			response.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(response).Encode(map[string]any{"data": []any{}, "next_page": nil})
 		default:
 			http.Error(response, "unexpected Agentlet request", http.StatusMethodNotAllowed)
 		}
@@ -89,6 +89,20 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	assignmentID = target.Work.AssignmentID
+	events := managedevent.NewLog(ledger)
+	input := managedevent.New("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "hello"}},
+	})
+	input["processed_at"] = nil
+	if err := events.AppendIngress(ctx, "session-e2e", input); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.AppendExecution(ctx, "session-e2e", managedevent.NewTurn(
+		input["id"].(string), "agent.message",
+		map[string]any{"content": []map[string]any{{"type": "text", "text": "done"}}},
+	)); err != nil {
+		t.Fatal(err)
+	}
 
 	client, err := connector.New(connector.Config{
 		RequestTimeout: time.Second, DialTimeout: time.Second, ResponseHeaderTimeout: time.Second,
@@ -127,24 +141,11 @@ func TestSessionObservationReleasesIdleAssignment(t *testing.T) {
 	if worker.IdleSince == nil {
 		t.Fatalf("released Worker = %#v", worker)
 	}
-	eventTarget, err := application.ResolveEventTarget(ctx, "session-e2e")
+	projected, err := events.List(ctx, "session-e2e")
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := client.ForwardEventRead(
-		ctx,
-		connector.EventTarget{Endpoint: eventTarget.Endpoint, WorkerID: eventTarget.WorkerID},
-		http.MethodGet,
-		"/internal/v1/sessions/session-e2e/events",
-		"",
-		nil,
-		false,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK || !eventReadWithoutAssignment {
-		t.Fatalf("Event read after release = status %d, unassigned %t", response.StatusCode, eventReadWithoutAssignment)
+	if len(projected) != 2 || projected[0]["type"] != "user.message" || projected[1]["type"] != "agent.message" {
+		t.Fatalf("Events after Assignment release = %#v", projected)
 	}
 }

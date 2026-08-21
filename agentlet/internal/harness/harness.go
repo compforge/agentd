@@ -3,9 +3,8 @@ package harness
 import (
 	"context"
 	"errors"
-	"time"
 
-	agentledger "github.com/compforge/agent-ledger/go"
+	managedevent "github.com/compforge/agentd/internal/event"
 )
 
 var ErrUnsafeRecovery = errors.New("automatic recovery is unsafe")
@@ -39,7 +38,7 @@ type TurnResult struct {
 	ResumeRevision int64
 }
 
-type ManagedEvent map[string]any
+type ManagedEvent = managedevent.ManagedEvent
 
 // Harness runs one durable session turn without owning placement or Control State.
 type Harness interface {
@@ -51,13 +50,5 @@ type Harness interface {
 }
 
 func NewManagedEvent(eventType string, fields map[string]any) ManagedEvent {
-	event := ManagedEvent{
-		"id":           "event_" + agentledger.NewID(),
-		"type":         eventType,
-		"processed_at": time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	for key, value := range fields {
-		event[key] = value
-	}
-	return event
+	return managedevent.New(eventType, fields)
 }

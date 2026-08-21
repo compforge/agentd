@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	agentledger "github.com/compforge/agent-ledger/go"
@@ -35,8 +33,9 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	resources := service.NewMemoryRepository()
 	firstBackend := openSQLiteE2EBackend(t, databasePath, resources)
 	blockingHarness := newSQLiteRecoveryHarness(firstBackend.checkpoints, true)
-	firstService := service.New(firstBackend.resources, service.NewEventLog(firstBackend.ledger), blockingHarness)
-	firstServer, firstClient := startSQLiteE2EServer(t, firstService)
+	firstEvents := service.NewEventLog(firstBackend.ledger)
+	firstService := service.New(firstBackend.resources, firstEvents, blockingHarness)
+	firstServer, firstClient := startSQLiteE2EServer(t, firstService, firstEvents)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -55,20 +54,21 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	restartedBackend := openSQLiteE2EBackend(t, databasePath, resources)
 	t.Cleanup(func() { restartedBackend.close(t) })
 	restartedHarness := newSQLiteRecoveryHarness(restartedBackend.checkpoints, false)
-	restartedService := service.New(restartedBackend.resources, service.NewEventLog(restartedBackend.ledger), restartedHarness)
+	restartedEvents := service.NewEventLog(restartedBackend.ledger)
+	restartedService := service.New(restartedBackend.resources, restartedEvents, restartedHarness)
 	if err := restartedService.Recover(ctx); err != nil {
 		t.Fatalf("recover service: %v", err)
 	}
-	_, restartedClient := startSQLiteE2EServer(t, restartedService)
+	_, restartedClient := startSQLiteE2EServer(t, restartedService, restartedEvents)
 
 	waitForSQLiteE2EIdle(t, ctx, restartedClient, session.ID)
 	assertSQLiteE2EEvents(t, ctx, restartedClient, session.ID, 1, 1)
 	assertSQLiteE2EState(t, ctx, restartedBackend, session.ID, 1, 1)
 
-	if _, err := restartedClient.Beta.Agents.Get(ctx, agent.ID, anthropic.BetaAgentGetParams{}); err != nil {
+	if _, err := restartedService.GetAgent(ctx, agent.ID); err != nil {
 		t.Fatalf("get persisted agent after restart: %v", err)
 	}
-	if _, err := restartedClient.Beta.Environments.Get(ctx, environment.ID, anthropic.BetaEnvironmentGetParams{}); err != nil {
+	if _, err := restartedService.GetEnvironment(ctx, environment.ID); err != nil {
 		t.Fatalf("get persisted environment after restart: %v", err)
 	}
 	sendSQLiteE2EMessage(t, ctx, restartedClient, session.ID, "second")
@@ -139,7 +139,16 @@ type sqliteE2EServer struct {
 	stopErr  error
 }
 
-func startSQLiteE2EServer(t *testing.T, executionService *service.Service) (*sqliteE2EServer, anthropic.Client) {
+type sqliteE2EClient struct {
+	service *service.Service
+	events  *service.EventLog
+}
+
+func startSQLiteE2EServer(
+	t *testing.T,
+	executionService *service.Service,
+	events *service.EventLog,
+) (*sqliteE2EServer, *sqliteE2EClient) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -159,11 +168,7 @@ func startSQLiteE2EServer(t *testing.T, executionService *service.Service) (*sql
 	running := &sqliteE2EServer{service: executionService, server: server, serveErr: make(chan error, 1)}
 	go func() { running.serveErr <- server.Run() }()
 	t.Cleanup(func() { running.stop(t) })
-	client := anthropic.NewClient(
-		option.WithAPIKey("test"),
-		option.WithBaseURL("http://"+listener.Addr().String()+"/internal"),
-	)
-	return running, client
+	return running, &sqliteE2EClient{service: executionService, events: events}
 }
 
 func (s *sqliteE2EServer) stop(t *testing.T) {
@@ -304,8 +309,8 @@ func (*sqliteRecoveryHarness) Interrupt(string) {}
 func createSQLiteE2ESession(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
-) (*anthropic.BetaManagedAgentsAgent, *anthropic.BetaEnvironment, *anthropic.BetaManagedAgentsSession) {
+	client *sqliteE2EClient,
+) (service.Agent, service.Environment, service.Session) {
 	return createSQLiteE2EConfiguredSession(
 		t, ctx, client, "sqlite-e2e", anthropic.BetaManagedAgentsModelClaudeSonnet4_6, "",
 	)
@@ -314,68 +319,54 @@ func createSQLiteE2ESession(
 func createSQLiteE2EConfiguredSession(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
+	client *sqliteE2EClient,
 	name string,
 	modelID anthropic.BetaManagedAgentsModel,
 	system string,
-) (*anthropic.BetaManagedAgentsAgent, *anthropic.BetaEnvironment, *anthropic.BetaManagedAgentsSession) {
+) (service.Agent, service.Environment, service.Session) {
 	t.Helper()
-	agent, err := client.Beta.Agents.New(ctx, anthropic.BetaAgentNewParams{
-		Name: name, Model: anthropic.BetaManagedAgentsModelConfigParams{
-			ID: modelID,
-		}, System: param.NewOpt(system),
+	agent, err := client.service.CreateAgent(ctx, service.Agent{
+		Name: name, ModelID: string(modelID), System: system,
 	})
 	if err != nil {
-		t.Fatalf("create agent through official SDK: %v", err)
+		t.Fatalf("create fixture agent: %v", err)
 	}
-	unrestricted := anthropic.NewBetaUnrestrictedNetworkParam()
-	environment, err := client.Beta.Environments.New(ctx, anthropic.BetaEnvironmentNewParams{
-		Name: name, Config: anthropic.BetaEnvironmentNewParamsConfigUnion{
-			OfCloud: &anthropic.BetaCloudConfigParams{
-				Networking: anthropic.BetaCloudConfigParamsNetworkingUnion{OfUnrestricted: &unrestricted},
-			},
+	environment, err := client.service.CreateEnvironment(ctx, service.Environment{
+		Name: name, Config: map[string]any{
+			"type": "cloud", "networking": map[string]any{"type": "unrestricted"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("create environment through official SDK: %v", err)
+		t.Fatalf("create fixture environment: %v", err)
 	}
-	session, err := client.Beta.Sessions.New(ctx, anthropic.BetaSessionNewParams{
-		Agent:         anthropic.BetaSessionNewParamsAgentUnion{OfString: param.NewOpt(agent.ID)},
-		EnvironmentID: environment.ID,
-	})
+	session, err := client.service.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
 	if err != nil {
-		t.Fatalf("create session through official SDK: %v", err)
+		t.Fatalf("create fixture session: %v", err)
 	}
 	return agent, environment, session
 }
 
-func sendSQLiteE2EMessage(t *testing.T, ctx context.Context, client anthropic.Client, sessionID, text string) {
+func sendSQLiteE2EMessage(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID, text string) {
 	t.Helper()
-	_, err := client.Beta.Sessions.Events.Send(ctx, sessionID, anthropic.BetaSessionEventSendParams{
-		Events: []anthropic.BetaManagedAgentsEventParamsUnion{{
-			OfUserMessage: &anthropic.BetaManagedAgentsUserMessageEventParams{
-				Type: anthropic.BetaManagedAgentsUserMessageEventParamsTypeUserMessage,
-				Content: []anthropic.BetaManagedAgentsUserMessageEventParamsContentUnion{{
-					OfText: &anthropic.BetaManagedAgentsTextBlockParam{
-						Type: anthropic.BetaManagedAgentsTextBlockTypeText, Text: text,
-					},
-				}},
-			},
-		}},
+	input := service.NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}},
 	})
-	if err != nil {
-		t.Fatalf("send event through official SDK: %v", err)
+	if err := client.events.AppendIngress(ctx, sessionID, input); err != nil {
+		t.Fatalf("persist ingress event: %v", err)
+	}
+	if err := client.service.Wake(ctx, sessionID); err != nil {
+		t.Fatalf("wake session: %v", err)
 	}
 }
 
-func waitForSQLiteE2EIdle(t *testing.T, ctx context.Context, client anthropic.Client, sessionID string) {
+func waitForSQLiteE2EIdle(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID string) {
 	t.Helper()
 	for {
-		session, err := client.Beta.Sessions.Get(ctx, sessionID, anthropic.BetaSessionGetParams{})
+		session, err := client.service.GetSession(ctx, sessionID)
 		if err != nil {
-			t.Fatalf("get session through official SDK: %v", err)
+			t.Fatalf("get session: %v", err)
 		}
-		if session.Status == anthropic.BetaManagedAgentsSessionStatusIdle {
+		if session.Control.Status == "idle" {
 			return
 		}
 		select {
@@ -389,19 +380,19 @@ func waitForSQLiteE2EIdle(t *testing.T, ctx context.Context, client anthropic.Cl
 func assertSQLiteE2EEvents(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
+	client *sqliteE2EClient,
 	sessionID string,
 	wantUserMessages, wantAgentMessages int,
 ) {
 	t.Helper()
-	page, err := client.Beta.Sessions.Events.List(ctx, sessionID, anthropic.BetaSessionEventListParams{})
+	events, err := client.events.List(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("list events through official SDK: %v", err)
+		t.Fatalf("list persisted events: %v", err)
 	}
 	userMessages := 0
 	agentMessages := 0
-	for _, event := range page.Data {
-		switch event.Type {
+	for _, event := range events {
+		switch event["type"] {
 		case "user.message":
 			userMessages++
 		case "agent.message":

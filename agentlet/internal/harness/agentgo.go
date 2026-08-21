@@ -96,8 +96,12 @@ func (r *AgentGoRunner) Run(
 		return TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: ANTHROPIC_API_KEY is not configured")
 	}
 	runID := "input/" + input.ID
-	actor := agentledger.NewActor("agent", "agentgo")
-	if err := r.ensureCheckpointActor(ctx, actor); err != nil {
+	actor, err := r.ensureCheckpointActor(ctx, agentledger.NewActorWithKey(
+		fmt.Sprintf("agentd/agents/%s/versions/%d", session.Agent.ID, session.Agent.Version),
+		"agent",
+		"agentgo",
+	))
+	if err != nil {
 		return TurnResult{ResumeRevision: revision}, err
 	}
 	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
@@ -267,8 +271,8 @@ func (r *AgentGoRunner) loadMessages(
 	if !exists {
 		return nil, 0, fmt.Errorf("AgentGo checkpoint %q does not exist", resumeRef)
 	}
-	if checkpoint.CheckpointKey != checkpointKey {
-		return nil, checkpoint.Revision, fmt.Errorf("AgentGo checkpoint belongs to %q", checkpoint.CheckpointKey)
+	if checkpoint.Key != checkpointKey {
+		return nil, checkpoint.Revision, fmt.Errorf("AgentGo checkpoint belongs to %q", checkpoint.Key)
 	}
 	if checkpoint.Revision != expectedRevision {
 		return nil, checkpoint.Revision, fmt.Errorf(
@@ -338,18 +342,15 @@ func (r *AgentGoRunner) messageCommitter(
 	}
 }
 
-func (r *AgentGoRunner) ensureCheckpointActor(ctx context.Context, actor agentledger.Actor) error {
-	_, exists, err := r.config.Checkpoints.GetActor(ctx, actor.ID)
+func (r *AgentGoRunner) ensureCheckpointActor(
+	ctx context.Context,
+	actor agentledger.Actor,
+) (agentledger.Actor, error) {
+	stored, err := r.config.Checkpoints.EnsureActor(ctx, actor)
 	if err != nil {
-		return fmt.Errorf("get AgentGo checkpoint actor: %w", err)
+		return agentledger.Actor{}, fmt.Errorf("ensure AgentGo checkpoint actor: %w", err)
 	}
-	if exists {
-		return nil
-	}
-	if err := r.config.Checkpoints.CreateActor(ctx, actor); err != nil {
-		return fmt.Errorf("create AgentGo checkpoint actor: %w", err)
-	}
-	return nil
+	return stored, nil
 }
 
 func (r *AgentGoRunner) checkpointKey(sessionID string) string {

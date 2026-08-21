@@ -30,3 +30,20 @@ app.kubernetes.io/component: control-plane
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{- define "agentd.databaseSecretName" -}}
+{{ include "agentd.fullname" . }}-database
+{{- end }}
+
+{{- define "agentd.mysqlName" -}}
+{{ include "agentd.fullname" . }}-mysql
+{{- end }}
+
+{{- define "agentd.databaseDSN" -}}
+{{- if .Values.database.dsn -}}
+{{ .Values.database.dsn }}
+{{- else -}}
+{{- $auth := .Values.database.mysql.auth -}}
+{{ printf "%s:%s@tcp(%s:3306)/%s" $auth.username $auth.password (include "agentd.mysqlName" .) $auth.database }}
+{{- end -}}
+{{- end }}

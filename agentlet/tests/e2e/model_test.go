@@ -109,7 +109,7 @@ func startAgentGoModelE2E(
 	t *testing.T,
 	modelURL string,
 	requestTimeout time.Duration,
-) (*sqliteE2EBackend, anthropic.Client) {
+) (*sqliteE2EBackend, *sqliteE2EClient) {
 	return startAgentGoModelE2EWithKey(t, "test", modelURL, requestTimeout)
 }
 
@@ -117,7 +117,7 @@ func startAgentGoModelE2EWithKey(
 	t *testing.T,
 	apiKey, modelURL string,
 	requestTimeout time.Duration,
-) (*sqliteE2EBackend, anthropic.Client) {
+) (*sqliteE2EBackend, *sqliteE2EClient) {
 	t.Helper()
 	backend := openSQLiteE2EBackend(
 		t, filepath.Join(t.TempDir(), "agentd-model-e2e.db"), service.NewMemoryRepository(),
@@ -131,28 +131,29 @@ func startAgentGoModelE2EWithKey(
 	if err != nil {
 		t.Fatalf("create AgentGo E2E runner: %v", err)
 	}
-	executionService := service.New(backend.resources, service.NewEventLog(backend.ledger), runner)
-	_, client := startSQLiteE2EServer(t, executionService)
+	events := service.NewEventLog(backend.ledger)
+	executionService := service.New(backend.resources, events, runner)
+	_, client := startSQLiteE2EServer(t, executionService, events)
 	return backend, client
 }
 
 func assertSQLiteE2EAgentMessageContains(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
+	client *sqliteE2EClient,
 	sessionID, expected string,
 ) {
 	t.Helper()
-	page, err := client.Beta.Sessions.Events.List(ctx, sessionID, anthropic.BetaSessionEventListParams{})
+	events, err := client.events.List(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("list events through official SDK: %v", err)
+		t.Fatalf("list persisted events: %v", err)
 	}
-	for _, event := range page.Data {
-		if event.Type != "agent.message" {
+	for _, event := range events {
+		if event["type"] != "agent.message" {
 			continue
 		}
-		for _, content := range event.AsAgentMessage().Content {
-			if strings.Contains(content.AsText().Text, expected) {
+		for _, text := range managedEventText(event) {
+			if strings.Contains(text, expected) {
 				return
 			}
 		}
@@ -244,23 +245,22 @@ func writeAnthropicAnswer(writer http.ResponseWriter, text string) {
 func assertSQLiteE2EAgentMessages(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
+	client *sqliteE2EClient,
 	sessionID string,
 	want []string,
 ) {
 	t.Helper()
-	page, err := client.Beta.Sessions.Events.List(ctx, sessionID, anthropic.BetaSessionEventListParams{})
+	events, err := client.events.List(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("list events through official SDK: %v", err)
+		t.Fatalf("list persisted events: %v", err)
 	}
 	var got []string
-	for _, event := range page.Data {
-		if event.Type != "agent.message" {
+	for _, event := range events {
+		if event["type"] != "agent.message" {
 			continue
 		}
-		message := event.AsAgentMessage()
-		for _, content := range message.Content {
-			if text := content.AsText().Text; text != "" {
+		for _, text := range managedEventText(event) {
+			if text != "" {
 				got = append(got, text)
 			}
 		}
@@ -310,20 +310,42 @@ func assertSQLiteE2EModelLedger(
 func assertSQLiteE2EEventContains(
 	t *testing.T,
 	ctx context.Context,
-	client anthropic.Client,
+	client *sqliteE2EClient,
 	sessionID, eventType, expected string,
 ) {
 	t.Helper()
-	page, err := client.Beta.Sessions.Events.List(ctx, sessionID, anthropic.BetaSessionEventListParams{})
+	events, err := client.events.List(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("list events through official SDK: %v", err)
+		t.Fatalf("list persisted events: %v", err)
 	}
-	for _, event := range page.Data {
-		if event.Type == eventType && strings.Contains(event.RawJSON(), expected) {
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		if event["type"] == eventType && strings.Contains(string(encoded), expected) {
 			return
 		}
 	}
 	t.Fatalf("event %q containing %q was not found", eventType, expected)
+}
+
+func managedEventText(event service.ManagedEvent) []string {
+	content, _ := event["content"].([]map[string]any)
+	texts := make([]string, 0, len(content))
+	for _, block := range content {
+		if text, ok := block["text"].(string); ok {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) > 0 {
+		return texts
+	}
+	generic, _ := event["content"].([]any)
+	for _, item := range generic {
+		block, _ := item.(map[string]any)
+		if text, ok := block["text"].(string); ok {
+			texts = append(texts, text)
+		}
+	}
+	return texts
 }
 
 type noopSandbox struct{}

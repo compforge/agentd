@@ -32,15 +32,9 @@ type Target struct {
 	Work     executionapi.WorkSpec
 }
 
-type EventTarget struct {
-	Endpoint string
-	WorkerID string
-}
-
 type Client struct {
 	requestTimeout time.Duration
 	client         *http.Client
-	streamClient   *http.Client
 	transport      *http.Transport
 }
 
@@ -66,7 +60,6 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		requestTimeout: config.RequestTimeout,
 		client:         &http.Client{Transport: transport, Timeout: config.RequestTimeout},
-		streamClient:   &http.Client{Transport: transport},
 		transport:      transport,
 	}, nil
 }
@@ -82,7 +75,7 @@ func (c *Client) Ensure(ctx context.Context, target Target) error {
 	if err != nil {
 		return fmt.Errorf("encode WorkSpec for Session %q: %w", target.Work.Session.ID, err)
 	}
-	response, err := c.do(ctx, target, http.MethodPut, sessionPath(target.Work.Session.ID), "", body, nil, false)
+	response, err := c.do(ctx, target, http.MethodPut, sessionPath(target.Work.Session.ID), body)
 	if err != nil {
 		return err
 	}
@@ -95,9 +88,7 @@ func (c *Client) Ensure(ctx context.Context, target Target) error {
 }
 
 func (c *Client) SessionState(ctx context.Context, target Target) (executionapi.SessionState, error) {
-	response, err := c.do(
-		ctx, target, http.MethodGet, sessionPath(target.Work.Session.ID)+"/state", "", nil, nil, false,
-	)
+	response, err := c.do(ctx, target, http.MethodGet, sessionPath(target.Work.Session.ID)+"/state", nil)
 	if err != nil {
 		return executionapi.SessionState{}, err
 	}
@@ -113,33 +104,26 @@ func (c *Client) SessionState(ctx context.Context, target Target) (executionapi.
 	return state, nil
 }
 
-// Forward sends an already validated public Event request to Agentlet. The
-// caller owns and must close the returned response body.
-func (c *Client) Forward(
-	ctx context.Context,
-	target Target,
-	method string,
-	path string,
-	rawQuery string,
-	body []byte,
-	headers http.Header,
-	stream bool,
-) (*http.Response, error) {
-	return c.do(ctx, target, method, path, rawQuery, body, headers, stream)
+func (c *Client) Wake(ctx context.Context, target Target) error {
+	return c.sessionAction(ctx, target, "wake")
 }
 
-// ForwardEventRead forwards a location-independent Event read without an
-// Assignment fence. WorkerID identifies the selected data-plane endpoint.
-func (c *Client) ForwardEventRead(
-	ctx context.Context,
-	target EventTarget,
-	method string,
-	path string,
-	rawQuery string,
-	headers http.Header,
-	stream bool,
-) (*http.Response, error) {
-	return c.doRequest(ctx, target.Endpoint, target.WorkerID, "", method, path, rawQuery, nil, headers, stream)
+func (c *Client) Interrupt(ctx context.Context, target Target) error {
+	return c.sessionAction(ctx, target, "interrupt")
+}
+
+func (c *Client) sessionAction(ctx context.Context, target Target, action string) error {
+	path := sessionPath(target.Work.Session.ID) + "/" + action
+	response, err := c.do(ctx, target, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return responseError(action+" Agentlet Session", response)
+	}
+	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody+1))
+	return err
 }
 
 func (c *Client) do(
@@ -147,14 +131,11 @@ func (c *Client) do(
 	target Target,
 	method string,
 	path string,
-	rawQuery string,
 	body []byte,
-	headers http.Header,
-	stream bool,
 ) (*http.Response, error) {
 	return c.doRequest(
 		ctx, target.Endpoint, target.Work.WorkerID, target.Work.AssignmentID,
-		method, path, rawQuery, body, headers, stream,
+		method, path, body,
 	)
 }
 
@@ -165,23 +146,15 @@ func (c *Client) doRequest(
 	assignmentID string,
 	method string,
 	path string,
-	rawQuery string,
 	body []byte,
-	headers http.Header,
-	stream bool,
 ) (*http.Response, error) {
-	endpoint, err := requestURL(endpointBase, path, rawQuery)
+	endpoint, err := requestURL(endpointBase, path)
 	if err != nil {
 		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Agentlet request: %w", err)
-	}
-	for name, values := range headers {
-		for _, value := range values {
-			request.Header.Add(name, value)
-		}
 	}
 	if assignmentID != "" {
 		request.Header.Set(executionapi.AssignmentHeader, assignmentID)
@@ -192,24 +165,19 @@ func (c *Client) doRequest(
 	if len(body) > 0 && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	client := c.client
-	if stream {
-		client = c.streamClient
-	}
-	response, err := client.Do(request)
+	response, err := c.client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("call Agentlet %s %s: %w", method, path, err)
 	}
 	return response, nil
 }
 
-func requestURL(endpoint, requestPath, rawQuery string) (string, error) {
+func requestURL(endpoint, requestPath string) (string, error) {
 	base, err := url.Parse(endpoint)
 	if err != nil || base.Scheme == "" || base.Host == "" {
 		return "", fmt.Errorf("invalid Agentlet endpoint %q", endpoint)
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + requestPath
-	base.RawQuery = rawQuery
 	return base.String(), nil
 }
 

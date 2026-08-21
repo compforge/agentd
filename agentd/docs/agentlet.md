@@ -24,20 +24,20 @@ Agentlet 执行请求必须携带 agentd 生成的 Assignment 身份和 fence。
 一致、尚未失效的 Assignment；它不接受 Session 自行注册，也不在多个 Worker 之间抢占任务。
 
 Agentlet 的 HTTP 面只供 agentd 调用，统一位于 `/internal/v1`；Claude Managed Agents 的公开路径、
-资源 envelope 和兼容性测试都由 agentd 拥有。内部协议承载执行所需的资源快照、Event、Assignment
-与 ResumePoint，不成为第二套产品 API。
+资源 envelope 和兼容性测试都由 agentd 拥有。内部协议只承载 WorkSpec、`wake`、`interrupt`、
+Assignment 与 observed state，不成为第二套产品 API。
 
 Assignment 是 Control Plane 的路由权威，Agentlet 的进程内 runtime 只是缓存。进程重启后，Agentlet
 不得从本地内存猜测归属；它根据请求携带的 Assignment 和精确 `ResumeRef` 重建执行现场。
 
-Connector 在转发 Event 写入和其它执行动作前先幂等安装当前 Assignment 的完整 `WorkSpec`。相同
+Connector 在转发执行动作前先幂等安装当前 Assignment 的完整 `WorkSpec`。相同
 Assignment 的重复快照不能覆盖 Agentlet 已推进的 ResumePoint；执行状态读取也必须携带相同的 Worker
 与 Assignment 身份。Agentlet 上报的状态只有在 agentd 仍持有该 Assignment 时才能提交，迟到响应不能
 修改已经重调度的 Session。
 
-持久 Event list/stream 不属于执行门禁。所有 Agentlet Worker 连接同一 Agentlet 数据库，任意实例都可按
-Session ID 从 Agent Ledger lane 读取 Event，即使该 Session 没有 Assignment 或从未在当前实例执行。
-stream 按持久 lane sequence 增量读取，不依赖进程内订阅；Event 写入仍必须经当前 Assignment 路由。
+Agentlet 不提供或代理公开 Event API，也不替 agentd 查询 Event。agentd 与所有 Agentlet 连接同一
+数据库：agentd 写入用户 ingress 并提供 list/stream；Agentlet 只把当前 Assignment 内 Harness、模型、
+工具和输出产生的执行事实写入同一个 Ledger。共享存储不改变双方职能边界。
 
 ## 执行流程
 
@@ -128,6 +128,7 @@ Agentlet 只依赖统一的生命周期、命令、文件等能力契约，不�
 
 1. Agentlet 不主动注册、发 heartbeat 或选择 Assignment。
 2. Agentlet 不创建、drain 或删除 Worker。
-3. Agentlet 不解释全局 Control State，只消费请求携带的执行切片。
-4. Harness Adapter 拥有原生状态语义；Agent Ledger 拥有规范化执行事实。
-5. Sandbox Engine 拥有隔离资源；Agentlet 只通过 Adapter 使用它。
+3. Agentlet 不暴露、代理或查询公开 Event API，只写自身产生的执行事实。
+4. Agentlet 不解释全局 Control State，只消费请求携带的执行切片。
+5. Harness Adapter 拥有原生状态语义；Agent Ledger 拥有规范化执行事实。
+6. Sandbox Engine 拥有隔离资源；Agentlet 只通过 Adapter 使用它。

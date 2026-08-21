@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os/signal"
 	"syscall"
-	"time"
 
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
@@ -17,10 +16,8 @@ import (
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
 	"github.com/compforge/agentd/agentd/internal/worker"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
-	drivermysql "github.com/go-sql-driver/mysql"
-	gormmysql "gorm.io/driver/mysql"
-	gormsqlite "gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	managedevent "github.com/compforge/agentd/internal/event"
+	"github.com/compforge/agentd/internal/persistence"
 )
 
 func Run(logger *slog.Logger) error {
@@ -28,12 +25,16 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	database, closeDatabase, err := openDatabase(config)
+	storage, err := persistence.Open(context.Background(), persistence.Config{
+		MySQLDSN: config.mysqlDSN, SQLitePath: config.sqlitePath,
+		OperationTimeout: config.storageTimeout, MaxOpenConns: config.maxOpenConns,
+		MaxIdleConns: config.maxIdleConns, ConnMaxLifetime: config.connMaxLifetime,
+	})
 	if err != nil {
 		return err
 	}
-	defer closeDatabase()
-	repository, err := gormrepo.NewGORM(database)
+	defer storage.Close()
+	repository, err := gormrepo.NewGORM(storage.Database)
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func Run(logger *slog.Logger) error {
 		ControllerTimeout: config.workerControllerTimeout, ControllerLeaseTTL: config.workerControllerLeaseTTL,
 		GCInterval: config.workerGCInterval, GCDeleteBatchSize: config.workerGCDeleteBatchSize,
 		ObserverInterval: config.observerInterval, ObserverTimeout: config.observerTimeout,
-	}, database, repository, logger)
+	}, storage.Database, repository, logger)
 	if err != nil {
 		return err
 	}
@@ -105,7 +106,10 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithMaxRequestBodySize(1<<20),
 		hertzserver.WithSenseClientDisconnection(true),
 	)
-	api.New(controlService, agentletConnector, logger).Register(httpServer.Engine)
+	api.New(
+		controlService, managedevent.NewLog(storage.Ledger), agentletConnector, logger,
+		api.WithEventPollInterval(config.eventPollInterval),
+	).Register(httpServer.Engine)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -133,69 +137,4 @@ func Run(logger *slog.Logger) error {
 		}
 		return nil
 	}
-}
-
-func openMySQL(config config) (*gorm.DB, func() error, error) {
-	dsn, err := drivermysql.ParseDSN(config.mysqlDSN)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse MySQL DSN: %w", err)
-	}
-	dsn.ParseTime = true
-	dsn.Loc = time.UTC
-	dsn.Timeout = config.storageTimeout
-	dsn.ReadTimeout = config.storageTimeout
-	dsn.WriteTimeout = config.storageTimeout
-	if dsn.Params == nil {
-		dsn.Params = map[string]string{}
-	}
-	if dsn.Params["charset"] == "" {
-		dsn.Params["charset"] = "utf8mb4"
-	}
-	database, err := gorm.Open(gormmysql.Open(dsn.FormatDSN()), &gorm.Config{
-		DisableForeignKeyConstraintWhenMigrating: true,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("open MySQL storage: %w", err)
-	}
-	sqlDatabase, err := database.DB()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve MySQL connection pool: %w", err)
-	}
-	sqlDatabase.SetMaxOpenConns(config.maxOpenConns)
-	sqlDatabase.SetMaxIdleConns(config.maxIdleConns)
-	sqlDatabase.SetConnMaxLifetime(config.connMaxLifetime)
-	ctx, cancel := context.WithTimeout(context.Background(), config.storageTimeout)
-	defer cancel()
-	if err := sqlDatabase.PingContext(ctx); err != nil {
-		_ = sqlDatabase.Close()
-		return nil, nil, fmt.Errorf("ping MySQL storage: %w", err)
-	}
-	return database, sqlDatabase.Close, nil
-}
-
-func openDatabase(config config) (*gorm.DB, func() error, error) {
-	if config.mysqlDSN != "" {
-		return openMySQL(config)
-	}
-	database, err := gorm.Open(gormsqlite.Open(config.sqlitePath), &gorm.Config{
-		DisableForeignKeyConstraintWhenMigrating: true,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("open SQLite storage %q: %w", config.sqlitePath, err)
-	}
-	sqlDatabase, err := database.DB()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve SQLite connection pool: %w", err)
-	}
-	// SQLite is the single-replica fallback. One connection keeps transactions
-	// serialized instead of surfacing avoidable database-locked failures.
-	sqlDatabase.SetMaxOpenConns(1)
-	sqlDatabase.SetMaxIdleConns(1)
-	ctx, cancel := context.WithTimeout(context.Background(), config.storageTimeout)
-	defer cancel()
-	if err := sqlDatabase.PingContext(ctx); err != nil {
-		_ = sqlDatabase.Close()
-		return nil, nil, fmt.Errorf("ping SQLite storage %q: %w", config.sqlitePath, err)
-	}
-	return database, sqlDatabase.Close, nil
 }
