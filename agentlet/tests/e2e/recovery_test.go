@@ -40,7 +40,7 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	agent, environment, session := createSQLiteE2ESession(t, ctx, firstClient)
-	sendSQLiteE2EMessage(t, ctx, firstClient, session.ID, "first")
+	firstInputID := sendSQLiteE2EMessage(t, ctx, firstClient, session.ID, "first")
 	select {
 	case <-blockingHarness.started:
 	case <-ctx.Done():
@@ -61,7 +61,7 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	}
 	_, restartedClient := startSQLiteE2EServer(t, restartedService, restartedEvents)
 
-	waitForSQLiteE2EIdle(t, ctx, restartedClient, session.ID)
+	waitForSQLiteE2EInput(t, ctx, restartedClient, session.ID, firstInputID)
 	assertSQLiteE2EEvents(t, ctx, restartedClient, session.ID, 1, 1)
 	assertSQLiteE2EState(t, ctx, restartedBackend, session.ID, 1, 1)
 
@@ -71,8 +71,8 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	if _, err := restartedService.GetEnvironment(ctx, environment.ID); err != nil {
 		t.Fatalf("get persisted environment after restart: %v", err)
 	}
-	sendSQLiteE2EMessage(t, ctx, restartedClient, session.ID, "second")
-	waitForSQLiteE2EIdle(t, ctx, restartedClient, session.ID)
+	secondInputID := sendSQLiteE2EMessage(t, ctx, restartedClient, session.ID, "second")
+	waitForSQLiteE2EInput(t, ctx, restartedClient, session.ID, secondInputID)
 	assertSQLiteE2EEvents(t, ctx, restartedClient, session.ID, 2, 2)
 	assertSQLiteE2EState(t, ctx, restartedBackend, session.ID, 2, 2)
 }
@@ -362,27 +362,44 @@ func modelForSQLiteE2E(client *sqliteE2EClient, modelID string) harness.Model {
 	return value
 }
 
-func sendSQLiteE2EMessage(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID, text string) {
+func sendSQLiteE2EMessage(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID, text string) string {
 	t.Helper()
 	input := service.NewManagedEvent("user.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": text}},
 	})
+	input["processed_at"] = nil
 	if err := client.events.AppendIngress(ctx, sessionID, input); err != nil {
 		t.Fatalf("persist ingress event: %v", err)
 	}
 	if err := client.service.Wake(ctx, sessionID); err != nil {
 		t.Fatalf("wake session: %v", err)
 	}
+	inputID, _ := input["id"].(string)
+	return inputID
 }
 
-func waitForSQLiteE2EIdle(t *testing.T, ctx context.Context, client *sqliteE2EClient, sessionID string) {
+func waitForSQLiteE2EInput(
+	t *testing.T,
+	ctx context.Context,
+	client *sqliteE2EClient,
+	sessionID string,
+	inputID string,
+) {
 	t.Helper()
 	for {
 		session, err := client.service.GetSession(ctx, sessionID)
 		if err != nil {
 			t.Fatalf("get session: %v", err)
 		}
-		if session.Control.Status == "idle" {
+		events, err := client.events.List(ctx, sessionID)
+		if err != nil {
+			t.Fatalf("list Session Events while waiting: %v", err)
+		}
+		processed := false
+		for _, event := range events {
+			processed = processed || event["id"] == inputID && event["processed_at"] != nil
+		}
+		if processed && session.Control.Status == "idle" {
 			return
 		}
 		select {

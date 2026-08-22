@@ -1,0 +1,21 @@
+caseset: agentd-agentlet-recovery
+focus: Durable Agentlet recovery across process replacement and uncertain tool outcomes.
+schema_version: 1
+facets:
+  boundary: {values: [agentlet]}
+  recovery: {values: [checkpoint, tool-resolution]}
+cases:
+  - id: unsafe_tool_resolution_resume
+    desc: An unresolved non-idempotent tool attempt pauses until the user resolves it, then resumes without replay.
+    input: {operation: recover-unresolved-write-and-deny, expected_marker: AGENTD_TOOL_RESOLUTION_OK}
+    facets: {boundary: agentlet, recovery: tool-resolution}
+    judge:
+      e2e:
+        assert:
+          - {path: required_action.tool_use_id, op: not_empty}
+          - {path: sandbox.write_count, op: eq, value: 0}
+          - {path: ledger.tool_attempt_count, op: eq, value: 1}
+          - {path: agent_message, op: contains, value: AGENTD_TOOL_RESOLUTION_OK}
+    binding:
+      symbol_id: agentlet/internal/harness/agentgo.go::AgentGoRunner.Run
+      spec: An unresolved non-idempotent tool attempt requires an explicit one-attempt user resolution before the Session can continue.

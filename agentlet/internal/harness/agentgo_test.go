@@ -253,6 +253,49 @@ func TestAgentGoToolEffectsAreConservative(t *testing.T) {
 	}
 }
 
+func TestAgentGoFinishRunUsesLatestLaneSequence(t *testing.T) {
+	ctx := context.Background()
+	ledger := agentledger.NewMemoryEventStore()
+	actor := agentledger.NewActor("agent", "agentgo")
+	first, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.StartRun(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	adapterRecorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapterRecorder.StartTurn(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
+	if err := runner.finishRun(ctx, "session-1", "input/input-1", actor, nil); err != nil {
+		t.Fatalf("finish run after adapter append: %v", err)
+	}
+	lane, exists, err := ledger.FindLane(ctx, "session-1", "input/input-1", "main")
+	if err != nil || !exists {
+		t.Fatalf("find run lane: exists=%t err=%v", exists, err)
+	}
+	var eventTypes []string
+	for event, err := range ledger.LoadLane(ctx, lane.ID, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventTypes = append(eventTypes, event.EventType)
+	}
+	if len(eventTypes) != 3 || eventTypes[2] != agentledger.EventTypeRunCompleted {
+		t.Fatalf("run events = %v, want run.completed after adapter append", eventTypes)
+	}
+}
+
 func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	oldInput := agentgo.UserMsg("old")
 	oldInput.Metadata = map[string]any{agentdInputID: "input-1"}
