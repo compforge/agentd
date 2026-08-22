@@ -11,6 +11,7 @@ development checks such as `make test`, `make lint`, or `make build`.
 
 | Case | Boundary | Dependency |
 |---|---|---|
+| assignment handoff fence | two live Agentlets share one Ledger; only the replacement consumes new input | in-memory Ledger |
 | committed input recovery | process replacement across Control State, Harness State, and Ledger | SQLite |
 | model question and answer | shared Ledger → wake → AgentGo → Anthropic streaming API → persisted event | SQLite + local model server |
 | mid-stream model timeout | partial stream → audited failed turn → later input succeeds without leaked partial output | SQLite + local model server |

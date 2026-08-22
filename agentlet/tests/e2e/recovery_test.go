@@ -56,8 +56,10 @@ func TestRecoverCommittedInputAfterRestart(t *testing.T) {
 	restartedHarness := newSQLiteRecoveryHarness(restartedBackend.checkpoints, false)
 	restartedEvents := service.NewEventLog(restartedBackend.ledger)
 	restartedService := service.New(restartedBackend.resources, restartedEvents, restartedHarness)
-	if err := restartedService.Recover(ctx); err != nil {
-		t.Fatalf("recover service: %v", err)
+	// A replacement Agentlet does not claim arbitrary shared-Ledger input. The
+	// control plane re-establishes demand for its current Assignment.
+	if err := restartedService.Wake(ctx, session.ID); err != nil {
+		t.Fatalf("wake replacement service: %v", err)
 	}
 	_, restartedClient := startSQLiteE2EServer(t, restartedService, restartedEvents)
 

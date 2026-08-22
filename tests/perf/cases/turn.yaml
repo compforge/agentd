@@ -1,9 +1,15 @@
 caseset: agentd-managed-agent-turn
 focus: Complete one durable managed-agent turn through the public Event API.
 facets:
-  turn_kind: {values: [sandbox], ordered: true}
+  turn_kind: {values: [plain, sandbox], ordered: true}
 cases:
+  - id: plain_turn
+    input:
+      prompt: Do not use tools. Return the required final answer.
+      expected_text: AGENTD_PERF_OK
+    facets: {turn_kind: plain}
   - id: sandbox_turn
     input:
       prompt: Run the required sandbox check, then return the required final answer.
+      expected_text: AGENTD_PERF_OK
     facets: {turn_kind: sandbox}

@@ -1,39 +1,52 @@
 # agentd system perf
 
-This directory is a standalone consumer of `perf_harness` from
-[case-harness](https://github.com/compforge/case-harness). Like sandctl's perf suite, it separates:
+This suite uses `perf_harness` from
+[case-harness](https://github.com/compforge/case-harness) to assess agentd as one deployed Managed
+Agent system. The harness owns load scheduling, Kubernetes observation, reports, and Verdicts;
+this directory owns agentd's public API workload, stable stimuli, target profiles, and SLOs.
 
-- `cases/`: stable stimuli and diagnostic facets;
-- `managed-agent-turn.yaml`: target, load stages, observation, and SLOs;
-- `agentd_perf/`: the service-specific public API workload.
+## Profiles
 
-The initial profile measures a complete managed-agent turn. Setup creates one Agent, one cloud
-Environment, and a bounded Session pool. Each measured request leases one Session, sends a user
-Event, waits for the corresponding `agent.message` and final `idle` status, then returns that Session
-to the pool. The Agent must call `bash`, so the measured path includes Worker placement, Agentlet,
-AgentGo, model I/O, Ledger/Checkpoint, and Sandbox Engine.
+| Profile | Question |
+|---|---|
+| `managed-agent-turn.yaml` | Can a low-rate sandbox Turn stay healthy across agentd, Worker placement, Agentlet, AgentGo, the model, Ledger/Checkpoint, and Sandbox Engine? |
+| `managed-agent-scale-out.yaml` | As concurrent plain Turns rise from 1 to 8, can agentd add Worker capacity without errors or restarts, then return to the configured Worker floor? |
+| `managed-agent-mixed-soak.yaml` | Under a ten-minute 80/20 mix of plain and sandbox Turns, do latency, errors, drops, and Pod stability remain within the declared SLOs? |
 
-Agent, Environment, Session, and Event rows are durable audit records and have no public delete API.
-Use a disposable performance environment or its record-retention policy. One trial creates only
-`pool_size` Sessions rather than one Session per request.
+Setup creates one Agent, one cloud Environment, and a bounded Session pool. Each measured request
+leases one Session, persists a user Event, waits for the corresponding `agent.message` and final
+`idle` status, then returns that Session to the pool. `accept_ms` isolates durable Event acceptance;
+`complete_ms` covers scheduling and the complete Harness Turn. `cases/turn.yaml` owns the plain and
+sandbox stimuli and their diagnostic facet, while each profile only selects a mix and load shape.
 
 ## Run
 
-Copy `managed-agent-turn.yaml`, then set the target URL, Kubernetes reference, model, load, and SLOs
-for the environment under test:
+Copy the closest profile, then set its target URL, Kubernetes reference, model resource ID, load,
+and SLOs for the environment under test:
 
 ```bash
 cd tests/perf
 uv sync
-uv run python -m perf_harness.cli run managed-agent-turn.yaml
+make run PROFILE=managed-agent-turn.yaml
 ```
 
-The checked-in profile is deliberately low-rate because it invokes a real model. Increase the rate
-only after matching `load.max_inflight` to `workload.pool_size` and confirming Worker/model capacity.
-The report combines client latency/error/drop metrics with agentd and Worker Pod CPU, memory,
-restarts, limits, and counts. A missing observation does not satisfy a strict SLO.
+From the repository root, the equivalent command is:
 
-Run workload/config unit tests without contacting a deployment:
+```bash
+make test-perf PERF_PROFILE=managed-agent-scale-out.yaml
+```
+
+These profiles invoke a real model and are deliberately user-triggered. Match `workload.pool_size`
+to the profile's maximum concurrency, and confirm Worker and model capacity before increasing load.
+The scale-out profile's 660-second cooldown and final Worker Pod SLO match the quick-start defaults
+of a ten-minute Worker idle TTL and one minimum Worker; adjust both when the deployment policy
+differs. Missing Kubernetes observations do not satisfy a strict SLO.
+
+Agent, Environment, Session, and Event rows are durable audit records and have no public delete API.
+Use a disposable performance environment or its record-retention policy. A trial creates only
+`pool_size` Sessions and reuses them instead of creating one durable Session per request.
+
+Run workload and profile tests without contacting a deployment:
 
 ```bash
 uv run pytest -q

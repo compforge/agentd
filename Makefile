@@ -1,5 +1,7 @@
 .PHONY: fix lint test test-e2e test-model-integration test-integration test-perf build run run-agentd run-agentlet
 
+PERF_PROFILE ?= managed-agent-turn.yaml
+
 fix:
 	gofmt -w $$(find agentd agentlet cmd internal tests -name '*.go' -not -path '*/vendor/*')
 
@@ -21,7 +23,7 @@ test-integration:
 
 # Perf is intentionally explicit: edit/copy the target profile before running it.
 test-perf:
-	cd tests/perf && uv run python -m perf_harness.cli run managed-agent-turn.yaml
+	cd tests/perf && uv run python -m perf_harness.cli run $(PERF_PROFILE)
 
 build:
 	go build ./...

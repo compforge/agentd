@@ -1,4 +1,4 @@
-name: agentd-managed-agent-turn
+name: agentd-managed-agent-mixed-soak
 extensions: [agentd_perf.managed_agent]
 strict_slo: true
 
@@ -26,6 +26,7 @@ workload:
 
 caseset: ./cases/turn.yaml
 cases:
+  - {id: plain_turn, weight: 4}
   - {id: sandbox_turn, weight: 1}
 
 load:
@@ -33,12 +34,10 @@ load:
   max_inflight: 10
   graceful_stop_s: 180
   abort_on_error_rate: 0.05
-  breaker_min_n: 10
+  breaker_min_n: 20
   stages:
-    - {name: ramp-0.1, ramp_to: 0.1, over_s: 30}
-    - {name: hold-0.1, hold: 0.1, for_s: 120}
-    - {name: ramp-0.25, ramp_to: 0.25, over_s: 30}
-    - {name: hold-0.25, hold: 0.25, for_s: 180}
+    - {name: ramp-0.1, ramp_to: 0.1, over_s: 60}
+    - {name: hold-0.1, hold: 0.1, for_s: 600}
 
 observe:
   - name: agentd
@@ -54,12 +53,13 @@ slo:
   - {metric: request.error_rate.value, lt: 0.01}
   - {metric: request.drop_rate.value, lte: 0}
   - {metric: accept_ms.p95, lt: 1000}
-  - {metric: complete_ms.p95, lt: 180000}
+  - {metric: 'request.error_rate{turn_kind="plain"}.value', lt: 0.01}
   - {metric: 'request.error_rate{turn_kind="sandbox"}.value', lt: 0.01}
-  - {metric: 'request.duration_ms{turn_kind="sandbox"}.p95', lt: 180000}
+  - {metric: 'complete_ms{turn_kind="plain"}.p95', lt: 120000}
+  - {metric: 'complete_ms{turn_kind="sandbox"}.p95', lt: 180000}
   - {metric: 'restart.restarts{service="agentd"}.increase', lte: 0}
   - {metric: 'restart.restarts{service="worker"}.increase', lte: 0}
 
 observe_interval_s: 5
-cooldown_s: 30
+cooldown_s: 60
 runs_dir: ./runs
