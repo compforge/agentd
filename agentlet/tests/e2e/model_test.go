@@ -36,8 +36,8 @@ func TestManagedAgentAnswersThroughModel(t *testing.T) {
 		t, ctx, client, "model-answer", anthropic.BetaManagedAgentsModelClaudeSonnet4_6,
 		"Answer arithmetic questions with only the number.",
 	)
-	sendSQLiteE2EMessage(t, ctx, client, session.ID, "What is 6 * 7?")
-	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
+	inputID := sendSQLiteE2EMessage(t, ctx, client, session.ID, "What is 6 * 7?")
+	waitForSQLiteE2EInput(t, ctx, client, session.ID, inputID)
 
 	model.assertRequests(t, 1, "Answer arithmetic questions with only the number.", "What is 6 * 7?")
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, []string{"42"})
@@ -63,8 +63,8 @@ func TestManagedAgentContinuesAfterMidStreamModelTimeout(t *testing.T) {
 		t, ctx, client, "model-timeout", anthropic.BetaManagedAgentsModelClaudeSonnet4_6,
 		"Return one complete answer and never expose partial output.",
 	)
-	sendSQLiteE2EMessage(t, ctx, client, session.ID, "This turn will time out.")
-	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
+	firstInputID := sendSQLiteE2EMessage(t, ctx, client, session.ID, "This turn will time out.")
+	waitForSQLiteE2EInput(t, ctx, client, session.ID, firstInputID)
 	model.assertRequests(t, 1, "This turn will time out.")
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, nil)
 	assertSQLiteE2EEventContains(t, ctx, client, session.ID, "session.error", "runtime_error")
@@ -73,8 +73,8 @@ func TestManagedAgentContinuesAfterMidStreamModelTimeout(t *testing.T) {
 		agentledger.EventTypeAttemptRequested, agentledger.EventTypeAttemptFailed,
 	})
 
-	sendSQLiteE2EMessage(t, ctx, client, session.ID, "Try again.")
-	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
+	secondInputID := sendSQLiteE2EMessage(t, ctx, client, session.ID, "Try again.")
+	waitForSQLiteE2EInput(t, ctx, client, session.ID, secondInputID)
 	model.assertRequests(t, 2)
 	assertSQLiteE2EAgentMessages(t, ctx, client, session.ID, []string{"RECOVERED"})
 	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{
@@ -96,8 +96,8 @@ func TestManagedAgentAnswersThroughRealModel(t *testing.T) {
 		t, ctx, client, "real-model", anthropic.BetaManagedAgentsModel(modelID),
 		"Follow the user's response-format instruction exactly.",
 	)
-	sendSQLiteE2EMessage(t, ctx, client, session.ID, "Reply with exactly: AGENTD_REAL_MODEL_E2E_OK")
-	waitForSQLiteE2EIdle(t, ctx, client, session.ID)
+	inputID := sendSQLiteE2EMessage(t, ctx, client, session.ID, "Reply with exactly: AGENTD_REAL_MODEL_E2E_OK")
+	waitForSQLiteE2EInput(t, ctx, client, session.ID, inputID)
 
 	assertSQLiteE2EAgentMessageContains(t, ctx, client, session.ID, "AGENTD_REAL_MODEL_E2E_OK")
 	assertSQLiteE2EModelLedger(t, ctx, backend, session.ID, []string{

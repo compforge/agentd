@@ -66,7 +66,9 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session Session) (st
 // +case:id=model_question_answer,desc=`answer through the configured streaming model provider`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
 // +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
 // +case:id=sandbox_resume,desc=`send two tool-using turns to one managed Session`,input=`each turn requires the isolated bash tool and the same final marker`,expect=`both turns finish, the second restores the first checkpoint, and durable Event history contains both answers`,forbid=`losing Session identity, bypassing the Sandbox, or duplicating a completed input`,group=system
+// +case:id=unsafe_tool_resolution_resume,desc=`restore a non-idempotent tool call whose requested Attempt has no terminal outcome`,input=`the user denies the exact required tool use`,expect=`the Session continues and the original Attempt becomes user_denied`,forbid=`automatically replaying the write or creating a second tool Attempt`
 // +link=agentd/docs/agentlet.md
+// +link=agentlet/tests/e2e/cases/recovery.yaml
 // +link=tests/e2e/cases/managed-agent.yaml
 func (r *AgentGoRunner) Run(
 	ctx context.Context,
@@ -132,10 +134,29 @@ func (r *AgentGoRunner) Run(
 	}
 	checkpointID := session.ResumeRef
 	finish := func(runErr error) (TurnResult, error) {
-		return TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, r.finishRun(ctx, recorder, runErr)
+		return TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, r.finishRun(
+			ctx, session.ID, runID, actor, runErr,
+		)
+	}
+
+	commitMessage := r.messageCommitter(
+		r.checkpointKey(session.ID), actor.ID, session.ID, runID, messages, &checkpointID, &revision,
+	)
+	if resolution.ToolResult != nil {
+		if !hasToolResult(messages, resolution.Attempt.ToolCallID) {
+			if err := commitMessage(*resolution.ToolResult); err != nil {
+				return finish(fmt.Errorf("persist user tool resolution: %w", err))
+			}
+			messages = append(messages, *resolution.ToolResult)
+		}
+		if err := r.recordToolResolution(ctx, recorder, resolution); err != nil {
+			return finish(err)
+		}
 	}
 
 	retryAuthorization := resolution.RetryAuthorization
+	// A supplied or denied tool result advances the shared run lane. Open the
+	// AgentGo adapter afterwards so its recorder starts from that durable seq.
 	adapter, err := agentgoadapter.New(ctx, agentgoadapter.Config{
 		Store:            r.config.Ledger,
 		SessionID:        session.ID,
@@ -170,21 +191,6 @@ func (r *AgentGoRunner) Run(
 	model, err := llm.NewModel(provider, session.Agent.Model.UpstreamID, modelOptions...)
 	if err != nil {
 		return finish(fmt.Errorf("create AgentGo model: %w", err))
-	}
-
-	commitMessage := r.messageCommitter(
-		r.checkpointKey(session.ID), actor.ID, session.ID, runID, messages, &checkpointID, &revision,
-	)
-	if resolution.ToolResult != nil {
-		if !hasToolResult(messages, resolution.Attempt.ToolCallID) {
-			if err := commitMessage(*resolution.ToolResult); err != nil {
-				return finish(fmt.Errorf("persist user tool resolution: %w", err))
-			}
-			messages = append(messages, *resolution.ToolResult)
-		}
-		if err := r.recordToolResolution(ctx, recorder, resolution); err != nil {
-			return finish(err)
-		}
 	}
 
 	options := []agentgo.AgentOption{
@@ -536,8 +542,24 @@ func (r *AgentGoRunner) Interrupt(sessionID string) {
 	}
 }
 
-func (r *AgentGoRunner) finishRun(ctx context.Context, recorder *agentledger.LaneRecorder, runErr error) error {
-	var err error
+func (r *AgentGoRunner) finishRun(
+	ctx context.Context,
+	sessionID string,
+	runID string,
+	actor agentledger.Actor,
+	runErr error,
+) error {
+	// The AgentGo adapter records model/tool facts on the same lane. Reopen the
+	// recorder after the loop settles so the run terminal uses the latest seq.
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: r.config.Ledger, SessionID: sessionID, RunID: runID, Actor: actor,
+	})
+	if err != nil {
+		if runErr != nil {
+			return fmt.Errorf("%v; open run outcome recorder: %w", runErr, err)
+		}
+		return fmt.Errorf("open run outcome recorder: %w", err)
+	}
 	if runErr == nil {
 		_, err = recorder.CompleteRun(ctx, nil)
 	} else {

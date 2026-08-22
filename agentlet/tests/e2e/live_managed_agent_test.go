@@ -84,8 +84,8 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	appendAndWake(t, ctx, events, executionService, session.ID, "Reply with READY.")
-	waitForIdle(t, ctx, executionService, session.ID)
+	firstInputID := appendAndWake(t, ctx, events, executionService, session.ID, "Reply with READY.")
+	waitForIdle(t, ctx, events, executionService, session.ID, firstInputID)
 	firstMessages := assistantMessageCount(t, ctx, events, session.ID)
 	if firstMessages == 0 {
 		t.Fatal("first turn produced no assistant message")
@@ -102,8 +102,8 @@ func TestManagedAgentMySQLSandboxRoundTripAndRestart(t *testing.T) {
 		defer cancel()
 		_ = restarted.Shutdown(shutdownCtx)
 	})
-	appendAndWake(t, ctx, events, restarted, session.ID, "Reply with RESUMED.")
-	waitForIdle(t, ctx, restarted, session.ID)
+	secondInputID := appendAndWake(t, ctx, events, restarted, session.ID, "Reply with RESUMED.")
+	waitForIdle(t, ctx, events, restarted, session.ID, secondInputID)
 	if count := assistantMessageCount(t, ctx, events, session.ID); count <= firstMessages {
 		t.Fatalf("assistant messages after restart = %d, want more than %d", count, firstMessages)
 	}
@@ -164,7 +164,14 @@ func integrationEnv(t *testing.T, name string) string {
 	return ""
 }
 
-func waitForIdle(t *testing.T, ctx context.Context, executionService *service.Service, sessionID string) {
+func waitForIdle(
+	t *testing.T,
+	ctx context.Context,
+	events *service.EventLog,
+	executionService *service.Service,
+	sessionID string,
+	inputID string,
+) {
 	t.Helper()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -173,7 +180,15 @@ func waitForIdle(t *testing.T, ctx context.Context, executionService *service.Se
 		if err != nil {
 			t.Fatal(err)
 		}
-		if session.Control.Status == "idle" {
+		stored, err := events.List(ctx, sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		processed := false
+		for _, event := range stored {
+			processed = processed || event["id"] == inputID && event["processed_at"] != nil
+		}
+		if processed && session.Control.Status == "idle" {
 			return
 		}
 		if session.Control.Status == "terminated" {
@@ -194,17 +209,20 @@ func appendAndWake(
 	executionService *service.Service,
 	sessionID string,
 	message string,
-) {
+) string {
 	t.Helper()
 	input := service.NewManagedEvent("user.message", map[string]any{
 		"content": []map[string]any{{"type": "text", "text": message}},
 	})
+	input["processed_at"] = nil
 	if err := events.AppendIngress(ctx, sessionID, input); err != nil {
 		t.Fatal(err)
 	}
 	if err := executionService.Wake(ctx, sessionID); err != nil {
 		t.Fatal(err)
 	}
+	inputID, _ := input["id"].(string)
+	return inputID
 }
 
 func assistantMessageCount(t *testing.T, ctx context.Context, events *service.EventLog, sessionID string) int {

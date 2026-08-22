@@ -14,8 +14,15 @@ development checks such as `make test`, `make lint`, or `make build`.
 | committed input recovery | process replacement across Control State, Harness State, and Ledger | SQLite |
 | model question and answer | shared Ledger → wake → AgentGo → Anthropic streaming API → persisted event | SQLite + local model server |
 | mid-stream model timeout | partial stream → audited failed turn → later input succeeds without leaked partial output | SQLite + local model server |
+| unresolved write resolution | restored Checkpoint + unresolved Ledger Attempt → requires action → user deny → resumed answer | SQLite + local model server |
 | real model answer | the same server path against an Anthropic-compatible provider | opt-in model credentials |
 | live round trip and restart | MySQL, Sandbox Engine, local model stub, tool call, and restart | opt-in live services |
+
+The recovery CaseSet is [`cases/recovery.yaml`](cases/recovery.yaml). The unresolved-write case
+constructs the exact durable boundary left by a hard process loss: the assistant tool call is in the
+Checkpoint and the non-idempotent write has only `attempt.requested` in the Ledger. A replacement
+Agentlet must expose `requires_action`; denying that attempt must continue the Session without a
+second Attempt or a Sandbox write.
 
 Skills are not represented by a fake prompt in this suite. They require agentd to implement the
 Managed Agents Skill and Skill Version contracts, durable skill content, and Sandbox injection first.
