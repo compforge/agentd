@@ -3,8 +3,21 @@ focus: Durable Agentlet recovery across process replacement and uncertain tool o
 schema_version: 1
 facets:
   boundary: {values: [agentlet]}
-  recovery: {values: [checkpoint, tool-resolution]}
+  recovery: {values: [assignment-handoff, checkpoint, tool-resolution]}
 cases:
+  - id: assignment_handoff_fence
+    desc: A stale Agentlet that previously ran the Session must not consume input assigned to its replacement.
+    input: {operation: handoff-live-agentlet-over-shared-ledger}
+    facets: {boundary: agentlet, recovery: assignment-handoff}
+    judge:
+      e2e:
+        assert:
+          - {path: stale_agentlet.execution_count, op: eq, value: 1}
+          - {path: replacement_agentlet.execution_count, op: eq, value: 1}
+          - {path: ledger.agent_message_count, op: eq, value: 2}
+    binding:
+      symbol_id: agentlet/internal/service/service.go::Service.Recover
+      spec: Agentlet retries shared-Ledger input only while it owns the process-local Work Assignment.
   - id: unsafe_tool_resolution_resume
     desc: An unresolved non-idempotent tool attempt pauses until the user resolves it, then resumes without replay.
     input: {operation: recover-unresolved-write-and-deny, expected_marker: AGENTD_TOOL_RESOLUTION_OK}

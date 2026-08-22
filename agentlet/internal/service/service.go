@@ -262,18 +262,26 @@ func (a *Service) Interrupt(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// Recover reconciles durable inputs left by a replaced process or stopped worker.
+// Recover reconciles durable inputs for Work assignments still owned by this
+// Agentlet process. A replacement process must first receive the current
+// WorkSpec from agentd; scanning every Session that ever ran here would let a
+// stale Agentlet consume inputs assigned to another Worker.
 //
-// +spec=`A persisted user input survives process replacement or a transient worker failure and is completed exactly once before the session accepts later input`
+// +spec=`Agentlet retries durable input only for a process-local Work Assignment; a replacement Agentlet resumes only after agentd installs its current WorkSpec`
 // +case:id=recover_committed_input,desc=`replace agentd after the harness commits an input but before it emits output`,input=`send one user message, stop the first process, recover, then send a second message`,expect=`one output per input; session returns to idle; harness revision advances once per input`,forbid=`duplicate user input, duplicate harness state, or duplicate agent output`
+// +case:id=assignment_handoff_fence,desc=`leave an old Agentlet alive after its Work settles, assign the Session to a new Agentlet, then append input`,expect=`only the new Assignment executes the input`,forbid=`the stale Agentlet scanning shared Ledger input or advancing the Checkpoint`
 // +case:id=reconcile_transient_worker_failure,desc=`a durable event append fails while a worker projects harness output`,expect=`the worker failure is logged; the pending input is retried without restarting agentd; only one durable output is projected`,forbid=`stuck running state or duplicate output`
 // +link=agentd/docs/agentlet.md
 func (a *Service) Recover(ctx context.Context) error {
-	sessions, err := a.repository.ListSessions(ctx)
-	if err != nil {
-		return fmt.Errorf("list sessions: %w", err)
-	}
-	for _, session := range sessions {
+	for _, localWork := range a.works.Snapshots() {
+		sessionID := localWork.Spec.Session.ID
+		session, err := a.repository.GetSession(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("load Session %q for recovery: %w", sessionID, err)
+		}
+		if session.Control.AssignmentID != localWork.Spec.AssignmentID {
+			continue
+		}
 		if session.Control.Status == "terminated" {
 			continue
 		}

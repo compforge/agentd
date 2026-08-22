@@ -362,6 +362,9 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 		defer cancel()
 		_ = recovered.Shutdown(shutdownCtx)
 	})
+	if err := recovered.ensureWork(session); err != nil {
+		t.Fatalf("install recovered Work: %v", err)
+	}
 	if err := recovered.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +409,50 @@ func TestRecoverProcessesDurableUserMessage(t *testing.T) {
 	}
 	if state.Status != "idle" || state.ResumeRef != "checkpoint-7" || state.ResumeRevision != 7 {
 		t.Fatalf("settled execution state = %#v", state)
+	}
+}
+
+func TestRecoverIgnoresPendingInputWithoutResidentWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := newMemoryRepository()
+	events := NewEventLog(agentledger.NewMemoryEventStore())
+	harness := recordingHarness{inputs: make(chan TurnInput, 1)}
+	application := New(repository, events, harness)
+	agent, err := application.CreateAgent(ctx, Agent{Name: "test", Model: testModel("test-model")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := application.CreateEnvironment(ctx, Environment{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := application.CreateSession(ctx, agent.ID, agent.Version, environment.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := NewManagedEvent("user.message", map[string]any{
+		"content": []map[string]any{{"type": "text", "text": "belongs elsewhere"}},
+	})
+	input["processed_at"] = nil
+	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := application.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case recovered := <-harness.inputs:
+		t.Fatalf("recovered unowned input %#v", recovered)
+	default:
+	}
+	pending, err := events.PendingInputs(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0]["id"] != input["id"] {
+		t.Fatalf("pending inputs = %#v", pending)
 	}
 }
 

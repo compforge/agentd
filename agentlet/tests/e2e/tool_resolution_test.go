@@ -74,8 +74,8 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 		defer shutdownCancel()
 		_ = recovered.Shutdown(shutdownCtx)
 	})
-	if err := recovered.Recover(ctx); err != nil {
-		t.Fatalf("recover unresolved tool attempt: %v", err)
+	if err := recovered.Wake(ctx, session.ID); err != nil {
+		t.Fatalf("wake replacement Agentlet for unresolved tool attempt: %v", err)
 	}
 	if got := waitForRequiredToolAction(t, ctx, recovered, events, session.ID); got != toolUseID {
 		t.Fatalf("required tool use = %q, want %q", got, toolUseID)

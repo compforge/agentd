@@ -1,4 +1,6 @@
-.PHONY: fix lint test
+.PHONY: fix lint test run
+
+PROFILE ?= managed-agent-turn.yaml
 
 fix:
 	uv run ruff format .
@@ -10,3 +12,6 @@ lint:
 
 test:
 	uv run pytest -q
+
+run:
+	uv run python -m perf_harness.cli run $(PROFILE)
