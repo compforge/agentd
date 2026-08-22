@@ -55,6 +55,12 @@ func TestSessionReconcilerReleasesObservedIdlePlacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	if err := repository.PutModel(ctx, model.Model{
+		ID: "model-e2e", Provider: "anthropic", UpstreamID: "claude-sonnet-4-6",
+		APIKey: "test", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.PutAgent(ctx, model.Agent{
 		ID: "agent-e2e", Name: "e2e", ModelID: "model-e2e", Version: 1,
 		Tools: []map[string]any{}, Metadata: map[string]string{}, CreatedAt: now, UpdatedAt: now,

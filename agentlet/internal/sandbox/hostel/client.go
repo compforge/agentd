@@ -370,15 +370,27 @@ func bedReady(response *http.Response) (bool, error) {
 	}
 	var payload struct {
 		Readiness struct {
-			Ready bool `json:"ready"`
+			Ready  bool `json:"ready"`
+			Status bool `json:"status"`
 		} `json:"readiness"`
+		Status struct {
+			Phase     string `json:"phase"`
+			Readiness struct {
+				Ready  bool `json:"ready"`
+				Status bool `json:"status"`
+			} `json:"readiness"`
+		} `json:"status"`
 		Ready bool   `json:"ready"`
 		State string `json:"state"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return false, fmt.Errorf("decode hostel bed: %w", err)
 	}
-	return payload.Ready || payload.Readiness.Ready || payload.State == "active", nil
+	return payload.Ready ||
+		payload.Readiness.Ready || payload.Readiness.Status ||
+		payload.State == "active" || payload.State == "idle" ||
+		payload.Status.Phase == "resident" &&
+			(payload.Status.Readiness.Ready || payload.Status.Readiness.Status), nil
 }
 
 func responseError(operation string, response *http.Response) error {
