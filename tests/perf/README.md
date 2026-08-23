@@ -15,8 +15,11 @@ this directory owns agentd's public API workload, stable stimuli, target profile
 
 Setup creates one Agent, one cloud Environment, and a bounded Session pool. Each measured request
 leases one Session, persists a user Event, waits for the corresponding `agent.message` and final
-`idle` status, then returns that Session to the pool. `accept_ms` isolates durable Event acceptance;
-`complete_ms` covers scheduling and the complete Harness Turn. `cases/turn.yaml` owns the plain and
+`session.status_idle` Event, then returns that Session to the pool. Event History is authoritative:
+safe reads are retried, while a lost send response is reconciled from persisted Events without
+replaying the write. `accept_ms` isolates durable Event acceptance; `complete_ms` covers scheduling
+and the complete Harness Turn. Transport retry, error, reconciliation latency, and reconciled-send
+metrics remain visible even when the Turn eventually succeeds. `cases/turn.yaml` owns the plain and
 sandbox stimuli and their diagnostic facet, while each profile only selects a mix and load shape.
 
 ## Run

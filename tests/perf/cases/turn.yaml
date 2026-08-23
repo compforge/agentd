@@ -5,11 +5,11 @@ facets:
 cases:
   - id: plain_turn
     input:
-      prompt: Do not use tools. Return the required final answer.
+      prompt: Reply exactly AGENTD_PERF_OK. Do not add any other text. Do not use tools.
       expected_text: AGENTD_PERF_OK
     facets: {turn_kind: plain}
   - id: sandbox_turn
     input:
-      prompt: Run the required sandbox check, then return the required final answer.
+      prompt: Run the required sandbox check, then reply exactly AGENTD_PERF_OK. Do not add any other text.
       expected_text: AGENTD_PERF_OK
     facets: {turn_kind: sandbox}

@@ -204,9 +204,7 @@ func (s *Server) writeError(request *hertzapp.RequestContext, err error) {
 	case errors.Is(err, service.ErrInvalid), errors.Is(err, service.ErrConflict):
 		status, errorType = consts.StatusBadRequest, "invalid_request_error"
 	}
-	if status >= 500 {
-		s.logger.Error("request failed", "method", string(request.Request.Method()), "path", string(request.Request.URI().Path()), "error", err)
-	}
+	request.Set(requestErrorContextKey, err)
 	writeJSON(request, status, map[string]any{
 		"type": "error", "error": map[string]any{"type": errorType, "message": err.Error()},
 	})

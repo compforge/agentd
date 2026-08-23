@@ -139,7 +139,8 @@ Harness Adapter 拥有模型循环和原生会话语义，Sandbox Engine 拥有�
 
 agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 核心资源，以及
 路径、主要 JSON 形状、错误 envelope、Session 状态和 `{domain}.{action}` Event 命名。兼容性由
-官方 SDK 针对 agentd 的契约测试验证。Agentlet 的 `/internal/v1` 只服务 agentd，不属于公开兼容面；
+官方 SDK 针对 agentd 的契约测试验证。每个公开 HTTP 响应携带服务端生成的 `request-id`，用于把
+客户端失败与低噪声请求日志关联起来。Agentlet 的 `/internal/v1` 只服务 agentd，不属于公开兼容面；
 调用方只依赖 agentd API。
 
 当 Harness 在不明确的 Tool 副作用处 fail-closed 时，兼容层使用官方 Event 握手而不增加私有恢复
@@ -187,9 +188,9 @@ agentd 和 Agentlet 统一使用标准库 `log/slog`，二进制入口默认输�
 - `ERROR`：一次控制循环、外部调用或持久化动作失败；
 - `DEBUG`：幂等重复、合并 wake 等正常但高频的细节。
 
-关联字段统一使用 `session_id`、`worker_id`、`placement_fence`、`input_event_id`、`resume_revision`、
-`action` 和 `error`；所有日志带 `service=agentd|agentlet`。日志不得输出凭据、DSN、完整 prompt、Event
-正文或工具敏感结果。Ledger 是审计事实来源，日志只服务运行诊断，不能替代 Ledger。
+关联字段统一使用 `request_id`、`session_id`、`worker_id`、`placement_fence`、`input_event_id`、
+`resume_revision`、`action` 和 `error`；所有日志带 `service=agentd|agentlet`。日志不得输出凭据、DSN、
+完整 prompt、Event 正文或工具敏感结果。Ledger 是审计事实来源，日志只服务运行诊断，不能替代 Ledger。
 
 ## 扩展边界
 
