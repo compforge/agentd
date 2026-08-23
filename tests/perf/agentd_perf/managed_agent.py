@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from perf_harness import MetricFamily, Outcome, TrialContext, Verdict, Workload, register_workload
@@ -12,9 +12,56 @@ from perf_harness import MetricFamily, Outcome, TrialContext, Verdict, Workload,
 @dataclass
 class SessionSlot:
     session_id: str
+    user_messages: int = 0
     agent_messages: int = 0
     session_errors: int = 0
     idle_events: int = 0
+
+
+@dataclass
+class TransportStats:
+    retry_count: int = 0
+    error_count: int = 0
+    send_reconciled: int = 0
+    event_reconcile_ms: float | None = None
+    failures: list[dict[str, object]] = field(default_factory=list)
+
+    def record(
+        self,
+        operation: str,
+        path: str,
+        attempt: int,
+        *,
+        error: BaseException | None = None,
+        response: httpx.Response | None = None,
+    ) -> None:
+        self.error_count += 1
+        failure: dict[str, object] = {
+            "operation": operation,
+            "path": path,
+            "attempt": attempt,
+        }
+        if error is not None:
+            failure["error"] = type(error).__name__
+            failure["detail"] = repr(error)[:512]
+        if response is not None:
+            failure["error"] = "HTTPStatusError"
+            failure["status"] = response.status_code
+            if request_id := response.headers.get("request-id"):
+                failure["request_id"] = request_id
+        self.failures.append(failure)
+        if len(self.failures) > 8:
+            self.failures.pop(0)
+
+    def metrics(self) -> dict[str, float]:
+        values = {
+            "transport_retry_count": float(self.retry_count),
+            "transport_error_count": float(self.error_count),
+            "send_reconciled": float(self.send_reconciled),
+        }
+        if self.event_reconcile_ms is not None:
+            values["event_reconcile_ms"] = self.event_reconcile_ms
+        return values
 
 
 class ManagedAgentWorkload(Workload):
@@ -92,6 +139,8 @@ class ManagedAgentWorkload(Workload):
 
     async def fire(self, target, client: httpx.AsyncClient, case, run_id: str) -> Outcome:
         started = time.monotonic()
+        deadline = started + self.timeout_s
+        transport = TransportStats()
         try:
             slot = await asyncio.wait_for(self._available.get(), timeout=self.timeout_s)
         except asyncio.TimeoutError:
@@ -108,61 +157,124 @@ class ManagedAgentWorkload(Workload):
             "run_id": run_id,
             "session_id": slot.session_id,
         }
-        try:
-            response = await client.post(
-                target.base_url + f"/v1/sessions/{slot.session_id}/events",
-                json={
-                    "events": [
-                        {
-                            "type": "user.message",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": str(case.input.get("prompt", "Reply with OK.")),
-                                }
-                            ],
-                        }
-                    ]
-                },
-                headers=target.headers,
-                timeout=self.timeout_s,
-            )
-            accepted_at = time.monotonic()
-            nbytes += len(response.content)
-            if not response.is_success:
-                meta["body"] = response.text[:512]
-                return Outcome(
-                    status=response.status_code,
-                    duration_ms=(accepted_at - started) * 1000,
-                    nbytes=nbytes,
-                    meta=meta,
-                )
 
-            deadline = started + self.timeout_s
-            while time.monotonic() < deadline:
-                events = await client.get(
-                    target.base_url + f"/v1/sessions/{slot.session_id}/events",
+        def finish(
+            status: int | None,
+            *,
+            at: float | None = None,
+            metrics: dict[str, float] | None = None,
+        ) -> Outcome:
+            if transport.failures:
+                meta["transport_failures"] = transport.failures
+            values = transport.metrics()
+            values.update(metrics or {})
+            return Outcome(
+                status=status,
+                duration_ms=((at or time.monotonic()) - started) * 1000,
+                nbytes=nbytes,
+                metrics=values,
+                meta=meta,
+            )
+
+        try:
+            events_url = target.base_url + f"/v1/sessions/{slot.session_id}/events"
+            events_path = httpx.URL(events_url).path
+            send_failure: BaseException | httpx.Response | None = None
+            initial_events: list[dict] | None = None
+            try:
+                response = await client.post(
+                    events_url,
+                    json={
+                        "events": [
+                            {
+                                "type": "user.message",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": str(case.input.get("prompt", "Reply with OK.")),
+                                    }
+                                ],
+                            }
+                        ]
+                    },
                     headers=target.headers,
-                    timeout=self.timeout_s,
+                    timeout=max(deadline - time.monotonic(), 0.001),
                 )
-                nbytes += len(events.content)
-                if not events.is_success:
-                    meta["body"] = events.text[:512]
-                    return Outcome(
-                        status=events.status_code,
-                        duration_ms=(time.monotonic() - started) * 1000,
-                        nbytes=nbytes,
-                        meta=meta,
+            except httpx.TransportError as exc:
+                transport.record("send_events", events_path, 1, error=exc)
+                send_failure = exc
+            else:
+                accepted_at = time.monotonic()
+                nbytes += len(response.content)
+                if response.is_success:
+                    pass
+                elif self._retryable_status(response.status_code):
+                    transport.record("send_events", events_path, 1, response=response)
+                    send_failure = response
+                else:
+                    meta["body"] = response.text[:512]
+                    return finish(response.status_code, at=accepted_at)
+
+            if send_failure is not None:
+                reconcile_started = time.monotonic()
+                try:
+                    history, history_bytes = await self._list_events(
+                        client,
+                        events_url,
+                        target.headers,
+                        deadline,
+                        transport,
+                        operation="reconcile_send",
                     )
-                data = events.json().get("data", [])
-                messages = sum(event.get("type") == "agent.message" for event in data)
+                finally:
+                    transport.event_reconcile_ms = (time.monotonic() - reconcile_started) * 1000
+                nbytes += history_bytes
+                if not history.is_success:
+                    meta["body"] = history.text[:512]
+                    return finish(history.status_code)
+                initial_events = self._event_data(history)
+                user_messages = self._count(initial_events, "user.message")
+                if user_messages <= slot.user_messages:
+                    meta["exc"] = "ambiguous_send"
+                    return finish(None)
+
+                # A lost POST response cannot be replayed safely because the API has no
+                # idempotency key. Durable Event History is the delivery confirmation.
+                transport.send_reconciled = 1
+                meta["send_reconciled"] = True
+                accepted_at = time.monotonic()
+
+            while time.monotonic() < deadline:
+                if initial_events is None:
+                    events, history_bytes = await self._list_events(
+                        client,
+                        events_url,
+                        target.headers,
+                        deadline,
+                        transport,
+                        operation="list_events",
+                    )
+                    nbytes += history_bytes
+                    if not events.is_success:
+                        meta["body"] = events.text[:512]
+                        return finish(events.status_code)
+                    data = self._event_data(events)
+                else:
+                    data = initial_events
+                    initial_events = None
+
+                user_messages = self._count(data, "user.message")
+                messages = self._count(data, "agent.message")
                 errors = [event for event in data if event.get("type") == "session.error"]
                 idle_events = [
                     event for event in data if event.get("type") == "session.status_idle"
                 ]
                 has_new_message = messages > slot.agent_messages
-                has_new_error = len(errors) > slot.session_errors
                 has_new_idle = len(idle_events) > slot.idle_events
+                new_errors = errors[slot.session_errors :]
+                settled_errors = [
+                    event for event in new_errors if self._retry_status(event) != "retrying"
+                ]
                 if has_new_message:
                     latest_message = next(
                         event for event in reversed(data) if event.get("type") == "agent.message"
@@ -172,77 +284,41 @@ class ManagedAgentWorkload(Workload):
                         meta["expected_text_seen"] = expected_text in str(
                             latest_message.get("content", "")
                         )
-                session = await client.get(
-                    target.base_url + f"/v1/sessions/{slot.session_id}",
-                    headers=target.headers,
-                    timeout=self.timeout_s,
-                )
-                nbytes += len(session.content)
-                if not session.is_success:
-                    meta["body"] = session.text[:512]
-                    return Outcome(
-                        status=session.status_code,
-                        duration_ms=(time.monotonic() - started) * 1000,
-                        nbytes=nbytes,
-                        meta=meta,
-                    )
-                status = session.json().get("status")
-                if status == "terminated":
-                    meta["session_status"] = status
-                    return Outcome(
-                        status=200,
-                        duration_ms=(time.monotonic() - started) * 1000,
-                        nbytes=nbytes,
-                        meta=meta,
-                    )
-                # An accepted input may briefly observe the Session's previous
-                # idle state. A new output or turn-scoped idle Event proves that
-                # this turn, rather than the previous one, has settled.
-                if status == "idle" and (has_new_message or has_new_idle):
-                    completed_at = time.monotonic()
-                    meta["session_status"] = status
+                if settled_errors:
                     meta["agent_message_seen"] = has_new_message
-                    if has_new_error:
-                        error = errors[-1].get("error", {})
-                        if isinstance(error, dict):
-                            meta["session_error_type"] = str(error.get("type", "runtime_error"))
-                            meta["session_error_message"] = str(error.get("message", ""))[:512]
-                    if has_new_idle:
-                        stop_reason = idle_events[-1].get("stop_reason", {})
-                        if isinstance(stop_reason, dict):
-                            meta["stop_reason_type"] = str(stop_reason.get("type", ""))
-                    if has_new_message and not has_new_error:
+                    self._record_session_error(meta, settled_errors[-1])
+                    return finish(200)
+
+                # A new idle Event, rather than the eventually consistent Session read
+                # model, proves that this exact turn has settled.
+                if has_new_idle:
+                    completed_at = time.monotonic()
+                    meta["session_status"] = "idle"
+                    meta["agent_message_seen"] = has_new_message
+                    stop_reason = idle_events[-1].get("stop_reason", {})
+                    if isinstance(stop_reason, dict):
+                        meta["stop_reason_type"] = str(stop_reason.get("type", ""))
+                    if has_new_message:
+                        slot.user_messages = user_messages
                         slot.agent_messages = messages
                         slot.session_errors = len(errors)
                         slot.idle_events = len(idle_events)
                         reusable = True
-                    return Outcome(
-                        status=200,
-                        duration_ms=(completed_at - started) * 1000,
-                        nbytes=nbytes,
+                    return finish(
+                        200,
+                        at=completed_at,
                         metrics={
                             "accept_ms": (accepted_at - started) * 1000,
                             "complete_ms": (completed_at - started) * 1000,
                         },
-                        meta=meta,
                     )
                 await asyncio.sleep(self.poll_interval_s)
             meta["exc"] = "CompletionTimeout"
-            return Outcome(
-                status=None,
-                duration_ms=(time.monotonic() - started) * 1000,
-                nbytes=nbytes,
-                meta=meta,
-            )
+            return finish(None)
         except Exception as exc:  # noqa: BLE001 - load generators record transport failures
             meta["exc"] = type(exc).__name__
             meta["exc_detail"] = str(exc)
-            return Outcome(
-                status=None,
-                duration_ms=(time.monotonic() - started) * 1000,
-                nbytes=nbytes,
-                meta=meta,
-            )
+            return finish(None)
         finally:
             # A failed turn has an ambiguous completion state. Do not let a
             # delayed response be mistaken for the next request on this slot.
@@ -284,7 +360,125 @@ class ManagedAgentWorkload(Workload):
                 source="client",
                 description="Time from dispatch until the Agent output is durable and Session is idle.",
             ),
+            MetricFamily(
+                name="transport_retry_count",
+                unit="count",
+                side="request",
+                value_kind="distribution",
+                source="client",
+                description="Safe Event History read retries made during one Turn.",
+            ),
+            MetricFamily(
+                name="transport_error_count",
+                unit="count",
+                side="request",
+                value_kind="distribution",
+                source="client",
+                description="Transient HTTP transport and retryable response errors observed.",
+            ),
+            MetricFamily(
+                name="event_reconcile_ms",
+                unit="ms",
+                side="request",
+                value_kind="distribution",
+                source="client",
+                description="Time spent confirming an ambiguous Event send from durable history.",
+            ),
+            MetricFamily(
+                name="send_reconciled",
+                unit="count",
+                side="request",
+                value_kind="distribution",
+                source="client",
+                description="Whether an ambiguous Event send was confirmed without replay.",
+            ),
         ]
+
+    async def _list_events(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        deadline: float,
+        transport: TransportStats,
+        *,
+        operation: str,
+    ) -> tuple[httpx.Response, int]:
+        attempt = 0
+        nbytes = 0
+        path = httpx.URL(url).path
+        while True:
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"{operation} exceeded the Turn deadline")
+            try:
+                response = await client.get(
+                    url,
+                    headers=headers,
+                    timeout=max(remaining, 0.001),
+                )
+            except httpx.TransportError as exc:
+                transport.record(operation, path, attempt, error=exc)
+                if not await self._wait_for_retry(attempt, deadline, transport):
+                    raise
+                continue
+
+            nbytes += len(response.content)
+            if not self._retryable_status(response.status_code):
+                return response, nbytes
+
+            transport.record(operation, path, attempt, response=response)
+            if not await self._wait_for_retry(attempt, deadline, transport):
+                return response, nbytes
+
+    @staticmethod
+    async def _wait_for_retry(
+        attempt: int,
+        deadline: float,
+        transport: TransportStats,
+    ) -> bool:
+        delay = min(0.1 * (2 ** min(attempt - 1, 4)), 1.0)
+        if deadline - time.monotonic() <= delay:
+            return False
+        transport.retry_count += 1
+        await asyncio.sleep(delay)
+        return True
+
+    @staticmethod
+    def _retryable_status(status: int) -> bool:
+        return status == 429 or status >= 500
+
+    @staticmethod
+    def _event_data(response: httpx.Response) -> list[dict]:
+        data = response.json().get("data", [])
+        if not isinstance(data, list):
+            raise TypeError("agentd Event History data is not a list")
+        return [event for event in data if isinstance(event, dict)]
+
+    @staticmethod
+    def _count(events: list[dict], event_type: str) -> int:
+        return sum(event.get("type") == event_type for event in events)
+
+    @staticmethod
+    def _retry_status(event: dict) -> str:
+        error = event.get("error", {})
+        if not isinstance(error, dict):
+            return ""
+        retry_status = error.get("retry_status", {})
+        if isinstance(retry_status, dict):
+            return str(retry_status.get("type", ""))
+        return str(retry_status or "")
+
+    @classmethod
+    def _record_session_error(cls, meta: dict[str, object], event: dict) -> None:
+        error = event.get("error", {})
+        if not isinstance(error, dict):
+            return
+        meta["session_error_type"] = str(error.get("type", "runtime_error"))
+        meta["session_error_message"] = str(error.get("message", ""))[:512]
+        if retry_status := cls._retry_status(event):
+            meta["session_error_retry_status"] = retry_status
 
     async def _required_post(
         self,

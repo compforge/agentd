@@ -14,12 +14,13 @@ import (
 )
 
 type Server struct {
-	service           *service.Service
-	events            *managedevent.Log
-	connector         *connector.Client
-	executionNotifier ExecutionNotifier
-	logger            *slog.Logger
-	eventPollInterval time.Duration
+	service              *service.Service
+	events               *managedevent.Log
+	connector            *connector.Client
+	executionNotifier    ExecutionNotifier
+	logger               *slog.Logger
+	eventPollInterval    time.Duration
+	slowRequestThreshold time.Duration
 }
 
 type ExecutionNotifier interface {
@@ -43,7 +44,8 @@ func New(
 	server := &Server{
 		service: controlService, events: events, connector: agentletConnector,
 		executionNotifier: executionNotifier, logger: logger,
-		eventPollInterval: 500 * time.Millisecond,
+		eventPollInterval:    500 * time.Millisecond,
+		slowRequestThreshold: time.Second,
 	}
 	for _, option := range options {
 		option(server)
@@ -52,6 +54,7 @@ func New(
 }
 
 func (s *Server) Register(engine *route.Engine) {
+	engine.Use(s.observeHTTP)
 	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
 		request.JSON(consts.StatusOK, map[string]any{"ok": true})
 	})
