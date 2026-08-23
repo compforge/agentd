@@ -13,11 +13,11 @@ agentd 是 Managed Agent 的 Control Plane，负责全局资源、执行时机�
 |---|---|---|
 | Observer | Worker 是否可用；当前 placement 对应的 Session 执行到了哪里 | `worker.observer_status`、`session.observer_status` |
 | Scheduler | 当前 Session 应分配给哪个可用 Worker | 无；只返回纯决策 |
-| Worker Reconciler | Worker row 是否已实现为 Pod，预热 Worker 是否达到下限 | 创建预热 Worker row，通过 Provisioner 实现 Pod |
+| Worker Pool | Worker row 是否已实现为 Pod，过期空闲 Worker 是否已回收，预热容量是否达到下限 | 串行规划 Worker 创建与回收，通过 Provisioner 实现 Pod |
 | Session Reconciler | 哪些持久输入尚待执行，如何收敛为 placement 和 wake | Session placement 动作；通过 Service 更新 Control State，通过 Connector 走数据面 |
 | Connector | 带 Assignment 的执行意图如何触达 Agentlet | 无；只走数据面 |
 
-动作、事实、决策和数据面不能合并成一个大 Driver：Worker Reconciler 创建成功不代表 Ready，Observer 不因
+动作、事实、决策和数据面不能合并成一个大 Driver：Worker Pool 创建成功不代表 Ready，Observer 不因
 看到空闲容量而创建 Worker，Scheduler 不访问数据库或 Kubernetes，Session Reconciler 不修改 Ledger
 执行事实，Connector 不修改 placement。
 
@@ -74,13 +74,13 @@ Informer 维护本地 cache；Add、Update、Delete 事件只向 Worker Observer
 
 Worker identity 不等于 Pod UID。Pod 名、UID、IP 和 Ready 都是 `observer_status` 中的外部事实。
 Kubernetes 可以重启 Pod 内容器；Pod 消失则旧 Worker 退役，Session Reconciler 必要时发布新的 Worker
-row，Worker Reconciler 创建 Pod，执行中的
+row，Worker Pool 创建 Pod，执行中的
 Session 按普通 checkpoint 恢复路径收敛。agentd 不实现 Worker 原地恢复协议。
 
 Scheduler 只消费 observation 足够新、`exists=true`、`ready=true` 且具有 endpoint 的 Worker。
 Observer status 与 lifecycle phase 正交：前者描述 Kubernetes 里的外部事实，后者描述 agentd 正在
 采取的动作。Informer cache 只提供 `PodSnapshot`，Worker Observer 仍是事实的唯一写入者；Worker
-Reconciler 创建前的 Pending/Unschedulable 背压检查则直接读取 Kubernetes，不使用可能滞后的 cache。
+Pool 创建前的 Pending/Unschedulable 背压检查则直接读取 Kubernetes，不使用可能滞后的 cache。
 
 ### Session Observer
 
@@ -149,57 +149,61 @@ Session 需要执行
 locality。Sandbox 的粘滞和物理位置由 Sandbox Engine 自己屏蔽；旧 Worker 不可用、负载明显更高或已满
 时，Scheduler 可以选择其它候选，当前 placement 和 `last_worker_id` 都不能阻止漂移或占住容量。
 
-## Worker Reconciler
+## Worker Pool
 
 Session Reconciler 是 demand 到 placement 的 owner：没有可用或可预留容量时，它创建 `creating` Worker
-row，并立即用 `session.worker_id` 预留容量。Worker row 表达期望实例，Worker Reconciler 负责把它实现为
+row，并立即用 `session.worker_id` 预留容量。Worker row 表达期望实例，Worker Pool 负责把它实现为
 Pod；Session Reconciler 写入新 placement 后会即时通知它。它不读取 Event，也不重新计算 Session demand。
 
-Worker Reconciler 与 Kubernetes 操作分两层：
+Worker Pool 是容量创建与回收的唯一控制环。容量 ticker、GC ticker 和即时通知都进入同一个 runner；
+full pass 在同一短 lease 内先持久化回收计划，再按回收后的 Worker rows 计算创建缺口。lease 冲突会在
+本轮 controller timeout 内等待重试，不能作为一次空成功被吞掉。
+
+Pool 内部计划与 Kubernetes 操作分两层：
 
 | 层 | 职责 |
 |---|---|
-| Worker Reconciler | 实现 Worker row、补足预热下限和创建重试 |
+| Worker capacity/reclamation planner | 持久化 Worker 创建、阶段迁移和回收计划 |
 | Worker Provisioner | 幂等 `Ensure` / `Destroy` 一个 Worker Pod |
 
 `Ensure` 返回只表示 Kubernetes 接受期望状态；Observer 写入 Ready 后 Connector 才能使用 Worker。
-扩容采用有上限的小批次。创建 Pod 前，Worker Reconciler 直接读取 Kubernetes；若受管 Pod 存在
+扩容采用有上限的小批次。创建 Pod 前，Worker Pool 直接读取 Kubernetes；若受管 Pod 存在
 `Pending` 或 `PodScheduled=False/Unschedulable`，将其视为 Kubernetes 对 agentd 的背压，本轮不再创建
 Pod，也不补预热容量。这个 live precheck 是例外；其余控制决策等待 Observer 把事实落库后再进行。
 
 ### 预热与按需扩容
 
-预热不使用独立 controller。Worker Reconciler 只根据 Worker rows 和预热配置计算，不重复读取或计算
+预热不使用独立 controller。Worker Pool 只根据 Worker rows 和预热配置计算，不重复读取或计算
 Session demand：
 
 1. Session Reconciler 优先占用 Ready Worker 的空闲 slot；
 2. 没有 Ready 容量时，可预留 creating Worker 的剩余 slot；
-3. Worker Reconciler 保证 active 与 creating Worker 总数不低于 `minWorkers`；
+3. Worker Pool 保证 active 与 creating Worker 总数不低于 `minWorkers`；
 4. 再补足零绑定 Session 的 `minIdleWorkers`；
 5. 每轮实际创建 Pod 的数量受 `createBatchSize` 限制；
 6. Kubernetes 返回 Pending 或 Unschedulable 时停止本轮创建。
 
 `minWorkers` 当前默认且最小为 1，用于保留一个预热执行节点；Event 读取已经不依赖常驻 Agentlet；
-`minIdleWorkers` 默认 0，不要求 Worker 忙时额外常驻空闲实例。两个 Reconciler 的唤醒 channel 都只
-合并通知，不携带 Session、Worker 或数量；周期 reconcile 和即时唤醒都从数据库重新计算相同目标。
+`minIdleWorkers` 默认 0，不要求 Worker 忙时额外常驻空闲实例。Session Reconciler 与 Worker Pool
+各自的唤醒 channel 都只合并通知，不携带 Session、Worker 或数量；周期 reconcile 和即时唤醒都从数据库重新计算相同目标。
 空闲 Worker 超过 idle TTL 后可以轮换，若
 因此低于总数或 idle floor，下一轮用当前镜像和模板补回。
 
-creating Worker 的 Pod 缺失时，Worker Reconciler 幂等完成创建；active Worker 的 Pod 缺失时先退役旧
+creating Worker 的 Pod 缺失时，Worker Pool 幂等完成创建；active Worker 的 Pod 缺失时先退役旧
 Worker，再由 Session Reconciler 根据 durable demand 发布新 Worker。Kubernetes 存在带 managed label 的 Pod 而数据库没有对应
 Worker 时，超过 grace period 后按批删除。每个 agentd 副本都运行这些循环，不依赖全局 Leader：
-预热缺口计算和 Pod 创建用 `resource_locks` 中的短 DB lease 串行化，单 Worker 处置权由 phase CAS 决定，
+Worker 创建与回收计划用 `resource_locks` 中的同一短 DB lease 串行化，单 Worker 处置权由 phase CAS 决定，
 Observer 写入带 freshness fence，外部动作保持幂等。持有者退出后，其 lease 到期或下一轮 reconcile
 由其它副本继续。
 
 ### 多实例协调
 
-agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox 任务的长 lease。Worker Reconciler
+agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox 任务的长 lease。Worker Pool
 处理的是共享容量池，不执行一条 Session 的长任务，因此按动作选择最窄协调方式：
 
 | 动作 | 协调方式 |
 |---|---|
-| 计算容量缺口、预热并插入 `creating` Worker | 短 DB lease；锁内重新读取 durable demand 和已有容量 |
+| 回收过期容量、计算缺口并插入 `creating` Worker | 同一短 DB lease；先持久化回收状态，再读取剩余容量 |
 | 为 `creating` Worker 创建 Pod | 先有 Worker 行，再幂等 `Ensure`；Pod AlreadyExists 视为成功 |
 | `creating → active` | Observer Ready 后 phase CAS |
 | `active → draining` | 条件更新同时确认零绑定 Session；CAS 胜者拥有回收权 |
@@ -207,14 +211,14 @@ agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox �
 | Observer 写事实 | 按 Worker identity 合并，并用 freshness fence 拒绝旧 snapshot |
 | Session binding | 数据库事务与 Worker 行锁，不能依赖容量循环的 resource lock |
 
-短 DB lease 只保护一次“读取缺口并发布 creating demand”，不能覆盖 Pod 启动等待。这样持有者崩溃后
+短 DB lease 只保护一次“持久化回收计划并发布 creating demand”，不能覆盖 Pod 启动或删除等待。这样持有者崩溃后
 不会长时间阻塞扩容，任意副本都能看到 creating 行并补做幂等 `Ensure`。若以后出现真正需要长时间
 独占的单 Worker 动作，再为该动作加入 holder、heartbeat 和过期 takeover，而不是预先把整套协议铺开。
 
 ## GC
 
-GC 是独立维护面，分成运行资源与数据库记录两类。两者使用不同周期和失败重试，不能用删除数据库行
-顺带代表 Pod 已经释放。
+GC 分成运行资源与数据库记录两类。Pod 回收属于 Worker Pool 的容量控制，Record GC 是独立维护面；
+两者使用不同周期和失败重试，不能用删除数据库行顺带代表 Pod 已经释放。
 
 ### Pod GC
 
@@ -281,7 +285,7 @@ placement，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Wor
 
 ## 部署边界
 
-- Session Reconciler 发布 demand 所需的 Worker row，Worker Reconciler 实现 Worker Pod 并维护预热下限；
+- Session Reconciler 发布 demand 所需的 Worker row，Worker Pool 实现 Worker Pod、回收空闲容量并维护预热下限；
 - agentd Deployment 可以多副本运行；每个副本都运行 API、Scheduler、Connector、Session Observer、
   Session Reconciler 和周期控制器，
   通过 DB lease、phase CAS 与幂等动作协调；
@@ -294,9 +298,9 @@ Quick Start Helm 形态、Worker 模板和弹性流程见
 [`../../deploy/k8s/README.md`](../../deploy/k8s/README.md)。
 
 Session Observer、Session Reconciler 与 Record GC 始终运行。启用 Kubernetes Worker source 后，
-每个 agentd 副本还运行 Worker Observer、Worker Reconciler 和 Pod GC。
-无容量时，Session Reconciler 原子创建 Worker row 并预留 placement；Worker Reconciler 通过 Provisioner
-创建 Worker Pod，Observer 确认 Ready 后，Connector 才把请求转发到 Agentlet。Pod GC 同时收敛
+每个 agentd 副本还运行 Worker Observer 和 Worker Pool。
+无容量时，Session Reconciler 原子创建 Worker row 并预留 placement；Worker Pool 通过 Provisioner
+创建 Worker Pod，Observer 确认 Ready 后，Connector 才把请求转发到 Agentlet。Pool 内的 Pod GC 同时收敛
 空闲 Worker、已消失 Worker 和无数据库 owner 的受管 Pod。Session Observer 只记录 idle/terminated
 事实，Session Reconciler 在安全边界释放 placement；跨 Worker 恢复仍由 Control State 和 Ledger 的
 恢复判断负责，不混入 Worker 供给控制器。

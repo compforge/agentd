@@ -3,11 +3,9 @@ package reconciler
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
-	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
@@ -18,39 +16,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-type fakeLocker struct {
-	mu     sync.Mutex
-	locked bool
-}
-
-func (l *fakeLocker) Lock(context.Context, string, time.Duration) (*controllock.Token, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.locked {
-		return nil, controllock.ErrLocked
-	}
-	l.locked = true
-	return &controllock.Token{Resource: poolLockResource, LockerID: "test"}, nil
-}
-
-func (l *fakeLocker) Unlock(context.Context, *controllock.Token) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.locked = false
-	return nil
-}
-
 type fakePods struct {
 	values []controlk8s.PodSnapshot
-}
-
-type signalingPods struct {
-	calls chan struct{}
-}
-
-func (f signalingPods) ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error) {
-	f.calls <- struct{}{}
-	return nil, nil
 }
 
 func (f fakePods) ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error) {
@@ -78,7 +45,7 @@ func TestReconcileRealizesCreatingWorkerRow(t *testing.T) {
 		WorkerCapacity: 2, CreateBatchSize: 10,
 	})
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if len(provisioner.ensured) != 1 || provisioner.ensured[0] != "worker-demand" {
@@ -93,7 +60,7 @@ func TestReconcileMaintainsWarmWorkerFloor(t *testing.T) {
 		WorkerCapacity: 2, MinWorkers: 1, MinIdleWorkers: 2, CreateBatchSize: 10,
 	})
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	workers, err := repository.ListWorkers(context.Background())
@@ -119,7 +86,7 @@ func TestReconcileStopsCreatingUnderKubernetesBackpressure(t *testing.T) {
 		WorkerCapacity: 1, MinIdleWorkers: 2, CreateBatchSize: 10,
 	})
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	workers, err := repository.ListWorkers(context.Background())
@@ -131,34 +98,6 @@ func TestReconcileStopsCreatingUnderKubernetesBackpressure(t *testing.T) {
 	}
 }
 
-func TestNotifyTriggersReconcileBeforePeriodicScan(t *testing.T) {
-	repository := newTestRepository(t)
-	pods := signalingPods{calls: make(chan struct{}, 2)}
-	controller, err := New(repository, &fakeLocker{}, pods, &fakeProvisioner{}, Config{
-		Interval: time.Hour, RequestTimeout: time.Second, LeaseTTL: time.Second,
-		WorkerCapacity: 1, CreateBatchSize: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go controller.Run(ctx)
-	waitForReconcile(t, pods.calls)
-
-	controller.Notify()
-	waitForReconcile(t, pods.calls)
-}
-
-func waitForReconcile(t *testing.T, calls <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-calls:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Worker reconcile")
-	}
-}
-
 func newTestReconciler(
 	t *testing.T,
 	repository repo.Repository,
@@ -167,14 +106,19 @@ func newTestReconciler(
 	config Config,
 ) *Reconciler {
 	t.Helper()
-	config.Interval = time.Second
-	config.RequestTimeout = time.Second
-	config.LeaseTTL = time.Second
-	controller, err := New(repository, &fakeLocker{}, pods, provisioner, config)
+	controller, err := New(repository, pods, provisioner, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return controller
+}
+
+func planAndApply(ctx context.Context, controller *Reconciler) error {
+	workers, err := controller.Plan(ctx)
+	if err != nil {
+		return err
+	}
+	return controller.Apply(ctx, workers)
 }
 
 func putWorker(t *testing.T, repository repo.Repository, worker model.Worker) {

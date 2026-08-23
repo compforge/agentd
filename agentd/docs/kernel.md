@@ -103,7 +103,7 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
 - **Work**：Session 的长期执行实体。Work 可以冻结、迁移或恢复，但不能与某个进程或 Worker 绑定。
 - **Event**：用户和 Session 之间的持久化输入输出，也是唤醒 Session 的依据。
-- **Worker**：一个由 Worker Reconciler 实现、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
+- **Worker**：一个由 Worker Pool 实现、被 Observer 观测的 Agentlet 承载单元，也是 agentd 的调度和
   容量单位。
 - **Placement**：Session Control State 中的当前 Worker 位置。它随 Session 存储，不是独立资源。
 
@@ -118,7 +118,7 @@ Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox ins
 2. 用户 Event 持久化后才确认接收；Session Reconciler 以未处理 Event 为 durable demand，内存通知
    只用于降低唤醒延迟；
 3. Scheduler 从最新 observation 表明存在、Ready 且未达到并发上限的 Worker 中选择实例；若无容量，
-   Session Reconciler 创建 Worker row 并写入 placement，再即时唤醒 Worker Reconciler 创建 Pod；Worker
+   Session Reconciler 创建 Worker row 并写入 placement，再即时唤醒 Worker Pool 创建 Pod；Worker
    Observer 确认 Ready 后反向唤醒 Session Reconciler 继续执行；
 4. agentd 直接从共享 Ledger 读取持久 Event；Connector 只把携带 Assignment 的 wake、
    interrupt 和状态请求转换为 Agentlet 内部调用；

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
@@ -14,14 +13,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
-
-type testLocker struct{}
-
-func (testLocker) Lock(context.Context, string, time.Duration) (*controllock.Token, error) {
-	return &controllock.Token{Resource: workerPoolLock, LockerID: "test"}, nil
-}
-
-func (testLocker) Unlock(context.Context, *controllock.Token) error { return nil }
 
 type testPodSource struct {
 	pods    []controlk8s.PodSnapshot
@@ -64,7 +55,7 @@ func TestPodGCReclaimsIdleWorker(t *testing.T) {
 	provisioner := &testProvisioner{}
 	controller := newTestPodGC(t, repository, pods, provisioner)
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := repository.GetWorker(context.Background(), "worker-idle")
@@ -93,15 +84,14 @@ func TestPodGCRetainsMinimumWorkerCount(t *testing.T) {
 		ID: "worker-floor", Name: "worker-floor", Managed: true,
 	}}}
 	provisioner := &testProvisioner{}
-	controller, err := NewPodGC(repository, testLocker{}, pods, provisioner, PodConfig{
-		Interval: time.Minute, RequestTimeout: time.Second, LeaseTTL: 2 * time.Second,
+	controller, err := NewPodGC(repository, pods, provisioner, PodConfig{
 		IdleTTL: time.Minute, MinWorkers: 1, DeleteBatchSize: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := repository.GetWorker(context.Background(), "worker-floor")
@@ -120,7 +110,7 @@ func TestPodGCDeletesZombiePod(t *testing.T) {
 	}}}
 	controller := newTestPodGC(t, repository, pods, &testProvisioner{})
 
-	if err := controller.Reconcile(context.Background()); err != nil {
+	if err := planAndApply(context.Background(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if len(pods.deleted) != 1 || pods.deleted[0] != "worker-zombie" {
@@ -135,14 +125,21 @@ func newTestPodGC(
 	provisioner *testProvisioner,
 ) *PodGC {
 	t.Helper()
-	controller, err := NewPodGC(repository, testLocker{}, pods, provisioner, PodConfig{
-		Interval: time.Minute, RequestTimeout: time.Second, LeaseTTL: 2 * time.Second,
+	controller, err := NewPodGC(repository, pods, provisioner, PodConfig{
 		IdleTTL: time.Minute, DeleteBatchSize: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return controller
+}
+
+func planAndApply(ctx context.Context, controller *PodGC) error {
+	actions, err := controller.Plan(ctx)
+	if err != nil {
+		return err
+	}
+	return controller.Apply(ctx, actions)
 }
 
 func newTestRepository(t *testing.T) *gormrepo.GORMRepository {

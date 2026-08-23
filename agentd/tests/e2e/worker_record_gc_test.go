@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
@@ -50,14 +49,6 @@ func (s *podSource) Destroy(ctx context.Context, worker model.Worker) error {
 	return s.DeleteWorkerPod(ctx, worker.Name)
 }
 
-type poolLocker struct{}
-
-func (poolLocker) Lock(context.Context, string, time.Duration) (*controllock.Token, error) {
-	return &controllock.Token{Resource: "worker-pool:capacity", LockerID: "e2e"}, nil
-}
-
-func (poolLocker) Unlock(context.Context, *controllock.Token) error { return nil }
-
 func TestRetiredWorkerRecordOutlivesPodThenExpires(t *testing.T) {
 	ctx := context.Background()
 	repository := openRepository(t)
@@ -73,14 +64,17 @@ func TestRetiredWorkerRecordOutlivesPodThenExpires(t *testing.T) {
 	pods := &podSource{pods: []controlk8s.PodSnapshot{{
 		ID: worker.ID, Name: worker.Name, Managed: true, IP: "127.0.0.1", Ready: true,
 	}}}
-	podGC, err := controlgc.NewPodGC(repository, poolLocker{}, pods, pods, controlgc.PodConfig{
-		Interval: time.Minute, RequestTimeout: time.Second, LeaseTTL: 2 * time.Second,
+	podGC, err := controlgc.NewPodGC(repository, pods, pods, controlgc.PodConfig{
 		IdleTTL: time.Minute, DeleteBatchSize: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := podGC.Reconcile(ctx); err != nil {
+	actions, err := podGC.Plan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := podGC.Apply(ctx, actions); err != nil {
 		t.Fatal(err)
 	}
 	if len(pods.destroyed) != 1 || pods.destroyed[0] != worker.Name {

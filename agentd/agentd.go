@@ -49,7 +49,7 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	workerControllers, err := worker.New(worker.Config{
+	workerPool, err := worker.New(worker.Config{
 		Source: config.workerSource, Namespace: config.workerNamespace, Selector: config.workerSelector,
 		Port: config.workerPort, Capacity: config.workerCapacity,
 		MinCount: config.workerMinCount, MinIdle: config.workerMinIdle,
@@ -63,7 +63,7 @@ func Run(logger *slog.Logger) error {
 		return err
 	}
 	workerCapacity := 0
-	if workerControllers != nil {
+	if workerPool != nil {
 		workerCapacity = config.workerCapacity
 	}
 	controlService, err := control.New(repository, config.observationTimeout, workerCapacity)
@@ -84,7 +84,7 @@ func Run(logger *slog.Logger) error {
 	defer agentletConnector.CloseIdleConnections()
 	events := managedevent.NewLog(storage.Ledger)
 	sessionReconciler, err := sessionreconciler.New(
-		controlService, events, agentletConnector, workerControllers,
+		controlService, events, agentletConnector, workerPool,
 		sessionreconciler.Config{
 			Interval: config.sessionReconcilerInterval, RequestTimeout: config.sessionReconcilerTimeout,
 			Concurrency: config.sessionReconcilerConcurrency, Logger: logger,
@@ -93,8 +93,8 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if workerControllers != nil {
-		if err := workerControllers.AttachObserver(controlService, sessionReconciler); err != nil {
+	if workerPool != nil {
+		if err := workerPool.AttachObserver(controlService, sessionReconciler); err != nil {
 			return err
 		}
 	}
@@ -132,8 +132,8 @@ func Run(logger *slog.Logger) error {
 		logger.Info("agentd listening", "address", config.address)
 		serveErr <- httpServer.Run()
 	}()
-	if workerControllers != nil {
-		workerControllers.Run(processCtx)
+	if workerPool != nil {
+		workerPool.Run(processCtx)
 	}
 	go sessionObserver.Run(processCtx)
 	go sessionReconciler.Run(processCtx)
