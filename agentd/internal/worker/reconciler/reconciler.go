@@ -1,22 +1,18 @@
-// Package reconciler converges durable Worker rows into Kubernetes Pods and
-// maintains the configured warm Worker floor.
+// Package reconciler plans durable Worker capacity and realizes it as
+// Kubernetes Pods. The parent worker Pool owns scheduling and serialization.
 package reconciler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
-	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
 )
-
-const poolLockResource = "worker-pool:capacity"
 
 type PodSource interface {
 	ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error)
@@ -27,9 +23,6 @@ type Provisioner interface {
 }
 
 type Config struct {
-	Interval        time.Duration
-	RequestTimeout  time.Duration
-	LeaseTTL        time.Duration
 	WorkerCapacity  int
 	MinWorkers      int
 	MinIdleWorkers  int
@@ -38,26 +31,20 @@ type Config struct {
 }
 
 type Reconciler struct {
-	repository    repo.Repository
-	locker        controllock.Locker
-	pods          PodSource
-	provisioner   Provisioner
-	config        Config
-	notifications chan struct{}
+	repository  repo.Repository
+	pods        PodSource
+	provisioner Provisioner
+	config      Config
 }
 
 func New(
 	repository repo.Repository,
-	locker controllock.Locker,
 	pods PodSource,
 	provisioner Provisioner,
 	config Config,
 ) (*Reconciler, error) {
-	if repository == nil || locker == nil || pods == nil || provisioner == nil {
-		return nil, fmt.Errorf("create Worker Reconciler: repository, locker, Pod source, and provisioner are required")
-	}
-	if config.Interval <= 0 || config.RequestTimeout <= 0 || config.LeaseTTL <= 0 {
-		return nil, fmt.Errorf("create Worker Reconciler: intervals and lease TTL must be positive")
+	if repository == nil || pods == nil || provisioner == nil {
+		return nil, fmt.Errorf("create Worker Reconciler: repository, Pod source, and provisioner are required")
 	}
 	if config.WorkerCapacity <= 0 || config.CreateBatchSize <= 0 || config.MinWorkers < 0 || config.MinIdleWorkers < 0 {
 		return nil, fmt.Errorf("create Worker Reconciler: invalid capacity configuration")
@@ -66,65 +53,17 @@ func New(
 		config.Logger = slog.Default()
 	}
 	return &Reconciler{
-		repository: repository, locker: locker, pods: pods,
-		provisioner: provisioner, config: config,
-		notifications: make(chan struct{}, 1),
+		repository:  repository,
+		pods:        pods,
+		provisioner: provisioner,
+		config:      config,
 	}, nil
 }
 
-// Notify requests an early reconciliation. Notifications are deliberately
-// coalesced because the Worker rows in the database remain the source of truth.
-func (r *Reconciler) Notify() {
-	select {
-	case r.notifications <- struct{}{}:
-	default:
-	}
-}
-
-func (r *Reconciler) Run(ctx context.Context) {
-	r.reconcileWithTimeout(ctx)
-	ticker := time.NewTicker(r.config.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			r.reconcileWithTimeout(ctx)
-		case <-r.notifications:
-			r.reconcileWithTimeout(ctx)
-		}
-	}
-}
-
-// Reconcile realizes Worker rows and maintains warm capacity. The Kubernetes
-// list is an intentional live admission check: Pending or Unschedulable Pods
-// are backpressure from the cluster, so this pass publishes no additional Pod.
-func (r *Reconciler) Reconcile(ctx context.Context) error {
-	token, err := r.locker.Lock(ctx, poolLockResource, r.config.LeaseTTL)
-	if errors.Is(err, controllock.ErrLocked) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lock Worker reconcile: %w", err)
-	}
-	workers, planErr := r.plan(ctx)
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	unlockErr := r.locker.Unlock(unlockCtx, token)
-	cancel()
-	if planErr != nil || unlockErr != nil {
-		return errors.Join(planErr, unlockErr)
-	}
-	for _, worker := range workers {
-		if err := r.provisioner.Ensure(ctx, worker); err != nil {
-			return fmt.Errorf("ensure Worker %q: %w", worker.ID, err)
-		}
-		r.config.Logger.InfoContext(ctx, "ensured Worker Pod", "worker_id", worker.ID)
-	}
-	return nil
-}
-
-func (r *Reconciler) plan(ctx context.Context) ([]model.Worker, error) {
+// Plan publishes missing Worker rows while the worker Pool holds the capacity
+// lease. Kubernetes Pending and Unschedulable Pods provide immediate
+// backpressure, so this pass publishes no additional Pod when either exists.
+func (r *Reconciler) Plan(ctx context.Context) ([]model.Worker, error) {
 	pods, err := r.pods.ListAgentletPods(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list Worker Pods before creation: %w", err)
@@ -177,6 +116,19 @@ func (r *Reconciler) plan(ctx context.Context) ([]model.Worker, error) {
 	return actions, nil
 }
 
+// Apply realizes a previously persisted capacity plan. Ensure is deliberately
+// outside the lease: the Worker row makes retries idempotent and avoids holding
+// a database lease during a potentially slow Kubernetes call.
+func (r *Reconciler) Apply(ctx context.Context, workers []model.Worker) error {
+	for _, worker := range workers {
+		if err := r.provisioner.Ensure(ctx, worker); err != nil {
+			return fmt.Errorf("ensure Worker %q: %w", worker.ID, err)
+		}
+		r.config.Logger.InfoContext(ctx, "ensured Worker Pod", "worker_id", worker.ID)
+	}
+	return nil
+}
+
 func (r *Reconciler) warmDeficit(ctx context.Context, workers []model.Worker) (int, error) {
 	planned := 0
 	idle := 0
@@ -201,12 +153,4 @@ func (r *Reconciler) warmDeficit(ctx context.Context, workers []model.Worker) (i
 		return 0, nil
 	}
 	return needed, nil
-}
-
-func (r *Reconciler) reconcileWithTimeout(ctx context.Context) {
-	reconcileCtx, cancel := context.WithTimeout(ctx, r.config.RequestTimeout)
-	defer cancel()
-	if err := r.Reconcile(reconcileCtx); err != nil && ctx.Err() == nil {
-		r.config.Logger.ErrorContext(ctx, "reconcile Workers", "error", err)
-	}
 }

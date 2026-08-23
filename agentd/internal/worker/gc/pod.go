@@ -1,21 +1,18 @@
-// Package gc reconciles Worker Pods and retained database records.
+// Package gc plans and applies Worker Pod reclamation. The parent worker Pool
+// owns scheduling and serialization with capacity creation.
 package gc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"time"
 
-	controllock "github.com/compforge/agentd/agentd/internal/lock"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
 )
-
-const workerPoolLock = "worker-pool:capacity"
 
 type PodSource interface {
 	ListAgentletPods(context.Context) ([]controlk8s.PodSnapshot, error)
@@ -27,9 +24,6 @@ type Provisioner interface {
 }
 
 type PodConfig struct {
-	Interval        time.Duration
-	RequestTimeout  time.Duration
-	LeaseTTL        time.Duration
 	IdleTTL         time.Duration
 	MinWorkers      int
 	MinIdleWorkers  int
@@ -37,9 +31,18 @@ type PodConfig struct {
 	Logger          *slog.Logger
 }
 
+type OrphanPod struct {
+	WorkerID string
+	Name     string
+}
+
+type Actions struct {
+	OrphanPods []OrphanPod
+	Workers    []model.Worker
+}
+
 type PodGC struct {
 	repository  repo.Repository
-	locker      controllock.Locker
 	pods        PodSource
 	provisioner Provisioner
 	config      PodConfig
@@ -47,16 +50,15 @@ type PodGC struct {
 
 func NewPodGC(
 	repository repo.Repository,
-	locker controllock.Locker,
 	pods PodSource,
 	provisioner Provisioner,
 	config PodConfig,
 ) (*PodGC, error) {
-	if repository == nil || locker == nil || pods == nil || provisioner == nil {
+	if repository == nil || pods == nil || provisioner == nil {
 		return nil, fmt.Errorf("create Worker Pod GC: dependencies are required")
 	}
-	if config.Interval <= 0 || config.RequestTimeout <= 0 || config.LeaseTTL <= 0 || config.IdleTTL <= 0 {
-		return nil, fmt.Errorf("create Worker Pod GC: durations must be positive")
+	if config.IdleTTL <= 0 {
+		return nil, fmt.Errorf("create Worker Pod GC: idle TTL must be positive")
 	}
 	if config.MinWorkers < 0 || config.MinIdleWorkers < 0 || config.DeleteBatchSize <= 0 {
 		return nil, fmt.Errorf("create Worker Pod GC: invalid capacity configuration")
@@ -65,40 +67,35 @@ func NewPodGC(
 		config.Logger = slog.Default()
 	}
 	return &PodGC{
-		repository: repository, locker: locker, pods: pods, provisioner: provisioner, config: config,
+		repository:  repository,
+		pods:        pods,
+		provisioner: provisioner,
+		config:      config,
 	}, nil
 }
 
-func (g *PodGC) Run(ctx context.Context) {
-	g.reconcileWithTimeout(ctx)
-	ticker := time.NewTicker(g.config.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			g.reconcileWithTimeout(ctx)
-		}
-	}
-}
-
-func (g *PodGC) Reconcile(ctx context.Context) error {
+// Plan persists Worker phase changes while the parent Pool holds the capacity
+// lease. Destructive Kubernetes calls are returned as actions and happen only
+// after the lease is released.
+func (g *PodGC) Plan(ctx context.Context) (Actions, error) {
 	workers, err := g.repository.ListWorkers(ctx)
 	if err != nil {
 		// Fail closed: without the complete owner set no Pod can be classified
-		// as a zombie safely.
-		return fmt.Errorf("list Workers for Pod GC: %w", err)
+		// as an orphan safely.
+		return Actions{}, fmt.Errorf("list Workers for Pod GC: %w", err)
 	}
 	pods, err := g.pods.ListAgentletPods(ctx)
 	if err != nil {
-		return fmt.Errorf("list Worker Pods for GC: %w", err)
+		return Actions{}, fmt.Errorf("list Worker Pods for GC: %w", err)
 	}
+
 	known := make(map[string]model.Worker, len(workers))
 	for _, worker := range workers {
 		known[worker.ID] = worker
 	}
-	deleted := 0
+	actions := Actions{
+		OrphanPods: make([]OrphanPod, 0, g.config.DeleteBatchSize),
+	}
 	for _, pod := range pods {
 		if !pod.Managed {
 			continue
@@ -107,32 +104,29 @@ func (g *PodGC) Reconcile(ctx context.Context) error {
 		if exists && worker.Name == pod.Name {
 			continue
 		}
-		if deleted == g.config.DeleteBatchSize {
-			break
+		if len(actions.OrphanPods) == g.config.DeleteBatchSize {
+			return actions, nil
 		}
-		if err := g.pods.DeleteWorkerPod(ctx, pod.Name); err != nil {
-			return fmt.Errorf("delete zombie Worker Pod %q: %w", pod.Name, err)
-		}
-		g.config.Logger.InfoContext(ctx, "deleted orphan Worker Pod",
-			"worker_id", pod.ID, "pod_name", pod.Name)
-		deleted++
+		actions.OrphanPods = append(actions.OrphanPods, OrphanPod{WorkerID: pod.ID, Name: pod.Name})
 	}
 
-	token, err := g.locker.Lock(ctx, workerPoolLock, g.config.LeaseTTL)
-	if errors.Is(err, controllock.ErrLocked) {
-		return nil
+	actions.Workers, err = g.reconcileKnownWorkers(
+		ctx, workers, pods, g.config.DeleteBatchSize-len(actions.OrphanPods),
+	)
+	return actions, err
+}
+
+// Apply performs a previously persisted reclamation plan. Delete and Destroy
+// are idempotent, so an interrupted pass can safely repeat them.
+func (g *PodGC) Apply(ctx context.Context, actions Actions) error {
+	for _, pod := range actions.OrphanPods {
+		if err := g.pods.DeleteWorkerPod(ctx, pod.Name); err != nil {
+			return fmt.Errorf("delete orphan Worker Pod %q: %w", pod.Name, err)
+		}
+		g.config.Logger.InfoContext(ctx, "deleted orphan Worker Pod",
+			"worker_id", pod.WorkerID, "pod_name", pod.Name)
 	}
-	if err != nil {
-		return fmt.Errorf("lock Worker Pod GC: %w", err)
-	}
-	destroy, reconcileErr := g.reconcileKnownWorkers(ctx, workers, pods, g.config.DeleteBatchSize-deleted)
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	unlockErr := g.locker.Unlock(unlockCtx, token)
-	cancel()
-	if reconcileErr != nil || unlockErr != nil {
-		return errors.Join(reconcileErr, unlockErr)
-	}
-	for _, worker := range destroy {
+	for _, worker := range actions.Workers {
 		if err := g.provisioner.Destroy(ctx, worker); err != nil {
 			return fmt.Errorf("destroy retired Worker %q: %w", worker.ID, err)
 		}
@@ -279,12 +273,4 @@ func (g *PodGC) movePhase(
 		return nil
 	})
 	return moved, ok, err
-}
-
-func (g *PodGC) reconcileWithTimeout(ctx context.Context) {
-	reconcileCtx, cancel := context.WithTimeout(ctx, g.config.RequestTimeout)
-	defer cancel()
-	if err := g.Reconcile(reconcileCtx); err != nil && ctx.Err() == nil {
-		g.config.Logger.ErrorContext(ctx, "reconcile Worker Pod GC", "error", err)
-	}
 }

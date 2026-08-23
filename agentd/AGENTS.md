@@ -42,10 +42,10 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   │   │   ├── reconciler/    # 将 Ledger demand 收敛为 Session placement 与 wake
 │   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
 │   │   └── worker/
-│   │       ├── controllers.go # Worker 控制环组合与启动
+│   │       ├── pool.go        # Worker 容量创建/回收的唯一控制环与短 lease
 │   │       ├── observer/      # 消费 Pod Informer cache 并持久化 Worker observation
-│   │       ├── reconciler/    # Worker row → Pod 与预热容量收敛
-│   │       ├── gc/            # Pod 与终态记录的独立回收
+│   │       ├── reconciler/    # Worker row → Pod 与预热容量计划
+│   │       ├── gc/            # Pool 内 Pod 回收计划与独立终态记录回收
 │   │       └── k8s/           # Kubernetes Client 与 PodSnapshot substrate
 │   └── docs/
 │       ├── kernel.md          # 稳定定位、核心模型、API 与组件主流程
@@ -77,8 +77,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    Session 数调度；Agentlet 不主动注册或发心跳。
 4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
    Control State 中的 observation、Session placement 和容量做无 I/O 决策，不访问 Kubernetes 或
-   Agentlet。Session Reconciler 是 placement 动作的唯一 owner；Worker Reconciler 实现 Worker Pod 并维护
-   预热下限。两个 Reconciler 都可被其它组件即时通知，但通知只加速基于 DB 的收敛，不承载状态。
+   Agentlet。Session Reconciler 是 placement 动作的唯一 owner；Worker Pool 串行规划 Worker Pod
+   创建、回收与预热容量。两个控制环都可被其它组件即时通知，但通知只加速基于 DB 的收敛，不承载状态。
    Worker Pod Informer 同样只触发 Observer 从 cache 重算，不把事件对象当作额外状态源。
    Connector 只按 placement fence 转发 WorkSpec、wake、interrupt 和状态读取。公开 Event 由 agentd
    直接读写共享 Ledger。
