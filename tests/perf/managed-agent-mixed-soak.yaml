@@ -22,6 +22,7 @@ workload:
   pool_size: 10
   timeout_s: 180
   poll_interval_s: 0.5
+  send_reconcile_timeout_s: 5
   use_sandbox_tools: true
 
 caseset: ./cases/turn.yaml

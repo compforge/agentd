@@ -221,9 +221,10 @@ async def test_event_history_read_retries_without_failing_the_turn() -> None:
 @pytest.mark.asyncio
 async def test_lost_send_response_is_reconciled_without_replaying_the_post() -> None:
     send_count = 0
+    event_polls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal send_count
+        nonlocal event_polls, send_count
         if request.method == "POST" and request.url.path == "/v1/agents":
             return httpx.Response(200, json={"id": "agent-1"})
         if request.method == "POST" and request.url.path == "/v1/environments":
@@ -234,6 +235,9 @@ async def test_lost_send_response_is_reconciled_without_replaying_the_post() -> 
             send_count += 1
             raise httpx.ReadError("response was lost after commit", request=request)
         if request.method == "GET" and request.url.path.endswith("/events"):
+            event_polls += 1
+            if event_polls < 3:
+                return httpx.Response(200, json={"data": []})
             return httpx.Response(
                 200,
                 json={
@@ -267,6 +271,7 @@ async def test_lost_send_response_is_reconciled_without_replaying_the_post() -> 
 
     assert workload.judge(outcome).ok
     assert send_count == 1
+    assert event_polls == 3
     assert outcome.meta["send_reconciled"] is True
     assert outcome.metrics["send_reconciled"] == 1
     assert outcome.metrics["event_reconcile_ms"] >= 0
@@ -276,10 +281,11 @@ async def test_lost_send_response_is_reconciled_without_replaying_the_post() -> 
 @pytest.mark.asyncio
 async def test_unconfirmed_send_is_not_replayed_and_retires_the_session_slot() -> None:
     send_count = 0
+    event_polls = 0
     events: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal events, send_count
+        nonlocal event_polls, events, send_count
         if request.method == "POST" and request.url.path == "/v1/agents":
             return httpx.Response(200, json={"id": "agent-1"})
         if request.method == "POST" and request.url.path == "/v1/environments":
@@ -303,10 +309,16 @@ async def test_unconfirmed_send_is_not_replayed_and_retires_the_session_slot() -
                 return httpx.Response(200, json={"data": [{"type": "user.message"}]})
             raise httpx.ConnectError("connection failed", request=request)
         if request.method == "GET" and request.url.path.endswith("/events"):
+            event_polls += 1
             return httpx.Response(200, json={"data": events})
         return httpx.Response(404)
 
-    workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
+    workload = ManagedAgentWorkload(
+        pool_size=1,
+        timeout_s=1,
+        poll_interval_s=0.001,
+        send_reconcile_timeout_s=0.01,
+    )
     target = Target("http://agentd", headers={"x-api-key": "test"})
     ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -329,6 +341,7 @@ async def test_unconfirmed_send_is_not_replayed_and_retires_the_session_slot() -
     assert not workload.judge(outcome).ok
     assert workload.judge(outcome).error_kind == "ambiguous_send"
     assert send_count == 2
+    assert event_polls > 1
     assert workload._available.empty()
 
 
@@ -393,8 +406,16 @@ async def test_retrying_session_error_waits_for_the_final_turn_events() -> None:
 
 
 def test_build_workload_reads_profile() -> None:
-    workload = _build_workload({"model": "test-model", "pool_size": 3, "use_sandbox_tools": False})
+    workload = _build_workload(
+        {
+            "model": "test-model",
+            "pool_size": 3,
+            "send_reconcile_timeout_s": 7,
+            "use_sandbox_tools": False,
+        }
+    )
 
     assert workload.model == "test-model"
     assert workload.pool_size == 3
+    assert workload.send_reconcile_timeout_s == 7
     assert not workload.use_sandbox_tools
