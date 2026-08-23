@@ -76,16 +76,18 @@ class ManagedAgentWorkload(Workload):
         pool_size: int = 10,
         timeout_s: float = 180.0,
         poll_interval_s: float = 0.5,
+        send_reconcile_timeout_s: float = 5.0,
         use_sandbox_tools: bool = True,
     ) -> None:
         if pool_size < 1:
             raise ValueError("managed_agent pool_size must be >= 1")
-        if timeout_s <= 0 or poll_interval_s <= 0:
-            raise ValueError("managed_agent timeout and poll interval must be positive")
+        if timeout_s <= 0 or poll_interval_s <= 0 or send_reconcile_timeout_s <= 0:
+            raise ValueError("managed_agent timeouts and poll interval must be positive")
         self.model = model
         self.pool_size = pool_size
         self.timeout_s = timeout_s
         self.poll_interval_s = poll_interval_s
+        self.send_reconcile_timeout_s = send_reconcile_timeout_s
         self.use_sandbox_tools = use_sandbox_tools
         self._available: asyncio.Queue[SessionSlot] = asyncio.Queue()
 
@@ -218,21 +220,23 @@ class ManagedAgentWorkload(Workload):
             if send_failure is not None:
                 reconcile_started = time.monotonic()
                 try:
-                    history, history_bytes = await self._list_events(
+                    history, initial_events, history_bytes = await self._reconcile_send(
                         client,
                         events_url,
                         target.headers,
                         deadline,
                         transport,
-                        operation="reconcile_send",
+                        slot.user_messages,
                     )
+                except (httpx.TransportError, TimeoutError):
+                    meta["exc"] = "ambiguous_send"
+                    return finish(None)
                 finally:
                     transport.event_reconcile_ms = (time.monotonic() - reconcile_started) * 1000
                 nbytes += history_bytes
                 if not history.is_success:
                     meta["body"] = history.text[:512]
                     return finish(history.status_code)
-                initial_events = self._event_data(history)
                 user_messages = self._count(initial_events, "user.message")
                 if user_messages <= slot.user_messages:
                     meta["exc"] = "ambiguous_send"
@@ -394,6 +398,40 @@ class ManagedAgentWorkload(Workload):
             ),
         ]
 
+    async def _reconcile_send(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        turn_deadline: float,
+        transport: TransportStats,
+        known_user_messages: int,
+    ) -> tuple[httpx.Response, list[dict], int]:
+        deadline = min(turn_deadline, time.monotonic() + self.send_reconcile_timeout_s)
+        nbytes = 0
+        # A successful history read can race publication of an already accepted Event.
+        # Poll for bounded visibility without replaying the ambiguous POST.
+        while True:
+            response, history_bytes = await self._list_events(
+                client,
+                url,
+                headers,
+                deadline,
+                transport,
+                operation="reconcile_send",
+            )
+            nbytes += history_bytes
+            events = self._event_data(response) if response.is_success else []
+            if not response.is_success or self._count(events, "user.message") > known_user_messages:
+                return response, events, nbytes
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return response, events, nbytes
+            await asyncio.sleep(min(self.poll_interval_s, remaining))
+            if time.monotonic() >= deadline:
+                return response, events, nbytes
+
     async def _list_events(
         self,
         client: httpx.AsyncClient,
@@ -501,6 +539,7 @@ def _build_workload(config: dict) -> ManagedAgentWorkload:
         pool_size=int(config.get("pool_size", 10)),
         timeout_s=float(config.get("timeout_s", 180.0)),
         poll_interval_s=float(config.get("poll_interval_s", 0.5)),
+        send_reconcile_timeout_s=float(config.get("send_reconcile_timeout_s", 5.0)),
         use_sandbox_tools=bool(config.get("use_sandbox_tools", True)),
     )
 
