@@ -169,6 +169,15 @@ func (a *Service) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	return a.repository.ListAgents(ctx)
 }
 
+func (a *Service) PageAgents(
+	ctx context.Context,
+	page PageQuery,
+	includeArchived bool,
+) (Page[model.Agent], error) {
+	result, err := a.repository.ListAgentsPage(ctx, repositoryPageQuery(page), includeArchived)
+	return servicePage(result), err
+}
+
 func (a *Service) GetAgentVersion(ctx context.Context, versionID string) (model.Agent, error) {
 	return a.repository.GetAgentVersion(ctx, versionID)
 }
@@ -182,6 +191,15 @@ func (a *Service) FindAgentVersion(ctx context.Context, agentID string, version 
 
 func (a *Service) ListAgentVersions(ctx context.Context, agentID string) ([]model.Agent, error) {
 	return a.repository.ListAgentVersions(ctx, agentID)
+}
+
+func (a *Service) PageAgentVersions(
+	ctx context.Context,
+	agentID string,
+	page PageQuery,
+) (Page[model.Agent], error) {
+	result, err := a.repository.ListAgentVersionsPage(ctx, agentID, repositoryPageQuery(page))
+	return servicePage(result), err
 }
 
 func cloneAgent(value model.Agent) model.Agent {

@@ -21,17 +21,8 @@ import (
 // +case:id=session_initial_events,desc=`create a Session with an initial user.message`,expect=`the Event is durable before the create response and wakes normal reconciliation`,forbid=`a second ingress implementation or an acknowledged but unpersisted Event`,group=system
 // +link=agentd/docs/kernel.md
 func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		Agent         json.RawMessage   `json:"agent"`
-		EnvironmentID string            `json:"environment_id"`
-		Title         string            `json:"title"`
-		Metadata      map[string]string `json:"metadata"`
-		InitialEvents []json.RawMessage `json:"initial_events"`
-		Budget        json.RawMessage   `json:"budget"`
-		Resources     []json.RawMessage `json:"resources"`
-		VaultIDs      []string          `json:"vault_ids"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.CreateSessionRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	if present(input.Budget) || len(input.Resources) > 0 || len(input.VaultIDs) > 0 {
@@ -74,11 +65,15 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, response)
+	request.JSON(consts.StatusOK, response)
 }
 
 func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.service.GetSession(ctx, request.Param("session_id"))
+	var input view.SessionPathRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	value, err := s.service.GetSession(ctx, input.SessionID)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -93,21 +88,36 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, response)
+	request.JSON(consts.StatusOK, response)
 }
 
 func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.service.ListSessions(ctx)
+	var input view.ListSessionsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	data := make([]map[string]any, 0, len(values))
-	includeArchived := string(request.QueryArgs().Peek("include_archived")) == "true"
-	for _, value := range values {
-		if value.ArchivedAt != nil && !includeArchived {
-			continue
-		}
+	switch input.Order {
+	case "", "desc":
+		query.Descending = true
+	case "asc":
+	default:
+		s.writeError(request, fmt.Errorf(
+			"%w: order must be asc or desc", service.ErrInvalid,
+		))
+		return
+	}
+	page, err := s.service.PageSessions(ctx, query, input.IncludeArchived)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	data := make([]view.SessionResponse, 0, len(page.Items))
+	for _, value := range page.Items {
 		agent, err := s.service.GetAgentVersion(ctx, value.AgentVersionID)
 		if err != nil {
 			s.writeError(request, err)
@@ -120,22 +130,21 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 		}
 		data = append(data, response)
 	}
-	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil, "prev_page": nil})
+	next, previous := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.BidirectionalPage[view.SessionResponse]{
+		Data: data, NextPage: next, PrevPage: previous,
+	})
 }
 
 func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		Title    json.RawMessage `json:"title"`
-		Metadata json.RawMessage `json:"metadata"`
-		Agent    json.RawMessage `json:"agent"`
-		Budget   json.RawMessage `json:"budget"`
-		VaultIDs []string        `json:"vault_ids"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.UpdateSessionRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	if present(input.Agent) || present(input.Budget) || len(input.VaultIDs) > 0 {
-		s.writeError(request, fmt.Errorf("%w: Session agent overrides, budgets, or vaults", service.ErrUnsupported))
+		s.writeError(request, fmt.Errorf(
+			"%w: Session agent overrides, budgets, or vaults", service.ErrUnsupported,
+		))
 		return
 	}
 	title, err := parseSessionTitle(input.Title)
@@ -148,7 +157,7 @@ func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	updated, err := s.service.UpdateSession(ctx, request.Param("session_id"), service.SessionUpdate{
+	updated, err := s.service.UpdateSession(ctx, input.SessionID, service.SessionUpdate{
 		Title: title, Metadata: metadata,
 	})
 	if err != nil {
@@ -165,13 +174,17 @@ func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, response)
+	request.JSON(consts.StatusOK, response)
 }
 
 // +case:id=session_archive_preserves_history,desc=`archive an idle Session after it has executed Events`,expect=`terminated Session remains readable with its Event history`,forbid=`accepting new ingress or deleting Ledger history`,group=system
 // +link=agentd/docs/kernel.md
 func (s *Server) archiveSession(ctx context.Context, request *hertzapp.RequestContext) {
-	archived, err := s.service.ArchiveSession(ctx, request.Param("session_id"))
+	var input view.SessionPathRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	archived, err := s.service.ArchiveSession(ctx, input.SessionID)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -188,7 +201,7 @@ func (s *Server) archiveSession(ctx context.Context, request *hertzapp.RequestCo
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, response)
+	request.JSON(consts.StatusOK, response)
 }
 
 func decodeInitialEvents(rawEvents []json.RawMessage) ([]view.IngressEvent, error) {
@@ -258,39 +271,21 @@ func parseAgentReference(raw json.RawMessage) (string, int64, error) {
 	return id, int64(version), nil
 }
 
-func (s *Server) sessionResponse(ctx context.Context, value model.Session, agent model.Agent) (map[string]any, error) {
+func (s *Server) sessionResponse(ctx context.Context, value model.Session, agent model.Agent) (view.SessionResponse, error) {
 	usage, err := s.events.SessionUsage(ctx, value.ID)
 	if err != nil {
-		return nil, err
+		return view.SessionResponse{}, err
 	}
-	agentValue := agentResponse(agent)
-	delete(agentValue, "metadata")
-	delete(agentValue, "created_at")
-	delete(agentValue, "updated_at")
-	delete(agentValue, "archived_at")
 	durationEnd := time.Now()
 	if value.Status == "terminated" {
 		durationEnd = value.UpdatedAt
 	}
 	durationSeconds := max(durationEnd.Sub(value.CreatedAt).Seconds(), 0)
-	response := map[string]any{
-		"id": value.ID, "type": "session", "agent": agentValue, "environment_id": value.EnvironmentID,
-		"title": value.Title, "metadata": value.Metadata, "status": value.Status,
-		"created_at": value.CreatedAt, "updated_at": value.UpdatedAt, "archived_at": value.ArchivedAt,
-		"budget": nil, "outcome_evaluations": []any{}, "resources": []any{}, "vault_ids": []any{},
-		"deployment_id": nil,
-		"stats":         map[string]any{"active_seconds": 0, "duration_seconds": durationSeconds},
-		"usage": map[string]any{
-			"active_seconds": 0,
-			// Ledger currently records cache creation as one combined value. The public
-			// contract splits it by TTL, so do not invent a 5m/1h attribution here.
-			"cache_creation": map[string]any{
-				"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0,
-			},
-			"cache_read_input_tokens": usage.CacheReadInputTokens,
-			"input_tokens":            usage.InputTokens, "list_cost": nil,
-			"output_tokens": usage.OutputTokens, "server_tool_use": nil,
-		},
-	}
-	return response, nil
+	return view.NewSessionResponse(value, agent, durationSeconds, view.SessionUsageResponse{
+		// Ledger currently records cache creation as one combined value. The public
+		// contract splits it by TTL, so do not invent a 5m/1h attribution here.
+		CacheCreation:        view.CacheCreationResponse{},
+		CacheReadInputTokens: usage.CacheReadInputTokens,
+		InputTokens:          usage.InputTokens, OutputTokens: usage.OutputTokens,
+	}), nil
 }

@@ -19,7 +19,7 @@ import (
 
 func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContext) {
 	var input view.SendEventsRequest
-	if !decodeBody(request, &input) {
+	if !bindRequest(request, &input) {
 		return
 	}
 	ingress, err := decodeIngressEvents(input.Events)
@@ -28,18 +28,22 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		return
 	}
 
-	sessionID := request.Param("session_id")
+	sessionID := input.SessionID
 	session, err := s.service.GetSession(ctx, sessionID)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
 	if session.ArchivedAt != nil {
-		s.writeError(request, fmt.Errorf("%w: Session %q is archived", service.ErrConflict, sessionID))
+		s.writeError(request, fmt.Errorf(
+			"%w: Session %q is archived", service.ErrConflict, sessionID,
+		))
 		return
 	}
 	if session.Status == model.SessionStatusTerminated {
-		s.writeError(request, fmt.Errorf("%w: Session %q is terminated", service.ErrConflict, sessionID))
+		s.writeError(request, fmt.Errorf(
+			"%w: Session %q is terminated", service.ErrConflict, sessionID,
+		))
 		return
 	}
 
@@ -65,7 +69,9 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 			return
 		}
 		if environment.Config["type"] != "self_hosted" {
-			s.writeError(request, fmt.Errorf("%w: user.tool_result requires a self_hosted Environment", service.ErrUnsupported))
+			s.writeError(request, fmt.Errorf(
+				"%w: user.tool_result requires a self_hosted Environment", service.ErrUnsupported,
+			))
 			return
 		}
 	}
@@ -84,7 +90,7 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	if flags.hasInterrupt {
 		execution, err := s.service.CurrentExecution(ctx, sessionID)
 		if errors.Is(err, service.ErrNoAssignment) {
-			writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+			request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
 			return
 		}
 		if err != nil {
@@ -93,15 +99,19 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		}
 		target := connector.Target{Endpoint: execution.Endpoint, Work: execution.Work}
 		if err := s.connector.Ensure(ctx, target); err != nil {
-			s.writeError(request, fmt.Errorf("%w: prepare Agentlet interrupt: %v", service.ErrUnavailable, err))
+			s.writeError(request, fmt.Errorf(
+				"%w: prepare Agentlet interrupt: %v", service.ErrUnavailable, err,
+			))
 			return
 		}
 		if err := s.connector.Interrupt(ctx, target); err != nil {
-			s.writeError(request, fmt.Errorf("%w: interrupt Agentlet Session: %v", service.ErrUnavailable, err))
+			s.writeError(request, fmt.Errorf(
+				"%w: interrupt Agentlet Session: %v", service.ErrUnavailable, err,
+			))
 			return
 		}
 	}
-	writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
 }
 
 type ingressFlags struct {
@@ -186,7 +196,16 @@ func validateIngressSequence(ingress []view.IngressEvent, blockingIDs map[string
 }
 
 func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	sessionID := request.Param("session_id")
+	var input view.ListEventsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	sessionID := input.SessionID
 	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
 		s.writeError(request, err)
 		return
@@ -196,15 +215,23 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: events})
+	page := slicePage(events, query)
+	next, _ := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{
+		Data: page.Items, NextPage: next,
+	})
 }
 
 func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
-	if len(request.QueryArgs().PeekAll("event_deltas[]")) > 0 || len(request.QueryArgs().PeekAll("event_deltas")) > 0 {
+	var input view.StreamEventsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	if len(input.EventDeltas) > 0 || len(input.LegacyEventDelta) > 0 {
 		s.writeError(request, fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported))
 		return
 	}
-	sessionID := request.Param("session_id")
+	sessionID := input.SessionID
 	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
 		s.writeError(request, err)
 		return

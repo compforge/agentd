@@ -16,6 +16,48 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func TestPageSessionsFiltersBeforeApplyingCursor(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Hour)
+	for index := 1; index <= 3; index++ {
+		createdAt := base.Add(time.Duration(index) * time.Minute)
+		session := model.Session{
+			ID: fmt.Sprintf("session-%d", index), Status: model.SessionStatusIdle,
+			Metadata: map[string]string{}, CreatedAt: createdAt, UpdatedAt: createdAt,
+		}
+		if index == 3 {
+			session.Status = model.SessionStatusTerminated
+			session.ArchivedAt = &createdAt
+		}
+		if err := repository.PutSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := application.PageSessions(ctx, service.PageQuery{Limit: 1, Descending: true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != "session-2" || !first.HasMore {
+		t.Fatalf("first active page = %#v", first)
+	}
+	second, err := application.PageSessions(ctx, service.PageQuery{Offset: 1, Limit: 1, Descending: true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != "session-1" || second.HasMore {
+		t.Fatalf("second active page = %#v", second)
+	}
+	withArchived, err := application.PageSessions(ctx, service.PageQuery{Limit: 1, Descending: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withArchived.Items) != 1 || withArchived.Items[0].ID != "session-3" {
+		t.Fatalf("page including archived = %#v", withArchived)
+	}
+}
+
 func TestReconcilePlacementBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()

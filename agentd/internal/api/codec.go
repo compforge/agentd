@@ -1,13 +1,13 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	"github.com/compforge/agentd/agentd/internal/service"
 )
@@ -30,27 +30,19 @@ func (s *Server) writeError(request *hertzapp.RequestContext, err error) {
 		status, errorType = consts.StatusBadRequest, "invalid_request_error"
 	}
 	request.Set(requestErrorContextKey, err)
-	writeJSON(request, status, map[string]any{
-		"type": "error", "error": map[string]any{"type": errorType, "message": err.Error()},
+	request.JSON(status, view.ErrorResponse{
+		Type: "error", Error: view.Error{Type: errorType, Message: err.Error()},
 	})
 }
 
-func decodeBody(request *hertzapp.RequestContext, target any) bool {
-	body, err := request.Body()
-	if err == nil {
-		err = json.NewDecoder(bytes.NewReader(body)).Decode(target)
-	}
-	if err != nil {
-		writeJSON(request, consts.StatusBadRequest, map[string]any{
-			"type": "error", "error": map[string]any{"type": "invalid_request_error", "message": err.Error()},
+func bindRequest(request *hertzapp.RequestContext, target any) bool {
+	if err := request.BindAndValidate(target); err != nil {
+		request.JSON(consts.StatusBadRequest, view.ErrorResponse{
+			Type: "error", Error: view.Error{Type: "invalid_request_error", Message: err.Error()},
 		})
 		return false
 	}
 	return true
-}
-
-func writeJSON(request *hertzapp.RequestContext, status int, value any) {
-	request.JSON(status, value)
 }
 
 func present(raw json.RawMessage) bool {

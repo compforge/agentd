@@ -156,3 +156,12 @@ func (a *Service) ArchiveSession(ctx context.Context, sessionID string) (model.S
 func (a *Service) ListSessions(ctx context.Context) ([]model.Session, error) {
 	return a.repository.ListSessions(ctx)
 }
+
+func (a *Service) PageSessions(
+	ctx context.Context,
+	page PageQuery,
+	includeArchived bool,
+) (Page[model.Session], error) {
+	result, err := a.repository.ListSessionsPage(ctx, repositoryPageQuery(page), includeArchived)
+	return servicePage(result), err
+}

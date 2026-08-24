@@ -160,6 +160,22 @@ func (r *GORMRepository) ListModels(ctx context.Context) ([]model.Model, error) 
 	return values, nil
 }
 
+func (r *GORMRepository) ListModelsPage(ctx context.Context, page repo.PageQuery) (repo.Page[model.Model], error) {
+	var rows []modelRow
+	if err := pageQuery(r.db.WithContext(ctx).Order("created_at, id"), page).Find(&rows).Error; err != nil {
+		return repo.Page[model.Model]{}, fmt.Errorf("list models page: %w", err)
+	}
+	values := make([]model.Model, 0, len(rows))
+	for _, row := range rows {
+		values = append(values, model.Model{
+			ID: row.ID, Provider: row.Provider, UpstreamID: row.UpstreamID,
+			BaseURL: row.BaseURL, APIKey: row.APIKey,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return repo.NewPage(values, page.Limit), nil
+}
+
 func (r *GORMRepository) PutAgent(ctx context.Context, agent model.Agent) error {
 	row := agentRow{
 		ID: agent.ID, CurrentVersionID: agent.VersionID, ArchivedAt: agent.ArchivedAt,
@@ -254,6 +270,30 @@ func (r *GORMRepository) ListAgents(ctx context.Context) ([]model.Agent, error) 
 	return values, nil
 }
 
+func (r *GORMRepository) ListAgentsPage(
+	ctx context.Context,
+	page repo.PageQuery,
+	includeArchived bool,
+) (repo.Page[model.Agent], error) {
+	var rows []agentRow
+	query := r.db.WithContext(ctx).Order("created_at, id")
+	if !includeArchived {
+		query = query.Where("archived_at IS NULL")
+	}
+	if err := pageQuery(query, page).Find(&rows).Error; err != nil {
+		return repo.Page[model.Agent]{}, fmt.Errorf("list agents page: %w", err)
+	}
+	values := make([]model.Agent, 0, len(rows))
+	for _, row := range rows {
+		value, err := r.agentFromVersion(r.db.WithContext(ctx), row, row.CurrentVersionID)
+		if err != nil {
+			return repo.Page[model.Agent]{}, err
+		}
+		values = append(values, value)
+	}
+	return repo.NewPage(values, page.Limit), nil
+}
+
 func (r *GORMRepository) ListAgentVersions(ctx context.Context, agentID string) ([]model.Agent, error) {
 	var agent agentRow
 	if err := r.db.WithContext(ctx).Where("id = ?", agentID).First(&agent).Error; err != nil {
@@ -276,6 +316,34 @@ func (r *GORMRepository) ListAgentVersions(ctx context.Context, agentID string) 
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (r *GORMRepository) ListAgentVersionsPage(
+	ctx context.Context,
+	agentID string,
+	page repo.PageQuery,
+) (repo.Page[model.Agent], error) {
+	var agent agentRow
+	if err := r.db.WithContext(ctx).Where("id = ?", agentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return repo.Page[model.Agent]{}, repo.ErrNotFound
+		}
+		return repo.Page[model.Agent]{}, fmt.Errorf("get agent %q: %w", agentID, err)
+	}
+	var rows []agentVersionRow
+	query := r.db.WithContext(ctx).Where("agent_id = ?", agentID).Order("version DESC")
+	if err := pageQuery(query, page).Find(&rows).Error; err != nil {
+		return repo.Page[model.Agent]{}, fmt.Errorf("list agent %q versions page: %w", agentID, err)
+	}
+	values := make([]model.Agent, 0, len(rows))
+	for _, row := range rows {
+		value, err := resolveAgentVersion(agent, row)
+		if err != nil {
+			return repo.Page[model.Agent]{}, err
+		}
+		values = append(values, value)
+	}
+	return repo.NewPage(values, page.Limit), nil
 }
 
 func (r *GORMRepository) agentFromVersion(query *gormio.DB, agent agentRow, versionID string) (model.Agent, error) {
@@ -333,6 +401,25 @@ func (r *GORMRepository) ListEnvironments(ctx context.Context) ([]model.Environm
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (r *GORMRepository) ListEnvironmentsPage(
+	ctx context.Context,
+	page repo.PageQuery,
+) (repo.Page[model.Environment], error) {
+	var rows []environmentRow
+	if err := pageQuery(r.db.WithContext(ctx).Order("created_at, id"), page).Find(&rows).Error; err != nil {
+		return repo.Page[model.Environment]{}, fmt.Errorf("list environments page: %w", err)
+	}
+	values := make([]model.Environment, 0, len(rows))
+	for _, row := range rows {
+		value, err := row.environment()
+		if err != nil {
+			return repo.Page[model.Environment]{}, err
+		}
+		values = append(values, value)
+	}
+	return repo.NewPage(values, page.Limit), nil
 }
 
 func (r *GORMRepository) Transaction(ctx context.Context, operation func(repo.Repository) error) error {
@@ -424,6 +511,41 @@ func (r *GORMRepository) ListSessions(ctx context.Context) ([]model.Session, err
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (r *GORMRepository) ListSessionsPage(
+	ctx context.Context,
+	page repo.PageQuery,
+	includeArchived bool,
+) (repo.Page[model.Session], error) {
+	var rows []sessionRow
+	query := r.db.WithContext(ctx)
+	if !includeArchived {
+		query = query.Where("archived_at IS NULL")
+	}
+	if err := pageQuery(query.Order(pageOrder(page)), page).Find(&rows).Error; err != nil {
+		return repo.Page[model.Session]{}, fmt.Errorf("list sessions page: %w", err)
+	}
+	values := make([]model.Session, 0, len(rows))
+	for _, row := range rows {
+		value, err := row.session()
+		if err != nil {
+			return repo.Page[model.Session]{}, err
+		}
+		values = append(values, value)
+	}
+	return repo.NewPage(values, page.Limit), nil
+}
+
+func pageQuery(query *gormio.DB, page repo.PageQuery) *gormio.DB {
+	return query.Offset(page.Offset).Limit(page.Limit + 1)
+}
+
+func pageOrder(page repo.PageQuery) string {
+	if page.Descending {
+		return "created_at DESC, id DESC"
+	}
+	return "created_at, id"
 }
 
 func (r *GORMRepository) getSession(query *gormio.DB, sessionID string) (model.Session, error) {

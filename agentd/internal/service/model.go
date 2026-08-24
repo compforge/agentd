@@ -42,3 +42,8 @@ func (a *Service) GetModel(ctx context.Context, id string) (model.Model, error) 
 func (a *Service) ListModels(ctx context.Context) ([]model.Model, error) {
 	return a.repository.ListModels(ctx)
 }
+
+func (a *Service) PageModels(ctx context.Context, page PageQuery) (Page[model.Model], error) {
+	result, err := a.repository.ListModelsPage(ctx, repositoryPageQuery(page))
+	return servicePage(result), err
+}
