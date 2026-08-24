@@ -13,6 +13,7 @@ const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccou
 
 type config struct {
 	address                      string
+	apiKey                       string
 	mysqlDSN                     string
 	sqlitePath                   string
 	maxOpenConns                 int
@@ -67,6 +68,7 @@ func loadConfig() (config, error) {
 	}
 	value := config{
 		address:                      envOr("AGENTD_CONTROL_ADDRESS", "0.0.0.0:8020"),
+		apiKey:                       os.Getenv("AGENTD_API_KEY"),
 		mysqlDSN:                     os.Getenv("AGENTD_MYSQL_DSN"),
 		sqlitePath:                   envOr("AGENTD_SQLITE_PATH", "agentd.db"),
 		maxOpenConns:                 32,
@@ -114,6 +116,9 @@ func loadConfig() (config, error) {
 	}
 	if value.workerNamespace == "" {
 		value.workerNamespace = "default"
+	}
+	if strings.TrimSpace(value.apiKey) == "" {
+		return config{}, errors.New("AGENTD_API_KEY is required")
 	}
 	var err error
 	if value.maxOpenConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_OPEN_CONNS", value.maxOpenConns); err != nil {

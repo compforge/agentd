@@ -36,6 +36,11 @@ spec:
           env:
             - name: AGENTD_WORKER_CAPACITY
               value: {{ .Values.worker.capacity | quote }}
+            - name: AGENTD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentd.authSecretName" . }}
+                  key: {{ required "auth.existingSecretKey is required" .Values.auth.existingSecretKey }}
             - name: AGENTD_MYSQL_DSN
               valueFrom:
                 secretKeyRef:

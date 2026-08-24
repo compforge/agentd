@@ -13,113 +13,104 @@ import (
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
-func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.CreateEnvironmentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if input.Scope != "" && input.Scope != "account" {
-		s.writeError(request, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: environment scope %q", service.ErrUnsupported, input.Scope,
-		))
-		return
+		)
 	}
 	if err := validateEnvironmentConfig(input.Config); err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	created, err := s.service.CreateEnvironment(ctx, model.Environment{
 		Name: input.Name, Description: input.Description, Config: input.Config, Metadata: input.Metadata,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(created))
+	return nil
 }
 
 // +case:id=environment_lifecycle,desc=`update and archive an Environment used by an existing Session`,expect=`updates are visible, archive blocks new Sessions, and the existing Session remains readable`,forbid=`silently accepting unsupported scope or deleting the Environment`,group=system
 // +link=agentd/docs/kernel.md
-func (s *Server) updateEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) updateEnvironment(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.UpdateEnvironmentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	name, err := parseEnvironmentString(input.Name, false, "name")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	description, err := parseEnvironmentString(input.Description, true, "description")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	config, err := parseEnvironmentConfig(input.Config)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	if err := validateEnvironmentScope(input.Scope); err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	metadata, err := parseEnvironmentMetadataPatch(input.Metadata)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	updated, err := s.service.UpdateEnvironment(ctx, input.EnvironmentID, service.EnvironmentUpdate{
 		Name: name, Description: description, Config: config, Metadata: metadata,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(updated))
+	return nil
 }
 
-func (s *Server) archiveEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) archiveEnvironment(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.EnvironmentPathRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	archived, err := s.service.ArchiveEnvironment(ctx, input.EnvironmentID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "archived Environment", "environment_id", archived.ID)
 	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(archived))
+	return nil
 }
 
-func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.GetEnvironmentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	value, err := s.service.GetEnvironment(ctx, input.EnvironmentID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(value))
+	return nil
 }
 
-func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListEnvironmentsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	query, err := parsePage(input.PageRequest, environmentCursor, false)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	page, err := s.service.PageEnvironments(ctx, query, input.IncludeArchived)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	data := make([]view.EnvironmentResponse, 0, len(page.Items))
 	for _, value := range page.Items {
@@ -133,6 +124,7 @@ func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.Request
 	}
 	next, _ := pageLinks(environmentCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.EnvironmentResponse]{Data: data, NextPage: next})
+	return nil
 }
 
 func parseEnvironmentString(raw json.RawMessage, clearable bool, field string) (*string, error) {

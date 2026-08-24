@@ -13,35 +13,33 @@ import (
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
-func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.CreateAgentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
-		s.writeError(request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported))
-		return
+		return fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported)
 	}
 	modelID, err := parseModel(input.Model)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	created, err := s.service.CreateAgent(ctx, model.Agent{
 		Name: input.Name, Description: input.Description, ModelID: modelID, System: input.System,
 		Tools: input.Tools, Metadata: input.Metadata,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewAgentResponse(created))
+	return nil
 }
 
-func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.GetAgentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	var value model.Agent
 	var err error
@@ -51,93 +49,84 @@ func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext)
 		value, err = s.service.GetAgent(ctx, input.AgentID)
 	}
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewAgentResponse(value))
+	return nil
 }
 
-func (s *Server) updateAgent(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) updateAgent(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.UpdateAgentRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
-		s.writeError(request, fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported))
-		return
+		return fmt.Errorf("%w: MCP, skills, and multi-agent agents", service.ErrUnsupported)
 	}
 	name, err := parseOptionalString(input.Name, false, "name")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	description, err := parseOptionalString(input.Description, true, "description")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	system, err := parseOptionalString(input.System, true, "system")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	var modelID *string
 	if len(input.Model) > 0 {
 		value, parseErr := parseModel(input.Model)
 		if parseErr != nil {
-			s.writeError(request, parseErr)
-			return
+			return parseErr
 		}
 		modelID = &value
 	}
 	tools, err := parseOptionalTools(input.Tools)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	metadata, err := parseMetadataPatch(input.Metadata)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	updated, err := s.service.UpdateAgent(ctx, input.AgentID, service.AgentUpdate{
 		Version: input.Version, Name: name, Description: description, ModelID: modelID,
 		System: system, Tools: tools, Metadata: metadata,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewAgentResponse(updated))
+	return nil
 }
 
-func (s *Server) archiveAgent(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) archiveAgent(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.AgentPathRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	archived, err := s.service.ArchiveAgent(ctx, input.AgentID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewAgentResponse(archived))
+	return nil
 }
 
-func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListAgentVersionsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	query, err := parsePage(input.PageRequest, agentVersionCursor, true)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	page, err := s.service.PageAgentVersions(ctx, input.AgentID, query)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	data := make([]view.AgentResponse, 0, len(page.Items))
 	for _, value := range page.Items {
@@ -150,22 +139,21 @@ func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.Reques
 	}
 	next, _ := pageLinks(agentVersionCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
+	return nil
 }
 
-func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListAgentsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	query, err := parsePage(input.PageRequest, agentCursor, false)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	page, err := s.service.PageAgents(ctx, query, input.IncludeArchived)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	data := make([]view.AgentResponse, 0, len(page.Items))
 	for _, value := range page.Items {
@@ -179,6 +167,7 @@ func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContex
 	}
 	next, _ := pageLinks(agentCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
+	return nil
 }
 
 func parseModel(raw json.RawMessage) (string, error) {

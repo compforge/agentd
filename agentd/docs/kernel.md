@@ -165,6 +165,10 @@ agentd 保持 Claude Managed Agents 的 Agent、Environment、Session 和 Event 
 客户端失败与低噪声请求日志关联起来。Agentlet 的 `/internal/v1` 只服务 agentd，不属于公开兼容面；
 调用方只依赖 agentd API。
 
+公开 `/v1` API 由部署级 `x-api-key` 保护，只有 `/healthz` 保持匿名以服务基础设施探针。该 key 只回答
+“调用方是否被允许访问这个 Control Plane”，不进入资源模型，也不被解释为 tenant、account 或资源级
+授权；多租户隔离需要独立的身份与授权设计，不能从一个共享 key 推导。
+
 当 Harness 在不明确的 Tool 副作用处 fail-closed 时，兼容层使用官方 Event 握手而不增加私有恢复
 接口：Agentlet 输出 `agent.tool_use` 和 `session.status_idle(requires_action)`；用户发送
 `user.tool_confirmation(allow|deny)`，或在 self-hosted 执行形态发送 `user.tool_result`。这些 Event

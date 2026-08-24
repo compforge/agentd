@@ -21,6 +21,13 @@ service:
   type: ClusterIP
   port: 8020
 
+auth:
+  # Quick Start may set apiKey directly. Production should reference an
+  # existing Secret so the credential is not stored in Helm values.
+  apiKey: ""
+  existingSecret: ""
+  existingSecretKey: api-key
+
 database:
   # Set an external DSN to skip the built-in MySQL workload.
   dsn: ""

@@ -4,8 +4,21 @@ schema_version: 1
 facets:
   boundary: {values: [control-plane, system]}
   recovery: {values: [checkpoint, worker-replacement]}
-  security: {values: [credential]}
+  security: {values: [authentication, credential]}
 cases:
+  - id: api_key_authentication
+    desc: Public APIs reject missing and invalid keys while accepting the configured deployment key.
+    input: {operation: get-models-with-missing-wrong-and-correct-api-key}
+    facets: {boundary: control-plane, security: authentication}
+    judge:
+      e2e:
+        assert:
+          - {path: missing_status, op: eq, value: 401}
+          - {path: wrong_status, op: eq, value: 401}
+          - {path: correct_status, op: eq, value: 200}
+    binding:
+      symbol_id: agentd/internal/api/auth.go::Server.authenticate
+      spec: Every public API requires the configured x-api-key while health remains anonymous.
   - id: model_secret_redaction
     desc: Model credentials remain write-only across create, get, and list.
     input: {operation: register-get-list-model}

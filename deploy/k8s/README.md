@@ -149,8 +149,10 @@ Ledger。内置 MySQL 用于最小部署和开发体验，不提供高可用；�
 外部 DSN，因为 Kubernetes 下彼此隔离的本地 SQLite 无法满足共享 Ledger 契约。
 
 ```bash
+AGENTD_API_KEY=$(openssl rand -hex 32)
 helm upgrade --install agentd deploy/k8s/agentd \
-  --namespace agentd --create-namespace
+  --namespace agentd --create-namespace \
+  --set-string auth.apiKey="$AGENTD_API_KEY"
 ```
 
 使用外部 MySQL 时在自定义 values 中配置一个共享 DSN：
@@ -165,6 +167,11 @@ helm upgrade --install agentd deploy/k8s/agentd \
 
 ```yaml
 replicaCount: 1
+
+auth:
+  apiKey: "" # Quick Start 直接设置；生产环境使用 existingSecret
+  existingSecret: ""
+  existingSecretKey: api-key
 
 database:
   dsn: "" # 非空时使用外部 MySQL，并跳过内置 MySQL
@@ -204,6 +211,10 @@ agentd:
 
 `AGENTD_WORKER_MIN_COUNT` 当前默认且最小为 `1`，用于保留一个预热执行节点；Event 读取不依赖它。
 `AGENTD_WORKER_MIN_IDLE` 默认 `0`，只在需要额外预热空闲容量时覆盖。
+
+agentd 启动时要求 `AGENTD_API_KEY`，所有公开 `/v1` 请求通过 `x-api-key` 认证。Quick Start 可以通过
+`auth.apiKey` 让 Chart 创建 Secret；生产环境应预先创建 Secret，并通过 `auth.existingSecret` 和
+`auth.existingSecretKey` 引用，避免把 key 保存到 Helm values。
 
 Chart 把 Worker PodTemplate 挂载到 agentd，由 Provisioner materialize 为独立 Worker Pod；Helm
 本身不创建或回收 Worker。顶层 `imagePullSecrets` 同时下发给 agentd Deployment 和动态创建的

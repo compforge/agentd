@@ -5,6 +5,8 @@ observe controlled deployment faults through case-harness Kubernetes primitives;
 still uses the public Managed Agents API. Its canonical CaseSet is
 [`cases/managed-agent.yaml`](cases/managed-agent.yaml):
 
+- `api_key_authentication` calls a public endpoint without a key, with an invalid key, and with the
+  configured deployment key, proving the Control Plane authentication boundary.
 - `model_secret_redaction` registers and reads a Model through create, get, and list, proving that
   credentials remain write-only.
 - `sandbox_resume` creates an Agent, cloud Environment, and Session, then executes two turns that
@@ -37,7 +39,7 @@ go test -tags=e2e -v ./tests/e2e
 | Variable | Required | Default | Meaning |
 |---|---:|---|---|
 | `AGENTD_E2E_BASE_URL` | yes to execute | — | Public agentd endpoint, without `/v1` |
-| `AGENTD_E2E_API_KEY` | no | `test` | Client API key; agentd currently does not authenticate it |
+| `AGENTD_E2E_API_KEY` | no | `test` | Client API key; must match the target agentd `AGENTD_API_KEY` |
 | `AGENTD_E2E_MODEL` | no | `claude-sonnet-4-6` | Model configured on the created Agent |
 | `AGENTD_E2E_MODEL_PROVIDER` | no | `anthropic` | AgentGo model provider registered through `/v1/models` |
 | `AGENTD_E2E_MODEL_BASE_URL` | no | provider default | Optional external model endpoint |

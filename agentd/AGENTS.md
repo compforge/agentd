@@ -32,7 +32,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   └── perf/                   # CaseSet、负载 profile、SLO 与系统观测
 ├── agentd/                    # Worker 观测、Session placement 与调度
 │   ├── internal/
-│   │   ├── api/               # Control Plane HTTP 适配
+│   │   ├── api/               # Control Plane HTTP 适配；middleware/ 承载 Hertz 中间件
 │   │   ├── model/             # Worker 与内嵌 placement 的 Session 领域模型
 │   │   ├── repo/              # Repository 契约及 GORM 实现、表映射与 resource lock
 │   │   ├── service/           # 跨 Session/Worker 的控制面事务与状态投影
@@ -93,6 +93,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
    正在执行的 Session。
 8. Model 是 agentd 独有的外部模型连接注册资源。Agentlet 不提供 Model API、不查询 Model 表；agentd
    在安装 WorkSpec 时下发已解析连接。API key 不进入公开读响应、Event、Ledger 或日志。
+9. agentd 的公开 `/v1` API 使用部署级 `x-api-key` 认证，`/healthz` 是唯一匿名入口。这个 key 只建立
+   Control Plane 信任边界，不表达 tenant、account 或资源级授权。
 
 ## References
 

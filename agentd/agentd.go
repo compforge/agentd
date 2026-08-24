@@ -123,6 +123,7 @@ func Run(logger *slog.Logger) error {
 	api.New(
 		controlService, events, agentletConnector, sessionReconciler, logger,
 		api.WithEventPollInterval(config.eventPollInterval),
+		api.WithAPIKey(config.apiKey),
 	).Register(httpServer.Engine)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

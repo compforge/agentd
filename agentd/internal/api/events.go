@@ -17,40 +17,35 @@ import (
 	managedevent "github.com/compforge/agentd/internal/event"
 )
 
-func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.SendEventsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	ingress, err := decodeIngressEvents(input.Events)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 
 	sessionID := input.SessionID
 	session, err := s.service.GetSession(ctx, sessionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	if session.ArchivedAt != nil {
-		s.writeError(request, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: Session %q is archived", service.ErrConflict, sessionID,
-		))
-		return
+		)
 	}
 	if session.Status == model.SessionStatusTerminated {
-		s.writeError(request, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: Session %q is terminated", service.ErrConflict, sessionID,
-		))
-		return
+		)
 	}
 
 	blocking, err := s.events.UnresolvedToolUses(ctx, sessionID)
 	if err != nil {
-		s.writeError(request, fmt.Errorf("read Session required actions: %w", err))
-		return
+		return fmt.Errorf("read Session required actions: %w", err)
 	}
 	blockingIDs := make(map[string]bool, len(blocking))
 	for _, value := range blocking {
@@ -58,27 +53,23 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		blockingIDs[id] = true
 	}
 	if err := validateIngressSequence(ingress, blockingIDs); err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	flags := summarizeIngress(ingress)
 	if flags.hasToolResult {
 		environment, err := s.service.GetEnvironment(ctx, session.EnvironmentID)
 		if err != nil {
-			s.writeError(request, err)
-			return
+			return err
 		}
 		if environment.Config["type"] != "self_hosted" {
-			s.writeError(request, fmt.Errorf(
+			return fmt.Errorf(
 				"%w: user.tool_result requires a self_hosted Environment", service.ErrUnsupported,
-			))
-			return
+			)
 		}
 	}
 	accepted, err := s.appendIngressEvents(ctx, sessionID, ingress)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "accepted Session ingress Events",
 		"session_id", sessionID, "event_count", len(accepted),
@@ -91,27 +82,25 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		execution, err := s.service.CurrentExecution(ctx, sessionID)
 		if errors.Is(err, service.ErrNoAssignment) {
 			request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
-			return
+			return nil
 		}
 		if err != nil {
-			s.writeError(request, err)
-			return
+			return err
 		}
 		target := connector.Target{Endpoint: execution.Endpoint, Work: execution.Work}
 		if err := s.connector.Ensure(ctx, target); err != nil {
-			s.writeError(request, fmt.Errorf(
+			return fmt.Errorf(
 				"%w: prepare Agentlet interrupt: %v", service.ErrUnavailable, err,
-			))
-			return
+			)
 		}
 		if err := s.connector.Interrupt(ctx, target); err != nil {
-			s.writeError(request, fmt.Errorf(
+			return fmt.Errorf(
 				"%w: interrupt Agentlet Session: %v", service.ErrUnavailable, err,
-			))
-			return
+			)
 		}
 	}
 	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+	return nil
 }
 
 type ingressFlags struct {
@@ -195,25 +184,22 @@ func validateIngressSequence(ingress []view.IngressEvent, blockingIDs map[string
 	return nil
 }
 
-func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListEventsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	limit, afterSeq, err := parseEventPage(input.PageRequest)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	sessionID := input.SessionID
 	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	events, nextSeq, hasMore, err := s.events.Page(ctx, sessionID, afterSeq, limit)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	var next *string
 	if hasMore {
@@ -222,33 +208,31 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{
 		Data: events, NextPage: next,
 	})
+	return nil
 }
 
-func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.StreamEventsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if len(input.EventDeltas) > 0 || len(input.LegacyEventDelta) > 0 {
-		s.writeError(request, fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported))
-		return
+		return fmt.Errorf("%w: streaming event deltas", service.ErrUnsupported)
 	}
 	sessionID := input.SessionID
 	if _, err := s.service.GetSession(ctx, sessionID); err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	history, cursor, err := s.events.Load(ctx, sessionID, 0)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.Header("X-Accel-Buffering", "no")
 	writer := sse.NewWriter(request)
 	defer writer.Close()
 	for _, event := range history {
 		if err := writeEventSSE(writer, event); err != nil {
-			return
+			return nil
 		}
 	}
 	ticker := time.NewTicker(s.eventPollInterval)
@@ -256,16 +240,16 @@ func (s *Server) streamEvents(ctx context.Context, request *hertzapp.RequestCont
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			events, nextCursor, err := s.events.Load(ctx, sessionID, cursor)
 			if err != nil {
 				s.logger.Error("poll persisted Session Events", "session_id", sessionID, "error", err)
-				return
+				return nil
 			}
 			for _, event := range events {
 				if err := writeEventSSE(writer, event); err != nil {
-					return
+					return nil
 				}
 			}
 			cursor = nextCursor

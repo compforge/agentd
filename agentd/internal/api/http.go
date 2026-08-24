@@ -10,9 +10,8 @@ import (
 )
 
 const (
-	requestIDHeader        = "request-id"
-	requestErrorContextKey = "agentd.api.request_error"
-	streamEventsRoute      = "/v1/sessions/:session_id/events/stream"
+	requestIDHeader   = "request-id"
+	streamEventsRoute = "/v1/sessions/:session_id/events/stream"
 )
 
 func (s *Server) observeHTTP(ctx context.Context, request *hertzapp.RequestContext) {
@@ -45,10 +44,8 @@ func (s *Server) observeHTTP(ctx context.Context, request *hertzapp.RequestConte
 		slog.Int64("duration_ms", duration.Milliseconds()),
 		slog.Bool("client_disconnected", requestCanceled),
 	}
-	if value, exists := request.Get(requestErrorContextKey); exists {
-		if err, ok := value.(error); ok {
-			attributes = append(attributes, slog.Any("error", err))
-		}
+	if last := request.Errors.Last(); last != nil {
+		attributes = append(attributes, slog.Any("error", last.Err))
 	}
 	level := slog.LevelWarn
 	if status >= 500 {

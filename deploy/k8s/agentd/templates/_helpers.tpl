@@ -35,6 +35,10 @@ app.kubernetes.io/component: control-plane
 {{ include "agentd.fullname" . }}-database
 {{- end }}
 
+{{- define "agentd.authSecretName" -}}
+{{- default (printf "%s-auth" (include "agentd.fullname" .)) .Values.auth.existingSecret -}}
+{{- end }}
+
 {{- define "agentd.mysqlName" -}}
 {{ include "agentd.fullname" . }}-mysql
 {{- end }}

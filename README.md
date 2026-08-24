@@ -53,8 +53,10 @@ and is not part of agentd Worker placement.
 ## Kubernetes deployment (preview)
 
 ```bash
+AGENTD_API_KEY=$(openssl rand -hex 32)
 helm upgrade --install agentd deploy/k8s/agentd \
-  --namespace agentd --create-namespace
+  --namespace agentd --create-namespace \
+  --set-string auth.apiKey="$AGENTD_API_KEY"
 
 kubectl -n agentd port-forward service/agentd 8020:8020
 curl http://127.0.0.1:8020/healthz
@@ -62,7 +64,8 @@ curl http://127.0.0.1:8020/healthz
 
 The public Managed Agents API is exposed by agentd on port `8020`. Agentlet listens on port `8019`
 inside each Worker Pod and serves only agentd under `/internal/v1`; clients should not connect to it
-directly.
+directly. Every `/v1` request must send the configured key in `x-api-key`; `/healthz` remains
+anonymous for infrastructure probes.
 
 The default Helm values install one agentd replica and a shared MySQL Deployment backed by a PVC;
 agentd and every Agentlet use the same database. Production deployments can replace the built-in
