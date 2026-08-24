@@ -9,6 +9,7 @@ import (
 
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
+	"github.com/qiankunli/go-stdx/uuid"
 )
 
 func (a *Service) CreateAgent(ctx context.Context, value model.Agent) (model.Agent, error) {
@@ -19,8 +20,8 @@ func (a *Service) CreateAgent(ctx context.Context, value model.Agent) (model.Age
 		return model.Agent{}, fmt.Errorf("resolve agent model %q: %w", value.ModelID, err)
 	}
 	now := time.Now().UTC()
-	value.ID = newID("agent")
-	value.VersionID = newID("agent_version")
+	value.ID = uuid.NewWithPrefix("agent")
+	value.VersionID = uuid.NewWithPrefix("agent_version")
 	value.Version = 1
 	value.CreatedAt = now
 	value.UpdatedAt = now
@@ -116,7 +117,7 @@ func (a *Service) UpdateAgent(ctx context.Context, agentID string, update AgentU
 		}
 
 		now := time.Now().UTC()
-		next.VersionID = newID("agent_version")
+		next.VersionID = uuid.NewWithPrefix("agent_version")
 		next.Version++
 		next.UpdatedAt = now
 		if err := repository.CreateAgentVersion(ctx, next); err != nil {

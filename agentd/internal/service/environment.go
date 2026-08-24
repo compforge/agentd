@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/compforge/agentd/agentd/internal/model"
+	"github.com/qiankunli/go-stdx/uuid"
 )
 
 func (a *Service) CreateEnvironment(ctx context.Context, value model.Environment) (model.Environment, error) {
@@ -14,7 +15,7 @@ func (a *Service) CreateEnvironment(ctx context.Context, value model.Environment
 		return model.Environment{}, fmt.Errorf("%w: environment name is required", ErrInvalid)
 	}
 	now := time.Now().UTC()
-	value.ID = newID("env")
+	value.ID = uuid.NewWithPrefix("env")
 	value.CreatedAt = now
 	value.UpdatedAt = now
 	if value.Config == nil {

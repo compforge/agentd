@@ -7,6 +7,7 @@ import (
 
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
+	"github.com/qiankunli/go-stdx/uuid"
 )
 
 func (a *Service) CreateSession(
@@ -42,7 +43,7 @@ func (a *Service) CreateSession(
 			return fmt.Errorf("resolve session environment: %w", err)
 		}
 		session = model.Session{
-			ID: newID("session"), AgentID: agent.ID, AgentVersionID: agent.VersionID,
+			ID: uuid.NewWithPrefix("session"), AgentID: agent.ID, AgentVersionID: agent.VersionID,
 			EnvironmentID: environmentID, Title: title, Metadata: metadata,
 			Status: model.SessionStatusIdle, CreatedAt: now, UpdatedAt: now,
 		}
