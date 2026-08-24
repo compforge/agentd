@@ -71,6 +71,8 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.POST("/v1/environments", s.createEnvironment)
 	engine.GET("/v1/environments", s.listEnvironments)
 	engine.GET("/v1/environments/:environment_id", s.getEnvironment)
+	engine.POST("/v1/environments/:environment_id", s.updateEnvironment)
+	engine.POST("/v1/environments/:environment_id/archive", s.archiveEnvironment)
 	engine.POST("/v1/sessions", s.createSession)
 	engine.GET("/v1/sessions", s.listSessions)
 	engine.GET("/v1/sessions/:session_id", s.getSession)

@@ -68,8 +68,9 @@ type Repository interface {
 	ListModelsPage(context.Context, PageQuery) (Page[model.Model], error)
 	PutEnvironment(context.Context, model.Environment) error
 	GetEnvironment(context.Context, string) (model.Environment, error)
+	GetEnvironmentForUpdate(context.Context, string) (model.Environment, error)
 	ListEnvironments(context.Context) ([]model.Environment, error)
-	ListEnvironmentsPage(context.Context, PageQuery) (Page[model.Environment], error)
+	ListEnvironmentsPage(context.Context, PageQuery, bool) (Page[model.Environment], error)
 	PutWorker(context.Context, model.Worker) error
 	GetWorker(context.Context, string) (model.Worker, error)
 	GetWorkerForUpdate(context.Context, string) (model.Worker, error)

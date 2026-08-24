@@ -116,6 +116,9 @@ Session 在创建时把公开的 Agent ID/版本解析为内部 `agent_version_i
 不跟随 Agent 的当前版本漂移。有效更新才创建新版本，no-op 不创建；archive 改变 Agent 身份的生命周期，
 不产生配置版本。archive 后不再创建新 Session，已有 Session 仍可按原版本继续。
 
+Environment 是可复用的运行环境定义，不是 sandbox instance。Environment 可以更新或 archive；archive
+后不再用于创建新 Session，但已有 Session 保留引用并继续执行。它不保存 SandboxRef、实例位置或恢复状态。
+
 Session 的 title 与 metadata 可以独立更新，不改变已锁定的 AgentVersion、Environment 或当前 placement。
 创建请求中的 `initial_events` 与普通 Event ingress 共用同一条 Ledger 写入边界；只有全部输入完成协议校验后
 才创建 Session，且响应前必须按原顺序完成一次原子 Event batch 持久化。archive 只终止 Session、拒绝后续

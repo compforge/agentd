@@ -202,6 +202,16 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatalf("create Environment through public control plane: %v", err)
 	}
+	updatedEnvironmentName := "contract-test-v2"
+	environment, err = client.Beta.Environments.Update(ctx, environment.ID, anthropic.BetaEnvironmentUpdateParams{
+		Name: param.NewOpt(updatedEnvironmentName), Metadata: map[string]string{"team": "quality"},
+	})
+	if err != nil {
+		t.Fatalf("update Environment through public control plane: %v", err)
+	}
+	if environment.Name != updatedEnvironmentName || environment.Metadata["team"] != "quality" {
+		t.Fatalf("updated Environment = %#v", environment)
+	}
 	session, err := client.Beta.Sessions.New(ctx, anthropic.BetaSessionNewParams{
 		Agent:         anthropic.BetaSessionNewParamsAgentUnion{OfString: param.NewOpt(agent.ID)},
 		EnvironmentID: environment.ID,
@@ -398,6 +408,32 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	}
 	if len(sessions.Data) != 1 || sessions.Data[0].ArchivedAt.IsZero() {
 		t.Fatalf("archived Sessions = %#v", sessions.Data)
+	}
+	archivedEnvironment, err := client.Beta.Environments.Archive(
+		ctx, environment.ID, anthropic.BetaEnvironmentArchiveParams{},
+	)
+	if err != nil {
+		t.Fatalf("archive Environment through public control plane: %v", err)
+	}
+	if archivedEnvironment.ArchivedAt == "" {
+		t.Fatalf("archived Environment = %#v", archivedEnvironment)
+	}
+	_, err = client.Beta.Sessions.New(ctx, anthropic.BetaSessionNewParams{
+		Agent:         anthropic.BetaSessionNewParamsAgentUnion{OfString: param.NewOpt(agent.ID)},
+		EnvironmentID: environment.ID,
+	})
+	if err == nil {
+		t.Fatal("archived Environment accepted a new Session")
+	}
+	environments, err := client.Beta.Environments.List(ctx, anthropic.BetaEnvironmentListParams{})
+	if err != nil || len(environments.Data) != 0 {
+		t.Fatalf("active Environments after archive = %#v, %v", environments, err)
+	}
+	environments, err = client.Beta.Environments.List(ctx, anthropic.BetaEnvironmentListParams{
+		IncludeArchived: param.NewOpt(true),
+	})
+	if err != nil || len(environments.Data) != 1 || environments.Data[0].ID != environment.ID {
+		t.Fatalf("archived Environments = %#v, %v", environments, err)
 	}
 	archived, err := client.Beta.Agents.Archive(ctx, agent.ID, anthropic.BetaAgentArchiveParams{})
 	if err != nil {

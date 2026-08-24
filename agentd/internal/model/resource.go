@@ -36,6 +36,7 @@ type Environment struct {
 	Description string
 	Config      map[string]any
 	Metadata    map[string]string
+	ArchivedAt  *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
