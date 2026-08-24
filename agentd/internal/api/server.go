@@ -62,6 +62,7 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.POST("/v1/models", s.createModel)
 	engine.GET("/v1/models", s.listModels)
 	engine.GET("/v1/models/:model_id", s.getModel)
+	engine.POST("/v1/models/:model_id", s.updateModel)
 	engine.POST("/v1/agents", s.createAgent)
 	engine.GET("/v1/agents", s.listAgents)
 	engine.GET("/v1/agents/:agent_id", s.getAgent)

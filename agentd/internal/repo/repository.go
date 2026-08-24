@@ -64,6 +64,7 @@ type Repository interface {
 	ListAgentVersionsPage(context.Context, string, PageQuery) (Page[model.Agent], error)
 	PutModel(context.Context, model.Model) error
 	GetModel(context.Context, string) (model.Model, error)
+	GetModelForUpdate(context.Context, string) (model.Model, error)
 	ListModels(context.Context) ([]model.Model, error)
 	ListModelsPage(context.Context, PageQuery) (Page[model.Model], error)
 	PutEnvironment(context.Context, model.Environment) error

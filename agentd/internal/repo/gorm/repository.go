@@ -131,8 +131,16 @@ func (r *GORMRepository) PutModel(ctx context.Context, value model.Model) error 
 }
 
 func (r *GORMRepository) GetModel(ctx context.Context, modelID string) (model.Model, error) {
+	return r.getModel(r.db.WithContext(ctx), modelID)
+}
+
+func (r *GORMRepository) GetModelForUpdate(ctx context.Context, modelID string) (model.Model, error) {
+	return r.getModel(r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}), modelID)
+}
+
+func (r *GORMRepository) getModel(query *gormio.DB, modelID string) (model.Model, error) {
 	var row modelRow
-	if err := r.db.WithContext(ctx).Where("id = ?", modelID).First(&row).Error; err != nil {
+	if err := query.Where("id = ?", modelID).First(&row).Error; err != nil {
 		if errors.Is(err, gormio.ErrRecordNotFound) {
 			return model.Model{}, repo.ErrNotFound
 		}

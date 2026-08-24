@@ -100,6 +100,8 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 - **Agent**：可复用、可版本化的 Harness 配置。稳定 Agent 身份持有当前版本和 archive 生命周期，
   每个 AgentVersion 是具有独立 ID 的不可变配置快照；`(agent_id, version)` 在一个 Agent 内唯一。
 - **Model**：agentd 扩展的外部模型连接注册；资源 ID 供 Agent 引用，上游模型名和凭据不属于 Agent。
+  provider 和上游模型构成不可变身份；base URL 与 API key 是可轮换的运维连接信息，不产生新的
+  AgentVersion，也不保留旧凭据。
 - **Environment**：Sandbox 和运行环境需求，不等于一台正在运行的沙箱。
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
 - **Work**：Session 的长期执行实体。Work 可以冻结、迁移或恢复，但不能与某个进程或 Worker 绑定。

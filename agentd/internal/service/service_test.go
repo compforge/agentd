@@ -71,6 +71,51 @@ func TestPageSessionsFiltersBeforeApplyingCursor(t *testing.T) {
 	}
 }
 
+func TestModelConnectionUpdatePreservesIdentityAndRotatesSecret(t *testing.T) {
+	application, _ := newTestControl(t)
+	ctx := context.Background()
+	created, err := application.CreateModel(ctx, model.Model{
+		ID: "model-1", Provider: "anthropic", UpstreamID: "claude-sonnet-4-6",
+		BaseURL: "https://old.example.test", APIKey: "old-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := " ANTHROPIC "
+	upstreamID := " claude-sonnet-4-6 "
+	baseURL := " https://new.example.test "
+	apiKey := "new-secret"
+	updated, err := application.UpdateModel(ctx, created.ID, service.ModelUpdate{
+		Provider: &provider, UpstreamID: &upstreamID, BaseURL: &baseURL, APIKey: &apiKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Provider != "anthropic" || updated.UpstreamID != "claude-sonnet-4-6" ||
+		updated.BaseURL != "https://new.example.test" || updated.APIKey != "new-secret" {
+		t.Fatalf("updated Model = %#v", updated)
+	}
+	noOp, err := application.UpdateModel(ctx, created.ID, service.ModelUpdate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !noOp.UpdatedAt.Equal(updated.UpdatedAt) {
+		t.Fatalf("no-op Model update changed UpdatedAt: before=%s after=%s", updated.UpdatedAt, noOp.UpdatedAt)
+	}
+	otherProvider := "openai"
+	if _, err := application.UpdateModel(ctx, created.ID, service.ModelUpdate{Provider: &otherProvider}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("change Model provider error = %v, want ErrConflict", err)
+	}
+	otherUpstreamID := "claude-opus-4-1"
+	if _, err := application.UpdateModel(ctx, created.ID, service.ModelUpdate{UpstreamID: &otherUpstreamID}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("change upstream model error = %v, want ErrConflict", err)
+	}
+	emptyAPIKey := " "
+	if _, err := application.UpdateModel(ctx, created.ID, service.ModelUpdate{APIKey: &emptyAPIKey}); !errors.Is(err, service.ErrInvalid) {
+		t.Fatalf("clear Model API key error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestReconcilePlacementBalancesWorkersAndHonorsCapacity(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()
@@ -324,6 +369,21 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 		target.Work.Agent.Model.UpstreamID != "claude-sonnet-4-6" ||
 		target.Work.Agent.Model.BaseURL != "https://model.example.test" || target.Work.Agent.Model.APIKey != "secret" {
 		t.Fatalf("model snapshot = %#v", target.Work.Agent.Model)
+	}
+	rotatedBaseURL := "https://rotated.example.test"
+	rotatedAPIKey := "rotated-secret"
+	if _, err := application.UpdateModel(ctx, "model-1", service.ModelUpdate{
+		BaseURL: &rotatedBaseURL, APIKey: &rotatedAPIKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target, err = application.CurrentExecution(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Work.Agent.Model.ID != "model-1" || target.Work.Agent.Model.UpstreamID != "claude-sonnet-4-6" ||
+		target.Work.Agent.Model.BaseURL != rotatedBaseURL || target.Work.Agent.Model.APIKey != rotatedAPIKey {
+		t.Fatalf("rotated model snapshot = %#v", target.Work.Agent.Model)
 	}
 }
 
