@@ -6,6 +6,7 @@ import (
 )
 
 func TestLoadConfigDefaultsToSQLite(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test")
 	t.Setenv("AGENTD_MYSQL_DSN", "")
 	t.Setenv("AGENTD_SQLITE_PATH", "")
 	t.Setenv("AGENTD_CONTROL_ADDRESS", "")
@@ -29,6 +30,7 @@ func TestLoadConfigDefaultsToSQLite(t *testing.T) {
 }
 
 func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test")
 	t.Setenv("AGENTD_WORKER_CAPACITY", "8")
 	t.Setenv("AGENTD_WORKER_MIN_COUNT", "3")
 	t.Setenv("AGENTD_WORKER_MIN_IDLE", "2")
@@ -84,6 +86,7 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 }
 
 func TestLoadConfigRequiresControllerLeaseToOutliveRequest(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test")
 	t.Setenv("AGENTD_WORKER_SOURCE", "kubernetes")
 	t.Setenv("AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", "30s")
 	t.Setenv("AGENTD_WORKER_CONTROLLER_LEASE_TTL", "20s")
@@ -94,9 +97,27 @@ func TestLoadConfigRequiresControllerLeaseToOutliveRequest(t *testing.T) {
 }
 
 func TestLoadConfigRequiresAtLeastOneWorker(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test")
 	t.Setenv("AGENTD_WORKER_MIN_COUNT", "0")
 
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("loadConfig() accepted zero minimum Workers")
+	}
+}
+
+func TestLoadConfigRequiresAPIKey(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "")
+
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("loadConfig() accepted an empty API key")
+	}
+}
+
+func TestLoadConfigRejectsAPIKeyWithSurroundingWhitespace(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test\n")
+
+	_, err := loadConfig()
+	if err == nil || err.Error() != "AGENTD_API_KEY must not contain surrounding whitespace" {
+		t.Fatalf("loadConfig() error = %v, want surrounding whitespace error", err)
 	}
 }

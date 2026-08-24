@@ -102,6 +102,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	api.New(
 		controlService, events, agentletConnector, executionReconciler,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		api.WithAPIKey("test"),
 	).Register(server.Engine)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Run() }()
@@ -118,9 +119,15 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	modelResponse, err := http.Post(
-		"http://"+listener.Addr().String()+"/v1/models", "application/json", bytes.NewReader(modelBody),
+	modelRequest, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, "http://"+listener.Addr().String()+"/v1/models", bytes.NewReader(modelBody),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelRequest.Header.Set("Content-Type", "application/json")
+	modelRequest.Header.Set("x-api-key", "test")
+	modelResponse, err := http.DefaultClient.Do(modelRequest)
 	if err != nil {
 		t.Fatalf("create Model through control plane: %v", err)
 	}
@@ -133,7 +140,14 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatalf("create Model response status=%d body=%s", modelResponse.StatusCode, createdModelBody)
 	}
 	for _, path := range []string{"/v1/models/claude-sonnet-4-6", "/v1/models"} {
-		response, err := http.Get("http://" + listener.Addr().String() + path)
+		modelReadRequest, err := http.NewRequestWithContext(
+			ctx, http.MethodGet, "http://"+listener.Addr().String()+path, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modelReadRequest.Header.Set("x-api-key", "test")
+		response, err := http.DefaultClient.Do(modelReadRequest)
 		if err != nil {
 			t.Fatalf("read Model resource %s: %v", path, err)
 		}
@@ -162,6 +176,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatal(err)
 	}
 	modelUpdateRequest.Header.Set("Content-Type", "application/json")
+	modelUpdateRequest.Header.Set("x-api-key", "test")
 	modelUpdateResponse, err := http.DefaultClient.Do(modelUpdateRequest)
 	if err != nil {
 		t.Fatalf("update Model through control plane: %v", err)

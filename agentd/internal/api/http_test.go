@@ -14,6 +14,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/config"
 	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/cloudwego/hertz/pkg/route"
+	"github.com/compforge/agentd/agentd/internal/api/middleware"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 )
 
 func TestHTTPObservationAddsRequestIDWithoutLoggingHealthyRequest(t *testing.T) {
@@ -35,6 +37,58 @@ func TestHTTPObservationAddsRequestIDWithoutLoggingHealthyRequest(t *testing.T) 
 	}
 }
 
+func TestAPIKeyAuthenticationProtectsPublicAPIAndLeavesHealthAnonymous(t *testing.T) {
+	server := &Server{
+		logger:               slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		slowRequestThreshold: time.Hour,
+	}
+	WithAPIKey("correct-secret")(server)
+	engine := route.NewEngine(config.NewOptions(nil))
+	engine.Use(server.observeHTTP)
+	engine.Use(middleware.HandleErrors)
+	engine.Use(server.apiKey.Handle)
+	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
+		request.JSON(200, map[string]bool{"ok": true})
+	})
+	engine.GET("/v1/protected", func(_ context.Context, request *hertzapp.RequestContext) {
+		request.JSON(200, map[string]bool{"ok": true})
+	})
+
+	health := ut.PerformRequest(engine, "GET", "/healthz", nil).Result()
+	if health.StatusCode() != 200 {
+		t.Fatalf("anonymous health status = %d", health.StatusCode())
+	}
+	for _, request := range []struct {
+		name   string
+		header []ut.Header
+	}{
+		{name: "missing"},
+		{name: "wrong", header: []ut.Header{{Key: middleware.APIKeyHeader, Value: "wrong-secret"}}},
+	} {
+		t.Run(request.name, func(t *testing.T) {
+			response := ut.PerformRequest(engine, "GET", "/v1/protected", nil, request.header...).Result()
+			if response.StatusCode() != 401 {
+				t.Fatalf("status = %d, want 401", response.StatusCode())
+			}
+			var body view.ErrorResponse
+			if err := json.Unmarshal(response.Body(), &body); err != nil {
+				t.Fatal(err)
+			}
+			requestID := response.Header.Get(requestIDHeader)
+			if body.Type != "error" || body.Error.Type != "authentication_error" ||
+				!strings.HasPrefix(requestID, "req_") {
+				t.Fatalf("authentication response = %#v request-id=%q", body, requestID)
+			}
+		})
+	}
+	authorized := ut.PerformRequest(engine, "GET", "/v1/protected", nil,
+		ut.Header{Key: middleware.APIKeyHeader, Value: "correct-secret"},
+	).Result()
+	if authorized.StatusCode() != 200 {
+		t.Fatalf("authorized status = %d body=%s", authorized.StatusCode(), authorized.Body())
+	}
+}
+
 func TestHTTPObservationLogsServerErrorWithRouteAndRequestID(t *testing.T) {
 	var output bytes.Buffer
 	server := &Server{
@@ -43,9 +97,10 @@ func TestHTTPObservationLogsServerErrorWithRouteAndRequestID(t *testing.T) {
 	}
 	engine := route.NewEngine(config.NewOptions(nil))
 	engine.Use(server.observeHTTP)
-	engine.GET("/v1/sessions/:session_id", func(_ context.Context, request *hertzapp.RequestContext) {
-		server.writeError(request, errors.New("database unavailable"))
-	})
+	engine.Use(middleware.HandleErrors)
+	engine.GET("/v1/sessions/:session_id", adaptHandler(func(_ context.Context, _ *hertzapp.RequestContext) error {
+		return errors.New("database unavailable")
+	}))
 
 	response := ut.PerformRequest(engine, "GET", "/v1/sessions/session-1", nil).Result()
 	requestID := response.Header.Get(requestIDHeader)

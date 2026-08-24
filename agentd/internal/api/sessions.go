@@ -20,36 +20,31 @@ import (
 //
 // +case:id=session_initial_events,desc=`create a Session with an initial user.message`,expect=`the Event is durable before the create response and wakes normal reconciliation`,forbid=`a second ingress implementation or an acknowledged but unpersisted Event`,group=system
 // +link=agentd/docs/kernel.md
-func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.CreateSessionRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if present(input.Budget) || len(input.Resources) > 0 || len(input.VaultIDs) > 0 {
-		s.writeError(request, fmt.Errorf("%w: budgets, resources, or vaults", service.ErrUnsupported))
-		return
+		return fmt.Errorf("%w: budgets, resources, or vaults", service.ErrUnsupported)
 	}
 	initialEvents, err := decodeInitialEvents(input.InitialEvents)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	agentID, version, err := parseAgentReference(input.Agent)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	created, err := s.service.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "created Session", "session_id", created.ID,
 		"agent_id", created.AgentID, "environment_id", created.EnvironmentID)
 	if len(initialEvents) > 0 {
 		if _, err := s.appendIngressEvents(ctx, created.ID, initialEvents); err != nil {
-			s.writeError(request, fmt.Errorf("persist initial Session Events: %w", err))
-			return
+			return fmt.Errorf("persist initial Session Events: %w", err)
 		}
 		s.logger.InfoContext(ctx, "accepted initial Session Events",
 			"session_id", created.ID, "event_count", len(initialEvents))
@@ -57,44 +52,41 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 	}
 	agent, err := s.service.GetAgentVersion(ctx, created.AgentVersionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	response, err := s.sessionResponse(ctx, created, agent)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, response)
+	return nil
 }
 
-func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.SessionPathRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	value, err := s.service.GetSession(ctx, input.SessionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	agent, err := s.service.GetAgentVersion(ctx, value.AgentVersionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	response, err := s.sessionResponse(ctx, value, agent)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, response)
+	return nil
 }
 
-func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListSessionsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	descending := false
 	switch input.Order {
@@ -102,32 +94,27 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 		descending = true
 	case "asc":
 	default:
-		s.writeError(request, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: order must be asc or desc", service.ErrInvalid,
-		))
-		return
+		)
 	}
 	query, err := parsePage(input.PageRequest, sessionCursor, descending)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	page, err := s.service.PageSessions(ctx, query, input.IncludeArchived)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	data := make([]view.SessionResponse, 0, len(page.Items))
 	for _, value := range page.Items {
 		agent, err := s.service.GetAgentVersion(ctx, value.AgentVersionID)
 		if err != nil {
-			s.writeError(request, err)
-			return
+			return err
 		}
 		response, err := s.sessionResponse(ctx, value, agent)
 		if err != nil {
-			s.writeError(request, err)
-			return
+			return err
 		}
 		data = append(data, response)
 	}
@@ -141,74 +128,68 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 	request.JSON(consts.StatusOK, view.BidirectionalPage[view.SessionResponse]{
 		Data: data, NextPage: next, PrevPage: previous,
 	})
+	return nil
 }
 
-func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.UpdateSessionRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	if present(input.Agent) || present(input.Budget) || len(input.VaultIDs) > 0 {
-		s.writeError(request, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: Session agent overrides, budgets, or vaults", service.ErrUnsupported,
-		))
-		return
+		)
 	}
 	title, err := parseSessionTitle(input.Title)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	metadata, err := parseSessionMetadataPatch(input.Metadata)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	updated, err := s.service.UpdateSession(ctx, input.SessionID, service.SessionUpdate{
 		Title: title, Metadata: metadata,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	agent, err := s.service.GetAgentVersion(ctx, updated.AgentVersionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	response, err := s.sessionResponse(ctx, updated, agent)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, response)
+	return nil
 }
 
 // +case:id=session_archive_preserves_history,desc=`archive an idle Session after it has executed Events`,expect=`terminated Session remains readable with its Event history`,forbid=`accepting new ingress or deleting Ledger history`,group=system
 // +link=agentd/docs/kernel.md
-func (s *Server) archiveSession(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) archiveSession(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.SessionPathRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	archived, err := s.service.ArchiveSession(ctx, input.SessionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "archived Session", "session_id", archived.ID)
 	s.executionNotifier.Notify()
 	agent, err := s.service.GetAgentVersion(ctx, archived.AgentVersionID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	response, err := s.sessionResponse(ctx, archived, agent)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, response)
+	return nil
 }
 
 func decodeInitialEvents(rawEvents []json.RawMessage) ([]view.IngressEvent, error) {

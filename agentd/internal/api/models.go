@@ -13,86 +13,80 @@ import (
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
-func (s *Server) createModel(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) createModel(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.CreateModelRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	created, err := s.service.CreateModel(ctx, model.Model{
 		ID: input.ID, Provider: input.Provider, UpstreamID: input.Model,
 		BaseURL: input.BaseURL, APIKey: input.APIKey,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "created Model", "model_id", created.ID, "provider", created.Provider)
 	request.JSON(consts.StatusOK, view.NewModelResponse(created))
+	return nil
 }
 
-func (s *Server) getModel(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) getModel(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.GetModelRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	value, err := s.service.GetModel(ctx, input.ModelID)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	request.JSON(consts.StatusOK, view.NewModelResponse(value))
+	return nil
 }
 
-func (s *Server) updateModel(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) updateModel(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.UpdateModelRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	provider, err := parseModelString(input.Provider, false, "provider")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	upstreamID, err := parseModelString(input.Model, false, "model")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	baseURL, err := parseModelString(input.BaseURL, true, "base_url")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	apiKey, err := parseModelString(input.APIKey, false, "api_key")
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	updated, err := s.service.UpdateModel(ctx, input.ModelID, service.ModelUpdate{
 		Provider: provider, UpstreamID: upstreamID, BaseURL: baseURL, APIKey: apiKey,
 	})
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	s.logger.InfoContext(ctx, "updated Model connection", "model_id", updated.ID, "provider", updated.Provider)
 	request.JSON(consts.StatusOK, view.NewModelResponse(updated))
+	return nil
 }
 
-func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContext) {
+func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContext) error {
 	var input view.ListModelsRequest
-	if !bindRequest(request, &input) {
-		return
+	if err := bindRequest(request, &input); err != nil {
+		return err
 	}
 	query, err := parsePage(input.PageRequest, modelCursor, false)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	page, err := s.service.PageModels(ctx, query)
 	if err != nil {
-		s.writeError(request, err)
-		return
+		return err
 	}
 	data := make([]view.ModelResponse, 0, len(page.Items))
 	for _, value := range page.Items {
@@ -106,6 +100,7 @@ func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContex
 	}
 	next, _ := pageLinks(modelCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.ModelResponse]{Data: data, NextPage: next})
+	return nil
 }
 
 func parseModelString(raw json.RawMessage, clearable bool, field string) (*string, error) {

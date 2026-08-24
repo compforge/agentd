@@ -47,15 +47,18 @@ Quick Start 把 Hostel sidecar 放进 Worker Pod；生产环境的 Sandbox Engin
 ## Kubernetes 部署（预览）
 
 ```bash
+AGENTD_API_KEY=$(openssl rand -hex 32)
 helm upgrade --install agentd deploy/k8s/agentd \
-  --namespace agentd --create-namespace
+  --namespace agentd --create-namespace \
+  --set-string auth.apiKey="$AGENTD_API_KEY"
 
 kubectl -n agentd port-forward service/agentd 8020:8020
 curl http://127.0.0.1:8020/healthz
 ```
 
 公共 Managed Agents API 由 agentd 在 `8020` 端口提供。Agentlet 在每个 Worker Pod 内监听
-`8019` 端口，只通过 `/internal/v1` 为 agentd 提供服务；客户端不应直接连接 Agentlet。
+`8019` 端口，只通过 `/internal/v1` 为 agentd 提供服务；客户端不应直接连接 Agentlet。所有 `/v1`
+请求必须在 `x-api-key` 中携带配置的 key；`/healthz` 保持匿名供基础设施探针使用。
 
 Helm 默认安装一个 agentd 副本和带 PVC 的共享 MySQL；所有 Agentlet 使用同一数据库。生产环境可以
 改用外部 MySQL DSN。当前 Helm 拓扑只用于 Quick Start，拓扑、持久化选项、镜像配置和现有限制见
