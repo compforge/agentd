@@ -313,6 +313,7 @@ func TestReconcileRetriesInputAfterWorkerPersistenceFailure(t *testing.T) {
 	if counts["agent.message"] != 1 || counts["session.status_rescheduled"] != 1 {
 		t.Fatalf("event counts = %#v", counts)
 	}
+	waitForServiceWorks(t, application)
 	if !strings.Contains(logs.String(), "session worker stopped") || !strings.Contains(logs.String(), session.ID) {
 		t.Fatalf("worker failure log = %q", logs.String())
 	}

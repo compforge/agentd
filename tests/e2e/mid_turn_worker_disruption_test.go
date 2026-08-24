@@ -19,16 +19,25 @@ import (
 const midTurnSystemPrompt = "For every user request, call bash exactly once with command `sleep 90; printf AGENTD_E2E_CHAOS_TOOL_FINISHED`. If that tool fails or is denied, do not call another tool. Answer exactly AGENTD_E2E_OK after the tool result."
 
 func TestManagedAgentRecoversAfterMidTurnWorkerLoss(t *testing.T) {
-	state := midTurnWorkerLossCaseState{}
+	runMidTurnWorkerDisruptionCase(t, "mid_turn_worker_loss", "mid-turn", true)
+}
+
+func TestManagedAgentDrainsOnWorkerTermination(t *testing.T) {
+	runMidTurnWorkerDisruptionCase(t, "agentlet_graceful_drain", "graceful-drain", false)
+}
+
+func runMidTurnWorkerDisruptionCase(t *testing.T, caseID, recoveryFacet string, forceDelete bool) {
+	t.Helper()
+	state := midTurnWorkerDisruptionCaseState{forceDelete: forceDelete}
 	result := caserun.Run(
 		context.Background(),
-		caserun.Ref("agentd-managed-agent", "mid_turn_worker_loss"),
+		caserun.Ref("agentd-managed-agent", caseID),
 		nil,
 		&state,
-		caserun.Definition[midTurnWorkerLossCaseState]{
-			Prepare: prepareMidTurnWorkerLossCase,
-			Execute: executeMidTurnWorkerLossCase,
-			Judge: func(_ context.Context, state *midTurnWorkerLossCaseState) error {
+		caserun.Definition[midTurnWorkerDisruptionCaseState]{
+			Prepare: prepareMidTurnWorkerDisruptionCase,
+			Execute: executeMidTurnWorkerDisruptionCase,
+			Judge: func(_ context.Context, state *midTurnWorkerDisruptionCaseState) error {
 				if state.userMessages != 1 || state.agentMessages != 1 {
 					return caserun.Fail(fmt.Sprintf(
 						"message counts = user:%d agent:%d, want user:1 agent:1",
@@ -47,13 +56,13 @@ func TestManagedAgentRecoversAfterMidTurnWorkerLoss(t *testing.T) {
 				return nil
 			},
 			Budgets: systemCaseBudgets,
-			Facets:  map[string]string{"boundary": "system", "recovery": "mid-turn"},
+			Facets:  map[string]string{"boundary": "system", "recovery": recoveryFacet},
 		},
 	)
 	recordSystemCase(t, result)
 }
 
-type midTurnWorkerLossCaseState struct {
+type midTurnWorkerDisruptionCaseState struct {
 	managed             managedAgentCaseState
 	cluster             *kube.Client
 	workerSelector      string
@@ -63,9 +72,10 @@ type midTurnWorkerLossCaseState struct {
 	userMessages        int
 	agentMessages       int
 	safeOutcome         bool
+	forceDelete         bool
 }
 
-func prepareMidTurnWorkerLossCase(ctx context.Context, state *midTurnWorkerLossCaseState) error {
+func prepareMidTurnWorkerDisruptionCase(ctx context.Context, state *midTurnWorkerDisruptionCaseState) error {
 	disruption, err := readWorkerDisruptionEnv()
 	if err != nil {
 		return err
@@ -79,7 +89,7 @@ func prepareMidTurnWorkerLossCase(ctx context.Context, state *midTurnWorkerLossC
 	return nil
 }
 
-func executeMidTurnWorkerLossCase(ctx context.Context, state *midTurnWorkerLossCaseState) error {
+func executeMidTurnWorkerDisruptionCase(ctx context.Context, state *midTurnWorkerDisruptionCaseState) error {
 	ctx, cancel := context.WithTimeout(ctx, state.managed.config.timeout)
 	defer cancel()
 
@@ -104,8 +114,14 @@ func executeMidTurnWorkerLossCase(ctx context.Context, state *midTurnWorkerLossC
 	}
 	state.previousWorkerIDs = workerIDs
 	for _, pod := range previous {
-		if err := state.cluster.ForceDeletePod(ctx, pod.Ref()); err != nil {
-			return fmt.Errorf("force-delete running Worker Pod %q: %w", pod.Name, err)
+		if state.forceDelete {
+			if err := state.cluster.ForceDeletePod(ctx, pod.Ref()); err != nil {
+				return fmt.Errorf("force-delete running Worker Pod %q: %w", pod.Name, err)
+			}
+			continue
+		}
+		if err := state.cluster.DeletePod(ctx, pod.Ref()); err != nil {
+			return fmt.Errorf("gracefully delete running Worker Pod %q: %w", pod.Name, err)
 		}
 	}
 	state.replacementWorkerID, err = replacementWorkerIDResult(
@@ -176,7 +192,7 @@ func waitForMidTurnSettlementResult(
 	for {
 		page, err := client.Beta.Sessions.Events.List(ctx, sessionID, anthropic.BetaSessionEventListParams{})
 		if err != nil {
-			return "", false, fmt.Errorf("list Session Events after Worker loss: %w", err)
+			return "", false, fmt.Errorf("list Session Events after Worker disruption: %w", err)
 		}
 		agentMessages := 0
 		for _, event := range page.Data {

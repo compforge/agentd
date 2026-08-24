@@ -86,6 +86,12 @@ Agentlet 在 Harness 的安全边界请求 Adapter 保存 checkpoint，得到不
 Assignment fence 上报 agentd。只有 agentd 条件提交 ResumePoint 后，才能把该 Session 视为可在其它
 Worker 恢复并释放当前资源。
 
+当前冻结由 Harness `Run` 到达稳定边界并提交 checkpoint 隐式完成，不要求 Harness 长期保留一个
+可暂停的进程，也不要求单独提供 `Freeze` 方法。等待普通用户输入或 `requires_action` 时，本轮先持久化
+可见问题和恢复点，再把 Work 从当前 Agentlet **卸载**，释放 runtime 和本地 reservation；Session
+Reconciler 观察到 idle 且没有新的 durable demand 后可以继续释放 placement。后续回复先写入 Ledger，
+再触发新的 placement 与恢复。
+
 ```text
 Adapter saves checkpoint
   → Agentlet reports ResumePoint
@@ -105,6 +111,12 @@ Fail-closed 不等于终止 Session。Agentlet 释放本轮执行资源，把未
 或外部对账结果成为 Tool Result 后继续模型循环；allow 只允许原 Action 创建一个新 Attempt。确认
 Event ID 会写入新 Attempt 的 requested payload；如果新 Attempt 的结果再次不明确，旧确认不能重放，
 必须生成新的 `agent.tool_use` 再次询问。普通 user message 在 required action 解决前保持排队。
+
+进程退出与用户 Interrupt 是两种语义。Agentlet shutdown 先关闭新 Work admission 并停止后台
+reconcile，再等待已经接受的 Work 自然到达稳定 checkpoint；只有退出宽限期耗尽才取消执行，并在活跃
+goroutine 停止后关闭存储。
+被强制取消的 Turn 不写成 `retries_exhausted`，也不把输入标记为 processed，而是保留 durable input
+与 Ledger 中已有事实，等待新的 Assignment 恢复。用户 Interrupt 仍是明确的产品动作，可以结束当前 Turn。
 
 提交顺序必须保证：先保存可读取的 checkpoint，再把精确 `ResumeRef` 上报 agentd；先追加 Attempt 的
 requested 事实，再发起模型或工具调用；拿到结果后再追加 completed / failed。跨 Control State、
