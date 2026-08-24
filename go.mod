@@ -7,7 +7,7 @@ require (
 	github.com/cloudwego/hertz v0.10.4
 	github.com/compforge/agent-ledger/go v0.0.0-20260824074809-8026d3e6efdd
 	github.com/compforge/agentgo v0.0.1
-	github.com/compforge/case-harness/go v0.0.0-20260824101226-b5c35545e036
+	github.com/compforge/case-harness/go v0.0.0-20260824112126-8c3aabf6fa18
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/qiankunli/go-stdx v0.0.4-0.20260824051808-f7f6d7c53de2
 	gorm.io/driver/mysql v1.6.0
