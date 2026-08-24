@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -40,6 +43,42 @@ func (s *Server) getModel(ctx context.Context, request *hertzapp.RequestContext)
 	request.JSON(consts.StatusOK, view.NewModelResponse(value))
 }
 
+func (s *Server) updateModel(ctx context.Context, request *hertzapp.RequestContext) {
+	var input view.UpdateModelRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	provider, err := parseModelString(input.Provider, false, "provider")
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	upstreamID, err := parseModelString(input.Model, false, "model")
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	baseURL, err := parseModelString(input.BaseURL, true, "base_url")
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	apiKey, err := parseModelString(input.APIKey, false, "api_key")
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	updated, err := s.service.UpdateModel(ctx, input.ModelID, service.ModelUpdate{
+		Provider: provider, UpstreamID: upstreamID, BaseURL: baseURL, APIKey: apiKey,
+	})
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	s.logger.InfoContext(ctx, "updated Model connection", "model_id", updated.ID, "provider", updated.Provider)
+	request.JSON(consts.StatusOK, view.NewModelResponse(updated))
+}
+
 func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContext) {
 	var input view.ListModelsRequest
 	if !bindRequest(request, &input) {
@@ -69,9 +108,27 @@ func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContex
 	request.JSON(consts.StatusOK, view.Page[view.ModelResponse]{Data: data, NextPage: next})
 }
 
+func parseModelString(raw json.RawMessage, clearable bool, field string) (*string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		if !clearable {
+			return nil, fmt.Errorf("%w: model %s cannot be cleared", service.ErrInvalid, field)
+		}
+		value := ""
+		return &value, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%w: model %s must be a string", service.ErrInvalid, field)
+	}
+	return &value, nil
+}
+
 // modelResponse is the only public projection of a registered Model.
 //
-// +spec=`Model credentials are write-only: callers may observe whether a credential is configured, but create, get, and list responses never expose its value`
+// +spec=`Model credentials are write-only: callers may observe whether a credential is configured, but no Model response exposes its value`
 // +case:id=model_secret_redaction,desc=`register a Model with a credential, then read it through create, get, and list`,input=`one unique external model connection and API key`,expect=`all responses identify the Model and report that a key is configured`,forbid=`returning the API key value or an api_key field`,group=system
 // +link=agentd/docs/kernel.md
 // +link=tests/e2e/cases/managed-agent.yaml

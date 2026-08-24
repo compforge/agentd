@@ -1,6 +1,7 @@
 package view
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/compforge/agentd/agentd/internal/model"
@@ -16,6 +17,14 @@ type CreateModelRequest struct {
 
 type GetModelRequest struct {
 	ModelID string `path:"model_id"`
+}
+
+type UpdateModelRequest struct {
+	ModelID  string          `path:"model_id"`
+	Provider json.RawMessage `json:"provider"`
+	Model    json.RawMessage `json:"model"`
+	BaseURL  json.RawMessage `json:"base_url"`
+	APIKey   json.RawMessage `json:"api_key"`
 }
 
 type ListModelsRequest struct {

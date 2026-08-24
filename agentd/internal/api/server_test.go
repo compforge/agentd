@@ -146,6 +146,36 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 			t.Fatalf("read Model %s status=%d body=%s", path, response.StatusCode, body)
 		}
 	}
+	rotatedModelSecret := "rotated-model-secret-that-must-not-be-returned"
+	modelUpdateBody, err := json.Marshal(map[string]any{
+		"provider": "anthropic", "model": "claude-sonnet-4-6",
+		"base_url": "https://model.example.test", "api_key": rotatedModelSecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelUpdateRequest, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, "http://"+listener.Addr().String()+"/v1/models/claude-sonnet-4-6",
+		bytes.NewReader(modelUpdateBody),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelUpdateRequest.Header.Set("Content-Type", "application/json")
+	modelUpdateResponse, err := http.DefaultClient.Do(modelUpdateRequest)
+	if err != nil {
+		t.Fatalf("update Model through control plane: %v", err)
+	}
+	updatedModelBody, err := io.ReadAll(modelUpdateResponse.Body)
+	modelUpdateResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelUpdateResponse.StatusCode != http.StatusOK ||
+		bytes.Contains(updatedModelBody, []byte(modelSecret)) ||
+		bytes.Contains(updatedModelBody, []byte(rotatedModelSecret)) {
+		t.Fatalf("update Model response status=%d body=%s", modelUpdateResponse.StatusCode, updatedModelBody)
+	}
 
 	client := anthropic.NewClient(
 		option.WithAPIKey("test"), option.WithBaseURL("http://"+listener.Addr().String()),
@@ -242,8 +272,9 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		installed.Environment.ID != environment.ID || installed.AssignmentID == "" {
 		t.Fatalf("installed WorkSpec = %#v", installed)
 	}
-	if installed.Agent.Model.ID != "claude-sonnet-4-6" ||
-		installed.Agent.Model.Provider != "anthropic" || installed.Agent.Model.APIKey != modelSecret {
+	if installed.Agent.Model.ID != "claude-sonnet-4-6" || installed.Agent.Model.Provider != "anthropic" ||
+		installed.Agent.Model.BaseURL != "https://model.example.test" ||
+		installed.Agent.Model.APIKey != rotatedModelSecret {
 		t.Fatalf("installed Model snapshot = %#v", installed.Agent.Model)
 	}
 
