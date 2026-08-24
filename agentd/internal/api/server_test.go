@@ -157,6 +157,30 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if err != nil {
 		t.Fatalf("create Agent through public control plane: %v", err)
 	}
+	updatedDescription := "contract-test-v2"
+	agent, err = client.Beta.Agents.Update(ctx, agent.ID, anthropic.BetaAgentUpdateParams{
+		Version: param.NewOpt(agent.Version), Description: param.NewOpt(updatedDescription),
+	})
+	if err != nil {
+		t.Fatalf("update Agent through public control plane: %v", err)
+	}
+	if agent.Version != 2 || agent.Description != updatedDescription {
+		t.Fatalf("updated Agent = %#v", agent)
+	}
+	versions, err := client.Beta.Agents.Versions.List(ctx, agent.ID, anthropic.BetaAgentVersionListParams{})
+	if err != nil {
+		t.Fatalf("list Agent versions through public control plane: %v", err)
+	}
+	if len(versions.Data) != 2 || versions.Data[0].Version != 2 || versions.Data[1].Version != 1 {
+		t.Fatalf("Agent versions = %#v", versions.Data)
+	}
+	original, err := client.Beta.Agents.Get(ctx, agent.ID, anthropic.BetaAgentGetParams{Version: param.NewOpt(int64(1))})
+	if err != nil {
+		t.Fatalf("get pinned Agent version through public control plane: %v", err)
+	}
+	if original.Version != 1 || original.Description != "" {
+		t.Fatalf("pinned Agent version = %#v", original)
+	}
 	unrestricted := anthropic.NewBetaUnrestrictedNetworkParam()
 	environment, err := client.Beta.Environments.New(ctx, anthropic.BetaEnvironmentNewParams{
 		Name: "contract-test",
@@ -271,6 +295,29 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	}
 	if len(page.Data) != 2 || page.Data[1].Type != "agent.message" {
 		t.Fatalf("Events after Assignment release = %#v", page.Data)
+	}
+	archived, err := client.Beta.Agents.Archive(ctx, agent.ID, anthropic.BetaAgentArchiveParams{})
+	if err != nil {
+		t.Fatalf("archive Agent through public control plane: %v", err)
+	}
+	if archived.ArchivedAt.IsZero() || archived.Version != agent.Version {
+		t.Fatalf("archived Agent = %#v", archived)
+	}
+	agents, err := client.Beta.Agents.List(ctx, anthropic.BetaAgentListParams{})
+	if err != nil {
+		t.Fatalf("list active Agents through public control plane: %v", err)
+	}
+	if len(agents.Data) != 0 {
+		t.Fatalf("active Agents after archive = %#v", agents.Data)
+	}
+	agents, err = client.Beta.Agents.List(ctx, anthropic.BetaAgentListParams{
+		IncludeArchived: param.NewOpt(true),
+	})
+	if err != nil {
+		t.Fatalf("list archived Agents through public control plane: %v", err)
+	}
+	if len(agents.Data) != 1 || agents.Data[0].ArchivedAt.IsZero() {
+		t.Fatalf("archived Agents = %#v", agents.Data)
 	}
 }
 

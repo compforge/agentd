@@ -97,7 +97,8 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 
 ## 核心对象
 
-- **Agent**：可复用、可版本化的 Harness 配置。
+- **Agent**：可复用、可版本化的 Harness 配置。稳定 Agent 身份持有当前版本和 archive 生命周期，
+  每个 AgentVersion 是具有独立 ID 的不可变配置快照；`(agent_id, version)` 在一个 Agent 内唯一。
 - **Model**：agentd 扩展的外部模型连接注册；资源 ID 供 Agent 引用，上游模型名和凭据不属于 Agent。
 - **Environment**：Sandbox 和运行环境需求，不等于一台正在运行的沙箱。
 - **Session**：用户看到的长期 Agent 身份。Session 可以跨进程、跨 Worker 和跨多次执行存在。
@@ -110,6 +111,10 @@ agentd 只依赖这些组件的能力契约，不依赖其内部对象或进程�
 Session 是产品身份，Work 是执行身份，Harness runtime 和 Sandbox instance 都只是可释放的
 计算资源。内部协议中的 `assignment_id` 是 placement fence：它是为一次节点归属派生的值对象，
 用于拒绝迟到请求和观测，不拥有独立生命周期，也不单独建表或运行 Reconciler。
+
+Session 在创建时把公开的 Agent ID/版本解析为内部 `agent_version_id`，后续执行与恢复始终读取该快照，
+不跟随 Agent 的当前版本漂移。有效更新才创建新版本，no-op 不创建；archive 改变 Agent 身份的生命周期，
+不产生配置版本。archive 后不再创建新 Session，已有 Session 仍可按原版本继续。
 
 ## 服务主流程
 

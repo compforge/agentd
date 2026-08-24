@@ -9,6 +9,7 @@ require (
 	github.com/compforge/agentgo v0.0.1
 	github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f
 	github.com/go-sql-driver/mysql v1.9.3
+	github.com/qiankunli/go-stdx v0.0.4-0.20260824051808-f7f6d7c53de2
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2

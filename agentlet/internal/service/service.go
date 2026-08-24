@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	sessionwork "github.com/compforge/agentd/agentlet/internal/work"
+	"github.com/qiankunli/go-stdx/uuid"
 )
 
 type Service struct {
@@ -138,7 +137,7 @@ func (a *Service) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
 		return Agent{}, invalid("agent name and model are required")
 	}
 	now := time.Now().UTC()
-	value.ID = newID("agent")
+	value.ID = uuid.NewWithPrefix("agent")
 	value.Version = 1
 	value.CreatedAt = now
 	value.UpdatedAt = now
@@ -167,7 +166,7 @@ func (a *Service) CreateEnvironment(ctx context.Context, value Environment) (Env
 		return Environment{}, invalid("environment name is required")
 	}
 	now := time.Now().UTC()
-	value.ID = newID("env")
+	value.ID = uuid.NewWithPrefix("env")
 	value.CreatedAt = now
 	value.UpdatedAt = now
 	if value.Metadata == nil {
@@ -200,7 +199,7 @@ func (a *Service) CreateSession(ctx context.Context, agentID string, version int
 	}
 	now := time.Now().UTC()
 	session := Session{
-		ID:            newID("session"),
+		ID:            uuid.NewWithPrefix("session"),
 		Agent:         agent,
 		EnvironmentID: environmentID,
 		Title:         title,
@@ -644,14 +643,6 @@ func turnInput(event ManagedEvent) TurnInput {
 	}
 	input.ToolResolution = resolution
 	return input
-}
-
-func newID(prefix string) string {
-	bytes := make([]byte, 12)
-	if _, err := rand.Read(bytes); err != nil {
-		panic(fmt.Sprintf("generate %s id: %v", prefix, err))
-	}
-	return prefix + "_" + hex.EncodeToString(bytes)
 }
 
 func invalid(message string) error {

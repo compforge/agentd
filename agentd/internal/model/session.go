@@ -21,7 +21,7 @@ const (
 type Session struct {
 	ID             string
 	AgentID        string
-	AgentVersion   int64
+	AgentVersionID string
 	EnvironmentID  string
 	Title          string
 	Metadata       map[string]string

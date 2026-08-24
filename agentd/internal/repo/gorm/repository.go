@@ -20,19 +20,29 @@ type GORMRepository struct {
 var _ repo.Repository = (*GORMRepository)(nil)
 
 type agentRow struct {
+	ID               string     `gorm:"primaryKey;size:191"`
+	CurrentVersionID string     `gorm:"not null;size:191;index"`
+	ArchivedAt       *time.Time `gorm:"index"`
+	CreatedAt        time.Time  `gorm:"not null"`
+	UpdatedAt        time.Time  `gorm:"not null"`
+}
+
+func (agentRow) TableName() string { return "agents" }
+
+type agentVersionRow struct {
 	ID          string    `gorm:"primaryKey;size:191"`
+	AgentID     string    `gorm:"not null;size:191;uniqueIndex:agent_version_number"`
+	Version     int64     `gorm:"not null;uniqueIndex:agent_version_number"`
 	Name        string    `gorm:"not null;size:255"`
 	Description string    `gorm:"type:text"`
 	ModelID     string    `gorm:"not null;size:191"`
 	System      string    `gorm:"type:text"`
 	Tools       []byte    `gorm:"type:json;not null"`
 	Metadata    []byte    `gorm:"type:json;not null"`
-	Version     int64     `gorm:"not null"`
 	CreatedAt   time.Time `gorm:"not null"`
-	UpdatedAt   time.Time `gorm:"not null"`
 }
 
-func (agentRow) TableName() string { return "agents" }
+func (agentVersionRow) TableName() string { return "agent_versions" }
 
 type modelRow struct {
 	ID         string    `gorm:"primaryKey;size:191"`
@@ -75,7 +85,7 @@ func (workerRow) TableName() string { return "workers" }
 type sessionRow struct {
 	ID             string  `gorm:"primaryKey;size:191"`
 	AgentID        string  `gorm:"not null;size:191;index"`
-	AgentVersion   int64   `gorm:"not null"`
+	AgentVersionID string  `gorm:"not null;size:191;index"`
 	EnvironmentID  string  `gorm:"not null;size:191;index"`
 	Title          string  `gorm:"size:255"`
 	Metadata       []byte  `gorm:"type:json;not null"`
@@ -100,7 +110,7 @@ func NewGORM(db *gormio.DB) (*GORMRepository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("create control-plane repository: database is required")
 	}
-	if err := db.AutoMigrate(&modelRow{}, &agentRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}); err != nil {
+	if err := db.AutoMigrate(&modelRow{}, &agentRow{}, &agentVersionRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}); err != nil {
 		return nil, fmt.Errorf("migrate control-plane store: %w", err)
 	}
 	return &GORMRepository{db: db}, nil
@@ -150,9 +160,9 @@ func (r *GORMRepository) ListModels(ctx context.Context) ([]model.Model, error) 
 }
 
 func (r *GORMRepository) PutAgent(ctx context.Context, agent model.Agent) error {
-	row, err := agentToRow(agent)
-	if err != nil {
-		return err
+	row := agentRow{
+		ID: agent.ID, CurrentVersionID: agent.VersionID, ArchivedAt: agent.ArchivedAt,
+		CreatedAt: agent.CreatedAt, UpdatedAt: agent.UpdatedAt,
 	}
 	if err := r.db.WithContext(ctx).Save(&row).Error; err != nil {
 		return fmt.Errorf("put agent %q: %w", agent.ID, err)
@@ -160,15 +170,71 @@ func (r *GORMRepository) PutAgent(ctx context.Context, agent model.Agent) error 
 	return nil
 }
 
+func (r *GORMRepository) CreateAgentVersion(ctx context.Context, agent model.Agent) error {
+	row, err := agentToVersionRow(agent)
+	if err != nil {
+		return err
+	}
+	if err := r.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return fmt.Errorf("create agent %q version %d: %w", agent.ID, agent.Version, err)
+	}
+	return nil
+}
+
 func (r *GORMRepository) GetAgent(ctx context.Context, agentID string) (model.Agent, error) {
+	return r.getAgent(r.db.WithContext(ctx), agentID)
+}
+
+func (r *GORMRepository) GetAgentForUpdate(ctx context.Context, agentID string) (model.Agent, error) {
+	return r.getAgent(r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}), agentID)
+}
+
+func (r *GORMRepository) getAgent(query *gormio.DB, agentID string) (model.Agent, error) {
 	var row agentRow
-	if err := r.db.WithContext(ctx).Where("id = ?", agentID).First(&row).Error; err != nil {
+	if err := query.Where("id = ?", agentID).First(&row).Error; err != nil {
 		if errors.Is(err, gormio.ErrRecordNotFound) {
 			return model.Agent{}, repo.ErrNotFound
 		}
 		return model.Agent{}, fmt.Errorf("get agent %q: %w", agentID, err)
 	}
-	return row.agent()
+	return r.agentFromVersion(r.db.WithContext(query.Statement.Context), row, row.CurrentVersionID)
+}
+
+func (r *GORMRepository) GetAgentVersion(ctx context.Context, versionID string) (model.Agent, error) {
+	var version agentVersionRow
+	if err := r.db.WithContext(ctx).Where("id = ?", versionID).First(&version).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Agent{}, repo.ErrNotFound
+		}
+		return model.Agent{}, fmt.Errorf("get agent version %q: %w", versionID, err)
+	}
+	var agent agentRow
+	if err := r.db.WithContext(ctx).Where("id = ?", version.AgentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Agent{}, repo.ErrNotFound
+		}
+		return model.Agent{}, fmt.Errorf("get agent %q for version %q: %w", version.AgentID, versionID, err)
+	}
+	return resolveAgentVersion(agent, version)
+}
+
+func (r *GORMRepository) FindAgentVersion(ctx context.Context, agentID string, versionNumber int64) (model.Agent, error) {
+	var agent agentRow
+	if err := r.db.WithContext(ctx).Where("id = ?", agentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Agent{}, repo.ErrNotFound
+		}
+		return model.Agent{}, fmt.Errorf("get agent %q: %w", agentID, err)
+	}
+	var version agentVersionRow
+	if err := r.db.WithContext(ctx).
+		Where("agent_id = ? AND version = ?", agentID, versionNumber).First(&version).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Agent{}, repo.ErrNotFound
+		}
+		return model.Agent{}, fmt.Errorf("find agent %q version %d: %w", agentID, versionNumber, err)
+	}
+	return resolveAgentVersion(agent, version)
 }
 
 func (r *GORMRepository) ListAgents(ctx context.Context) ([]model.Agent, error) {
@@ -178,13 +244,56 @@ func (r *GORMRepository) ListAgents(ctx context.Context) ([]model.Agent, error) 
 	}
 	values := make([]model.Agent, 0, len(rows))
 	for _, row := range rows {
-		value, err := row.agent()
+		value, err := r.agentFromVersion(r.db.WithContext(ctx), row, row.CurrentVersionID)
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (r *GORMRepository) ListAgentVersions(ctx context.Context, agentID string) ([]model.Agent, error) {
+	var agent agentRow
+	if err := r.db.WithContext(ctx).Where("id = ?", agentID).First(&agent).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return nil, repo.ErrNotFound
+		}
+		return nil, fmt.Errorf("get agent %q: %w", agentID, err)
+	}
+	var rows []agentVersionRow
+	if err := r.db.WithContext(ctx).
+		Where("agent_id = ?", agentID).Order("version DESC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list agent %q versions: %w", agentID, err)
+	}
+	values := make([]model.Agent, 0, len(rows))
+	for _, row := range rows {
+		value, err := resolveAgentVersion(agent, row)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (r *GORMRepository) agentFromVersion(query *gormio.DB, agent agentRow, versionID string) (model.Agent, error) {
+	var version agentVersionRow
+	if err := query.Where("id = ?", versionID).First(&version).Error; err != nil {
+		if errors.Is(err, gormio.ErrRecordNotFound) {
+			return model.Agent{}, repo.ErrNotFound
+		}
+		return model.Agent{}, fmt.Errorf("get current version %q for agent %q: %w", versionID, agent.ID, err)
+	}
+	return resolveAgentVersion(agent, version)
+}
+
+func resolveAgentVersion(identity agentRow, version agentVersionRow) (model.Agent, error) {
+	value, err := version.agent(identity)
+	if err == nil && version.ID == identity.CurrentVersionID {
+		value.UpdatedAt = identity.UpdatedAt
+	}
+	return value, err
 }
 
 func (r *GORMRepository) PutEnvironment(ctx context.Context, environment model.Environment) error {
@@ -386,32 +495,35 @@ func workerToRow(worker model.Worker) workerRow {
 	}
 }
 
-func agentToRow(agent model.Agent) (agentRow, error) {
+func agentToVersionRow(agent model.Agent) (agentVersionRow, error) {
 	tools, err := json.Marshal(agent.Tools)
 	if err != nil {
-		return agentRow{}, fmt.Errorf("encode agent %q tools: %w", agent.ID, err)
+		return agentVersionRow{}, fmt.Errorf("encode agent %q tools: %w", agent.ID, err)
 	}
 	metadata, err := json.Marshal(agent.Metadata)
 	if err != nil {
-		return agentRow{}, fmt.Errorf("encode agent %q metadata: %w", agent.ID, err)
+		return agentVersionRow{}, fmt.Errorf("encode agent %q metadata: %w", agent.ID, err)
 	}
-	return agentRow{
-		ID: agent.ID, Name: agent.Name, Description: agent.Description, ModelID: agent.ModelID,
-		System: agent.System, Tools: tools, Metadata: metadata, Version: agent.Version,
-		CreatedAt: agent.CreatedAt, UpdatedAt: agent.UpdatedAt,
+	return agentVersionRow{
+		ID: agent.VersionID, AgentID: agent.ID, Version: agent.Version,
+		Name: agent.Name, Description: agent.Description, ModelID: agent.ModelID,
+		System: agent.System, Tools: tools, Metadata: metadata,
+		CreatedAt: agent.UpdatedAt,
 	}, nil
 }
 
-func (r agentRow) agent() (model.Agent, error) {
+func (r agentVersionRow) agent(identity agentRow) (model.Agent, error) {
 	value := model.Agent{
-		ID: r.ID, Name: r.Name, Description: r.Description, ModelID: r.ModelID,
-		System: r.System, Version: r.Version, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		ID: identity.ID, VersionID: r.ID,
+		Name: r.Name, Description: r.Description, ModelID: r.ModelID,
+		System: r.System, Version: r.Version, ArchivedAt: identity.ArchivedAt,
+		CreatedAt: identity.CreatedAt, UpdatedAt: r.CreatedAt,
 	}
 	if err := json.Unmarshal(r.Tools, &value.Tools); err != nil {
-		return model.Agent{}, fmt.Errorf("decode agent %q tools: %w", r.ID, err)
+		return model.Agent{}, fmt.Errorf("decode agent %q version %d tools: %w", identity.ID, r.Version, err)
 	}
 	if err := json.Unmarshal(r.Metadata, &value.Metadata); err != nil {
-		return model.Agent{}, fmt.Errorf("decode agent %q metadata: %w", r.ID, err)
+		return model.Agent{}, fmt.Errorf("decode agent %q version %d metadata: %w", identity.ID, r.Version, err)
 	}
 	return value, nil
 }
@@ -459,7 +571,7 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 		return sessionRow{}, fmt.Errorf("encode session %q metadata: %w", session.ID, err)
 	}
 	return sessionRow{
-		ID: session.ID, AgentID: session.AgentID, AgentVersion: session.AgentVersion,
+		ID: session.ID, AgentID: session.AgentID, AgentVersionID: session.AgentVersionID,
 		EnvironmentID: session.EnvironmentID, Title: session.Title, Metadata: metadata,
 		Status: string(session.Status), Revision: session.Revision,
 		Harness: session.Harness, HarnessVersion: session.HarnessVersion,
@@ -473,7 +585,7 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 
 func (r sessionRow) session() (model.Session, error) {
 	value := model.Session{
-		ID: r.ID, AgentID: r.AgentID, AgentVersion: r.AgentVersion,
+		ID: r.ID, AgentID: r.AgentID, AgentVersionID: r.AgentVersionID,
 		EnvironmentID: r.EnvironmentID, Title: r.Title,
 		Status: model.SessionStatus(r.Status), Revision: r.Revision,
 		Harness: r.Harness, HarnessVersion: r.HarnessVersion,
