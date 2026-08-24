@@ -28,7 +28,8 @@ Agentlet 的 HTTP 面只供 agentd 调用，统一位于 `/internal/v1`；Claude
 Assignment 与 observed state，不成为第二套产品 API。
 
 Assignment 是 Control Plane 的路由权威，Agentlet 的进程内 runtime 只是缓存。进程重启后，Agentlet
-不得从本地内存猜测归属；它根据请求携带的 Assignment 和精确 `ResumeRef` 重建执行现场。
+不得从本地内存猜测归属；它根据请求携带的 Assignment 和已观测 `ResumeRef`，结合共享 Checkpoint
+Store 与 Ledger 重建执行现场。
 
 Connector 在转发执行动作前先幂等安装当前 Assignment 的完整 `WorkSpec`。相同
 Assignment 的重复快照不能覆盖 Agentlet 已推进的 ResumePoint；执行状态读取也必须携带相同的 Worker
@@ -67,7 +68,8 @@ Work 是 Agentlet 中可冻结、迁移和恢复的长期逻辑对象；它不�
 Agentlet 通过 Agent Ledger 提供的两个独立能力保存执行材料：
 
 - **Checkpoint Store** 保存 Harness Adapter 生成的不透明状态。格式、版本和恢复语义属于具体
-  Harness；Agentlet 与 agentd 只传递精确的 `ResumeRef`，不解释内容。
+  Harness；Agentlet 向 agentd 上报精确的 `ResumeRef`，但恢复时允许共享 Store 中同一 key 的 revision
+  领先于 Control State，因为 checkpoint 保存与 Control State observation 之间存在崩溃窗口。
 - **Ledger** 追加跨 Harness 的规范化执行事实。Harness recording adapter 负责把原生 hook 翻译为
   Run、Lane、Turn、Action 和 Attempt；模型与工具调用遵守 write-before-execute。
 
@@ -83,8 +85,8 @@ Ledger 的对象模型、事件协议、append-only 约束、Checkpoint envelope
 ## 冻结与恢复
 
 Agentlet 在 Harness 的安全边界请求 Adapter 保存 checkpoint，得到不透明 `ResumeRef` 后，再连同
-Assignment fence 上报 agentd。只有 agentd 条件提交 ResumePoint 后，才能把该 Session 视为可在其它
-Worker 恢复并释放当前资源。
+Assignment fence 上报 agentd。正常卸载只有在 agentd 条件提交 ResumePoint 后进行；Worker 意外消失
+时，已经写入共享 Store、但尚未来得及被 agentd 观测的 checkpoint 可能领先于 Control State。
 
 当前冻结由 Harness `Run` 到达稳定边界并提交 checkpoint 隐式完成，不要求 Harness 长期保留一个
 可暂停的进程，也不要求单独提供 `Freeze` 方法。等待普通用户输入或 `requires_action` 时，本轮先持久化
@@ -99,8 +101,11 @@ Adapter saves checkpoint
   → Agentlet releases runtime
 ```
 
-恢复时 Agentlet 校验 Harness/codec 兼容性，并结合 Ledger 未决 Attempt 判断是否可以继续。已经完成的
-结果只幂等吸收到 Harness State，不重新执行。Action 在首次执行前固化 `Effect(kind, idempotency)`：
+恢复时 Agentlet 先验证 Control State 指向的 checkpoint 确实属于当前 Session key 和 revision chain，
+再读取该 key 的最新 revision。较新的 checkpoint 可以作为恢复基线；Control State 指向缺失或其它
+Session 的 checkpoint、或者 Store 反而落后于 Control State 时保持 fail-closed。随后结合 Ledger
+未决 Attempt 判断是否可以继续：已经完成的结果只幂等吸收到 Harness State，不重新执行。Action 在
+首次执行前固化 `Effect(kind, idempotency)`：
 `none/read` 和已知幂等的 `write` 可以在原 Action 下递增 `attempt_no` 后重试；`write+none/unknown`、
 `unknown` 或缺失声明都保持 fail-closed。Ledger 只保存 Effect 事实，是否重试由 Agentlet 的 Harness
 恢复策略决定。
@@ -120,7 +125,9 @@ goroutine 停止后关闭存储。
 
 提交顺序必须保证：先保存可读取的 checkpoint，再把精确 `ResumeRef` 上报 agentd；先追加 Attempt 的
 requested 事实，再发起模型或工具调用；拿到结果后再追加 completed / failed。跨 Control State、
-Checkpoint 和 Ledger 不伪装成 exactly-once，而是通过稳定 ID、条件提交和恢复对账收敛。
+Checkpoint 和 Ledger 不伪装成 exactly-once，而是通过稳定 ID、checkpoint key 级 revision chain、
+条件提交和恢复对账收敛。也正因为 checkpoint 先写，恢复协议必须处理它领先于 Control State 的正常
+崩溃窗口。
 
 ## Sandbox Engine
 

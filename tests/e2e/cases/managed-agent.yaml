@@ -42,7 +42,7 @@ cases:
           - {path: "turns[].marker", op: eq, value: AGENTD_E2E_OK}
     binding:
       symbol_id: agentlet/internal/harness/agentgo.go::AgentGoRunner.Run
-      spec: Each turn restores the exact Session checkpoint and executes tools through its Sandbox.
+      spec: Each turn restores the latest validated Session checkpoint and executes tools through its Sandbox.
   - id: worker_replacement_resume
     desc: One managed Session resumes on a new logical Worker after its old Worker Pods disappear.
     input: {operation: replace-worker-between-sandbox-turns, expected_marker: AGENTD_E2E_OK}
