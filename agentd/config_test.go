@@ -85,14 +85,14 @@ func TestLoadConfigAllowsEnvironmentOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRequiresControllerLeaseToOutliveRequest(t *testing.T) {
+func TestLoadConfigAllowsControllerRequestLongerThanRenewedLease(t *testing.T) {
 	t.Setenv("AGENTD_API_KEY", "test")
 	t.Setenv("AGENTD_WORKER_SOURCE", "kubernetes")
 	t.Setenv("AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT", "30s")
 	t.Setenv("AGENTD_WORKER_CONTROLLER_LEASE_TTL", "20s")
 
-	if _, err := loadConfig(); err == nil {
-		t.Fatal("loadConfig() error = nil, want invalid Worker controller lease error")
+	if _, err := loadConfig(); err != nil {
+		t.Fatalf("loadConfig() error = %v, want renewable lease accepted", err)
 	}
 }
 

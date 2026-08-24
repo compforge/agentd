@@ -38,8 +38,10 @@ func (l *contendedLocker) Lock(
 		l.remainingConflicts--
 		return nil, controllock.ErrLocked
 	}
-	return &controllock.Token{Resource: poolLockResource, LockerID: "test"}, nil
+	return &controllock.Token{Resource: poolLockResource, LockerID: "test", LeaseTTL: time.Second}, nil
 }
+
+func (*contendedLocker) Renew(context.Context, *controllock.Token) error { return nil }
 
 func (*contendedLocker) Unlock(context.Context, *controllock.Token) error {
 	return nil
@@ -137,6 +139,18 @@ func TestFullReconcileWaitsForLeaseThenReclaimsAndReplaces(t *testing.T) {
 	}
 	if len(infrastructure.destroyed) != 1 || infrastructure.destroyed[0] != oldWorker.ID {
 		t.Fatalf("destroyed Workers = %#v", infrastructure.destroyed)
+	}
+}
+
+func TestValidateConfigAllowsControllerTimeoutLongerThanRenewedLease(t *testing.T) {
+	err := validateConfig(Config{
+		ReconcilerInterval: time.Second,
+		ControllerTimeout:  2 * time.Second,
+		ControllerLeaseTTL: 300 * time.Millisecond,
+		GCInterval:         time.Second,
+	})
+	if err != nil {
+		t.Fatalf("validateConfig() error = %v, want renewable lease accepted", err)
 	}
 }
 
