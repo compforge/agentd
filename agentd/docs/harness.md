@@ -69,7 +69,8 @@ Harness runtime 是本轮执行资源，不是 Session 本身。当前 AgentGo A
 
 Harness State 由对应 Adapter 解释。agentd 和 Agentlet 只传递 `ResumeRef` 和 revision，不要求不同
 Harness 转换成统一消息或 checkpoint schema。当前 AgentGo Adapter 使用版本化 opaque record 追加
-已提交的原生 message，并以 revision 做乐观并发检查。
+已提交的原生 message，并以 revision 做乐观并发检查。恢复器先验证 Control State 指向的 revision，
+再采用同一 checkpoint key 上可能更高的已持久 revision。
 
 Adapter 恢复同一 input 时必须保证：
 

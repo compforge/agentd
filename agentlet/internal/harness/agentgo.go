@@ -62,7 +62,7 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session Session) (st
 
 // Run executes one AgentGo turn and projects only durable assistant messages.
 //
-// +spec=`Each AgentGo turn restores the exact Session checkpoint, uses its configured model and Sandbox, persists only complete assistant messages, and keeps model/tool attempts auditable`
+// +spec=`Each AgentGo turn restores the latest validated Session checkpoint, uses its configured model and Sandbox, persists only complete assistant messages, and keeps model/tool attempts auditable`
 // +case:id=model_question_answer,desc=`answer through the configured streaming model provider`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
 // +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
 // +case:id=sandbox_resume,desc=`send two tool-using turns to one managed Session`,input=`each turn requires the isolated bash tool and the same final marker`,expect=`both turns finish, the second restores the first checkpoint, and durable Event history contains both answers`,forbid=`losing Session identity, bypassing the Sandbox, or duplicating a completed input`,group=system
@@ -79,14 +79,17 @@ func (r *AgentGoRunner) Run(
 	if input.ID == "" {
 		return TurnResult{}, fmt.Errorf("run AgentGo session: input ID is required")
 	}
-	messages, revision, err := r.loadMessages(
+	messages, checkpointID, revision, err := r.loadMessages(
 		ctx, session.ResumeRef, r.checkpointKey(session.ID), session.ResumeRevision,
 	)
 	if err != nil {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf("restore AgentGo session: %w", err)
+		return TurnResult{}, fmt.Errorf("restore AgentGo session: %w", err)
+	}
+	currentResumePoint := func() TurnResult {
+		return TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}
 	}
 	if err := projectAssistantMessages(messages, input.ID, emit); err != nil {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf("project restored AgentGo messages: %w", err)
+		return currentResumePoint(), fmt.Errorf("project restored AgentGo messages: %w", err)
 	}
 	runID := "input/" + input.ID
 	action := resumePrompt
@@ -99,17 +102,17 @@ func (r *AgentGoRunner) Run(
 		action = resumeContinue
 	}
 	if err != nil {
-		return TurnResult{ResumeRevision: revision}, err
+		return currentResumePoint(), err
 	}
 	if action == resumeCompleted {
-		return TurnResult{ResumeRef: session.ResumeRef, ResumeRevision: revision}, nil
+		return currentResumePoint(), nil
 	}
 	if strings.TrimSpace(session.Agent.Model.APIKey) == "" {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf("run AgentGo session: model API key is not configured")
+		return currentResumePoint(), fmt.Errorf("run AgentGo session: model API key is not configured")
 	}
 	provider := strings.ToLower(strings.TrimSpace(session.Agent.Model.Provider))
 	if !llm.IsProviderRegistered(provider) {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf(
+		return currentResumePoint(), fmt.Errorf(
 			"run AgentGo session: model provider %q is not registered", session.Agent.Model.Provider,
 		)
 	}
@@ -119,22 +122,21 @@ func (r *AgentGoRunner) Run(
 		"agentgo",
 	))
 	if err != nil {
-		return TurnResult{ResumeRevision: revision}, err
+		return currentResumePoint(), err
 	}
 	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
 		Store: r.config.Ledger, SessionID: session.ID, RunID: runID, Actor: actor,
 	})
 	if err != nil {
-		return TurnResult{ResumeRevision: revision}, fmt.Errorf("open AgentGo run recorder: %w", err)
+		return currentResumePoint(), fmt.Errorf("open AgentGo run recorder: %w", err)
 	}
 	if recorder.Lane().LastSeq == 0 {
 		if _, err := recorder.StartRun(ctx, map[string]any{"agent_version": session.Agent.Version}); err != nil {
-			return TurnResult{ResumeRevision: revision}, fmt.Errorf("record AgentGo run start: %w", err)
+			return currentResumePoint(), fmt.Errorf("record AgentGo run start: %w", err)
 		}
 	}
-	checkpointID := session.ResumeRef
 	finish := func(runErr error) (TurnResult, error) {
-		return TurnResult{ResumeRef: checkpointID, ResumeRevision: revision}, r.finishRun(
+		return currentResumePoint(), r.finishRun(
 			ctx, session.ID, runID, actor, runErr,
 		)
 	}
@@ -323,43 +325,105 @@ func (r *AgentGoRunner) loadMessages(
 	resumeRef string,
 	checkpointKey string,
 	expectedRevision int64,
-) ([]agentgo.AgentMessage, int64, error) {
-	if resumeRef == checkpointKey && expectedRevision == 0 {
-		return nil, 0, nil
-	}
-	checkpoint, exists, err := r.config.Checkpoints.GetCheckpoint(ctx, resumeRef)
+) ([]agentgo.AgentMessage, string, int64, error) {
+	checkpoint, exists, err := r.resolveCheckpoint(ctx, resumeRef, checkpointKey, expectedRevision)
 	if err != nil {
-		return nil, 0, err
+		return nil, "", 0, err
 	}
 	if !exists {
-		return nil, 0, fmt.Errorf("AgentGo checkpoint %q does not exist", resumeRef)
-	}
-	if checkpoint.Key != checkpointKey {
-		return nil, checkpoint.Revision, fmt.Errorf("AgentGo checkpoint belongs to %q", checkpoint.Key)
-	}
-	if checkpoint.Revision != expectedRevision {
-		return nil, checkpoint.Revision, fmt.Errorf(
-			"AgentGo checkpoint revision mismatch: control=%d checkpoint=%d",
-			expectedRevision,
-			checkpoint.Revision,
-		)
+		return nil, resumeRef, 0, nil
 	}
 	if checkpoint.Format != agentGoCheckpointFormat {
-		return nil, checkpoint.Revision, fmt.Errorf("unsupported AgentGo checkpoint format %q", checkpoint.Format)
+		return nil, "", 0, fmt.Errorf("unsupported AgentGo checkpoint format %q", checkpoint.Format)
 	}
 	encoded, err := json.Marshal(checkpoint.State["messages"])
 	if err != nil {
-		return nil, checkpoint.Revision, fmt.Errorf("encode AgentGo checkpoint messages: %w", err)
+		return nil, "", 0, fmt.Errorf("encode AgentGo checkpoint messages: %w", err)
 	}
 	var concrete []agentgo.Message
 	if err := json.Unmarshal(encoded, &concrete); err != nil {
-		return nil, checkpoint.Revision, fmt.Errorf("decode AgentGo checkpoint revision %d: %w", checkpoint.Revision, err)
+		return nil, "", 0, fmt.Errorf("decode AgentGo checkpoint revision %d: %w", checkpoint.Revision, err)
 	}
 	messages := make([]agentgo.AgentMessage, len(concrete))
 	for index := range concrete {
 		messages[index] = concrete[index]
 	}
-	return messages, checkpoint.Revision, nil
+	return messages, checkpoint.ID, checkpoint.Revision, nil
+}
+
+// resolveCheckpoint validates the Control State recovery point, then advances
+// to a newer checkpoint that the previous Worker persisted before agentd could
+// observe it.
+//
+// +spec=`A Control State ResumeRef is a validated lower bound; recovery adopts a newer checkpoint only from the same Session key and revision chain`
+// +case:id=mid_turn_worker_loss,desc=`force-delete a Worker after it persists Harness state but before agentd observes the ResumePoint`,expect=`the replacement Agentlet adopts the newer same-Session checkpoint and reconciles Ledger Attempts`,forbid=`starting again from stale Control State or consuming the input as retries_exhausted`,group=system
+// +why=`Checkpoint persistence precedes asynchronous Control State observation, so abrupt Worker loss can legitimately leave the shared Checkpoint Store ahead of agentd`
+// +link=agentd/docs/agentlet.md
+// +link=tests/e2e/cases/managed-agent.yaml
+func (r *AgentGoRunner) resolveCheckpoint(
+	ctx context.Context,
+	resumeRef string,
+	checkpointKey string,
+	expectedRevision int64,
+) (agentledger.Checkpoint, bool, error) {
+	if expectedRevision < 0 {
+		return agentledger.Checkpoint{}, false, fmt.Errorf(
+			"AgentGo checkpoint revision must not be negative: %d", expectedRevision,
+		)
+	}
+	if expectedRevision == 0 {
+		if resumeRef != checkpointKey {
+			return agentledger.Checkpoint{}, false, fmt.Errorf(
+				"AgentGo initial checkpoint reference %q does not match key %q", resumeRef, checkpointKey,
+			)
+		}
+	} else {
+		controlCheckpoint, exists, err := r.config.Checkpoints.GetCheckpoint(ctx, resumeRef)
+		if err != nil {
+			return agentledger.Checkpoint{}, false, fmt.Errorf("load AgentGo control checkpoint: %w", err)
+		}
+		if !exists {
+			return agentledger.Checkpoint{}, false, fmt.Errorf("AgentGo control checkpoint %q does not exist", resumeRef)
+		}
+		if controlCheckpoint.Key != checkpointKey {
+			return agentledger.Checkpoint{}, false, fmt.Errorf(
+				"AgentGo control checkpoint belongs to %q, want %q", controlCheckpoint.Key, checkpointKey,
+			)
+		}
+		if controlCheckpoint.Revision != expectedRevision {
+			return agentledger.Checkpoint{}, false, fmt.Errorf(
+				"AgentGo control checkpoint revision mismatch: control=%d checkpoint=%d",
+				expectedRevision,
+				controlCheckpoint.Revision,
+			)
+		}
+	}
+
+	latest, exists, err := r.config.Checkpoints.LoadLatestCheckpoint(ctx, checkpointKey)
+	if err != nil {
+		return agentledger.Checkpoint{}, false, fmt.Errorf("load latest AgentGo checkpoint: %w", err)
+	}
+	if !exists {
+		if expectedRevision == 0 {
+			return agentledger.Checkpoint{}, false, nil
+		}
+		return agentledger.Checkpoint{}, false, fmt.Errorf(
+			"AgentGo checkpoint key %q has no revisions", checkpointKey,
+		)
+	}
+	if latest.Revision < expectedRevision {
+		return agentledger.Checkpoint{}, false, fmt.Errorf(
+			"AgentGo latest checkpoint revision %d is behind control revision %d",
+			latest.Revision,
+			expectedRevision,
+		)
+	}
+	if latest.Revision == expectedRevision && expectedRevision > 0 && latest.ID != resumeRef {
+		return agentledger.Checkpoint{}, false, fmt.Errorf(
+			"AgentGo checkpoint revision %d has unexpected identity %q", latest.Revision, latest.ID,
+		)
+	}
+	return latest, true, nil
 }
 
 func (r *AgentGoRunner) messageCommitter(

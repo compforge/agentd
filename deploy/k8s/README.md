@@ -31,8 +31,13 @@ Client ── Agent API ──►│ agentd Deployment (replicas=N)│
                     └────────────────────────────┘
 ```
 
-agentd Deployment 与所有 Worker Pod 通过同一个 MySQL Service 访问 Control State、Checkpoint 和
-Agent Ledger。默认 Chart 创建单实例 MySQL Deployment 与 PVC；配置外部 DSN 时不创建内置 MySQL。
+一个逻辑 agentd Control Plane（可以有多个副本）与它管理的所有 Worker Pod 位于同一个 Kubernetes
+namespace；agentd 只观察和管理该 namespace 内的 Worker。namespace 是部署与控制器作用域，不进入
+Claude Managed Agents API 的资源模型；相互独立的 Control Plane 应部署到不同 namespace。
+
+数据库不受上述 namespace 边界约束。agentd 与所有 Agentlet 访问同一个 MySQL：默认 Chart 仅为
+Quick Start 在同一 namespace 创建单实例 MySQL Deployment、Service 与 PVC；生产环境通常通过外部
+DSN 连接独立运维的 MySQL，配置外部 DSN 时 Chart 不创建内置 MySQL。
 
 每个 Worker 使用独立 Pod，不放进共享 Deployment。这样 agentd 可以精确 drain 和删除一个空闲
 Worker，不会让 Kubernetes 在缩容时选中仍承载 Session 的 Pod。Worker 使用 agentd 生成的 UUID，

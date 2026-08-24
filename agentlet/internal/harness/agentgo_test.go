@@ -42,14 +42,15 @@ func TestAgentGoMessagesUseCheckpointStore(t *testing.T) {
 	}
 	firstCheckpointID := checkpointID
 
-	messages, loadedRevision, err := runner.loadMessages(
+	messages, loadedRef, loadedRevision, err := runner.loadMessages(
 		context.Background(), firstCheckpointID, "agentgo/session-1", revision,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loadedRevision != 1 || len(messages) != 1 || messages[0].TextContent() != "hello" {
-		t.Fatalf("messages=%#v revision=%d", messages, loadedRevision)
+	if loadedRef != firstCheckpointID || loadedRevision != 1 ||
+		len(messages) != 1 || messages[0].TextContent() != "hello" {
+		t.Fatalf("messages=%#v ref=%q revision=%d", messages, loadedRef, loadedRevision)
 	}
 	checkpoint, exists, err := state.GetCheckpoint(context.Background(), firstCheckpointID)
 	if err != nil || !exists {
@@ -63,20 +64,98 @@ func TestAgentGoMessagesUseCheckpointStore(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	firstMessages, _, err := runner.loadMessages(
+	latestCheckpointID := checkpointID
+	staleControlMessages, staleControlRef, staleControlRevision, err := runner.loadMessages(
 		context.Background(), firstCheckpointID, "agentgo/session-1", 1,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	latestMessages, latestRevision, err := runner.loadMessages(
+	if staleControlRef != latestCheckpointID || staleControlRevision != 2 || len(staleControlMessages) != 2 {
+		t.Fatalf(
+			"stale control loaded messages=%d ref=%q revision=%d, want latest %q/2",
+			len(staleControlMessages), staleControlRef, staleControlRevision, latestCheckpointID,
+		)
+	}
+	initialControlMessages, initialControlRef, initialControlRevision, err := runner.loadMessages(
+		context.Background(), "agentgo/session-1", "agentgo/session-1", 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialControlRef != latestCheckpointID || initialControlRevision != 2 || len(initialControlMessages) != 2 {
+		t.Fatalf(
+			"initial control loaded messages=%d ref=%q revision=%d, want latest %q/2",
+			len(initialControlMessages), initialControlRef, initialControlRevision, latestCheckpointID,
+		)
+	}
+	latestMessages, latestRef, latestRevision, err := runner.loadMessages(
 		context.Background(), checkpointID, "agentgo/session-1", revision,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(firstMessages) != 1 || len(latestMessages) != 2 || latestRevision != 2 {
-		t.Fatalf("first=%d latest=%d revision=%d", len(firstMessages), len(latestMessages), latestRevision)
+	if len(latestMessages) != 2 || latestRef != latestCheckpointID || latestRevision != 2 {
+		t.Fatalf("latest=%d ref=%q revision=%d", len(latestMessages), latestRef, latestRevision)
+	}
+}
+
+func TestAgentGoRunAdoptsCheckpointAheadOfControlState(t *testing.T) {
+	ctx := context.Background()
+	state := agentledger.NewMemoryEventStore()
+	actor := agentledger.NewActor("agent", "agentgo")
+	if err := state.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: state, SessionID: "session-1", RunID: "input/input-1", Actor: actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.StartRun(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	runner := &AgentGoRunner{config: AgentGoRunnerConfig{
+		OperationTimeout: time.Second,
+		Ledger:           state,
+		Checkpoints:      state,
+	}}
+	revision := int64(0)
+	checkpointID := "agentgo/session-1"
+	commit := runner.messageCommitter(
+		"agentgo/session-1", actor.ID, "session-1", "input/input-1", nil, &checkpointID, &revision,
+	)
+	input := agentgo.UserMsg("hello")
+	input.Metadata = map[string]any{agentdInputID: "input-1"}
+	if err := commit(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(agentgo.Message{
+		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	latestCheckpointID := checkpointID
+
+	var emitted []ManagedEvent
+	result, err := runner.Run(ctx, Session{
+		ID: "session-1", ResumeRef: "agentgo/session-1", ResumeRevision: 0,
+	}, TurnInput{ID: "input-1", Text: "hello"}, func(event ManagedEvent) error {
+		emitted = append(emitted, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResumeRef != latestCheckpointID || result.ResumeRevision != 2 {
+		t.Fatalf("resume point = %q/%d, want %q/2", result.ResumeRef, result.ResumeRevision, latestCheckpointID)
+	}
+	if len(emitted) != 1 || emitted[0]["type"] != "agent.message" {
+		t.Fatalf("emitted events = %#v", emitted)
+	}
+	if latest, exists, loadErr := state.LoadLatestCheckpoint(ctx, "agentgo/session-1"); loadErr != nil || !exists || latest.Revision != 2 {
+		t.Fatalf("latest checkpoint exists=%v revision=%d err=%v", exists, latest.Revision, loadErr)
 	}
 }
 

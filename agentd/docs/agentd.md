@@ -278,8 +278,9 @@ Agentlet 协议适配、显式超时、连接池和 trace context 透传属于 C
 
 ## Control State 与恢复
 
-Control State 保存 Session 当前状态、有效 placement、待处理输入和精确 `ResumeRef`，回答“现在应由
-谁、从哪里继续”。Checkpoint、Ledger 与恢复提交顺序见 [agentlet.md](agentlet.md)。
+Control State 保存 Session 当前状态、有效 placement、待处理输入和最后观测到的精确 `ResumeRef`，
+回答“现在应由谁、至少从哪里继续”。Checkpoint 先于异步 observation 持久化，因此恢复器还要验证并
+采用同一 key 上可能领先的 revision。Checkpoint、Ledger 与恢复提交顺序见 [agentlet.md](agentlet.md)。
 
 Worker observation 过期、不存在或不 Ready 后，agentd 不能仅凭路由失败重放执行。它先释放或替换
 placement，再根据 ResumeRef 和 Ledger 未决 Attempt 判断能否在新 Worker 恢复。工具副作用结果不明

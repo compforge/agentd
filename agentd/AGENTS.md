@@ -69,32 +69,17 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 
 ## 关键约定
 
-1. agentd 对外 HTTP 路径、资源形状、Session 状态和 Event 命名以 Claude Managed Agents API
-   为准；Agentlet 只暴露 `/internal/v1` 执行协议。
-2. 用户 Event 先持久化再确认接收；模型和工具调用必须通过 Agent Ledger AgentGo
-   Adapter 的 write-before-execute 边界。
-3. agentd 把一个 Agentlet Pod 建模为一个 Worker，按最新 observation、容量和当前绑定
-   Session 数调度；Agentlet 不主动注册或发心跳。
-4. Worker Observer 与 Session Observer 分别独占对应 `observer_status` 的写权；Scheduler 只根据
-   Control State 中的 observation、Session placement 和容量做无 I/O 决策，不访问 Kubernetes 或
-   Agentlet。Session Reconciler 是 placement 动作的唯一 owner；Worker Pool 串行规划 Worker Pod
-   创建、回收与预热容量。两个控制环都可被其它组件即时通知，但通知只加速基于 DB 的收敛，不承载状态。
-   Worker Pod Informer 同样只触发 Observer 从 cache 重算，不把事件对象当作额外状态源。
-   Connector 只按 placement fence 转发 WorkSpec、wake、interrupt 和状态读取。公开 Event 由 agentd
-   直接读写共享 Ledger。
-5. 进程恢复由 Control State 中的精确 ResumeRef 定位 Agent Ledger Checkpoint，并结合 Ledger 未决 Attempt
-   判断是否安全继续；同一 input 不重复注入，结果不明确且不可安全重试的 Tool Attempt 不自动重放。
-   Agentlet 将其投影为 `idle/requires_action`，调用方通过 Claude 原生 `user.tool_confirmation` 或
-   `user.tool_result` 对账；一次 allow 只授权一个精确 Attempt 的下一次物理执行。
-6. AgentGo 运行在 Agentlet 进程。Agentlet 根据稳定 Session 身份调用 Sandbox Engine；agentd 不持有
-   SandboxKey、实例引用或物理位置。Quick Start 可以共置 sidecar，正式部署由独立 Sandbox Control
-   Plane 保证执行环境可用。
-7. 所有外部 HTTP、模型和存储调用显式配置超时；子进程退出和服务关闭必须收敛
-   正在执行的 Session。
-8. Model 是 agentd 独有的外部模型连接注册资源。Agentlet 不提供 Model API、不查询 Model 表；agentd
-   在安装 WorkSpec 时下发已解析连接。API key 不进入公开读响应、Event、Ledger 或日志。
-9. agentd 的公开 `/v1` API 使用部署级 `x-api-key` 认证，`/healthz` 是唯一匿名入口。这个 key 只建立
-   Control Plane 信任边界，不表达 tenant、account 或资源级授权。
+1. agentd 拥有 Claude Managed Agents 兼容 API、全局资源和 Control State；Agentlet 只通过
+   `/internal/v1` 执行当前 Assignment，不提供公开资源 API，也不拥有全局 placement。
+2. durable input、Harness Checkpoint 与 Agent Ledger 共同构成恢复材料：外部调用遵守
+   write-before-execute，恢复可以采用同一 Session key 上领先于 Control State 的已验证 checkpoint，
+   但结果不明的非幂等副作用保持 fail-closed。具体顺序见 `docs/agentlet.md` 和 `docs/harness.md`。
+3. Control Plane 的事实、决策、动作和数据面各有唯一 owner：Observer 写 observation，Scheduler 做
+   纯 placement 决策，Session Reconciler 修改 placement，Worker Pool 管理 Worker 容量，Connector
+   只按 Assignment 转发。详细收敛模型见 `docs/agentd.md`。
+4. Harness 与 Sandbox Engine 都是可替换执行依赖，不得把原生状态或物理位置泄漏进公开 API 和
+   Control Plane。Quick Start 的共置拓扑不改变生产边界；认证、凭据、超时和关闭约束见
+   `docs/kernel.md`、`docs/sandbox-engine.md` 及部署文档。
 
 ## References
 
