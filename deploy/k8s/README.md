@@ -79,7 +79,7 @@ Event demand
 
 Session Reconciler 优先使用 Ready Worker，其次预留 creating Worker 的剩余 slot，避免并发请求重复创建。
 Worker Pool 只实现已发布的 Worker row、回收过期空闲 Worker，并补足 `minWorkers/minIdleWorkers`。
-创建与回收在同一短 lease 内先回收、后计算缺口，避免两个定时循环互相抢锁而饿死一方。创建采用有上限的小批次；
+创建与回收在同一可续租 lease 内先回收、后计算缺口，避免两个定时循环互相抢锁而饿死一方。创建采用有上限的小批次；
 创建前直接读取 Kubernetes，如果受管 Pod 为 Pending 或 Unschedulable，则把它作为 Kubernetes 对 agentd
 的背压，本轮不再创建 Pod 或补预热。其它决策等待 Observer facts 落库后再进行。
 
@@ -120,13 +120,14 @@ DB Record GC 只分批删除超过保留期的 `retired` Worker 行。删除时�
 - Connector 遇到过期 endpoint 或连接失败时重新解析 facts，不自行迁移 Session 或创建 Worker。
 
 agentd 可以运行多个副本，每个副本都提供 API、Scheduler 和 Connector，也运行 Observer、Worker Pool
-与 Record GC，不依赖全局 Leader。一次创建/回收计划用同一短 DB lease 串行化；遇到 lease 竞争时，
+与 Record GC，不依赖全局 Leader。一次创建/回收计划用同一可续租 DB lease 串行化；遇到 lease 竞争时，
 当前 pass 在 controller timeout 内等待重试，而不是把跳过误报为成功；单个 Worker 的
 回收权由 phase CAS 决定；Observer 通过 freshness fence 合并事实；外部 `Ensure` / `Destroy` 保持幂等。
 任一副本退出后，其 lease 到期或下一轮 reconcile 即可由其它副本继续。
 
-短 lease 只覆盖“持久化回收状态并发布待创建 Worker”，不覆盖 Pod 启动或删除等待。Worker 行必须先于 Pod
-创建提交；随后任意副本都可以为 creating 行幂等补做 `Ensure`。这使多实例和进程崩溃共用同一条
+lease 只覆盖“持久化回收状态并发布待创建 Worker”，不覆盖 Pod 启动或删除等待。获取 lease 是短数据库
+操作，规划期间由 heartbeat 续租；TTL 只定义失联接管窗口，不必长于 controller timeout。Worker 行必须
+先于 Pod 创建提交；随后任意副本都可以为 creating 行幂等补做 `Ensure`。这使多实例和进程崩溃共用同一条
 恢复路径，也避免一个全局 controller leader 成为所有周期任务的串行点。
 
 ## Helm 职责

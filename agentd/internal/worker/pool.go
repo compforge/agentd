@@ -9,6 +9,7 @@ import (
 
 	agentledger "github.com/compforge/agent-ledger/go"
 	controllock "github.com/compforge/agentd/agentd/internal/lock"
+	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
@@ -19,8 +20,9 @@ import (
 )
 
 const (
-	poolLockResource      = "worker-pool:capacity"
-	poolLockRetryInterval = 50 * time.Millisecond
+	poolLockResource       = "worker-pool:capacity"
+	poolLockRetryInterval  = 50 * time.Millisecond
+	poolLockReleaseTimeout = 5 * time.Second
 )
 
 type Config struct {
@@ -49,7 +51,7 @@ type Config struct {
 type Pool struct {
 	config           Config
 	logger           *slog.Logger
-	locker           controllock.Locker
+	locker           controllock.LeaseLocker
 	kubernetesClient *controlk8s.Client
 	reconciler       *workerreconciler.Reconciler
 	podGC            *controlgc.PodGC
@@ -69,9 +71,8 @@ func New(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if config.ReconcilerInterval <= 0 || config.ControllerTimeout <= 0 ||
-		config.ControllerLeaseTTL <= 0 || config.GCInterval <= 0 {
-		return nil, fmt.Errorf("create Worker Pool: controller durations must be positive")
+	if err := validateConfig(config); err != nil {
+		return nil, err
 	}
 	kubernetesClient, err := controlk8s.NewInCluster(controlk8s.Config{
 		Namespace: config.Namespace, LabelSelector: config.Selector,
@@ -118,6 +119,17 @@ func New(
 		podGC:            podGC,
 		notifications:    make(chan struct{}, 1),
 	}, nil
+}
+
+func validateConfig(config Config) error {
+	if config.ReconcilerInterval <= 0 || config.ControllerTimeout <= 0 ||
+		config.ControllerLeaseTTL <= 0 || config.GCInterval <= 0 {
+		return fmt.Errorf("create Worker Pool: controller durations must be positive")
+	}
+	if config.ControllerLeaseTTL/3 <= 0 {
+		return fmt.Errorf("create Worker Pool: controller lease TTL is too short for heartbeat renewal")
+	}
+	return nil
 }
 
 func (p *Pool) AttachObserver(sink observer.Sink, notifier observer.Notifier) error {
@@ -180,55 +192,39 @@ func (p *Pool) run(ctx context.Context) {
 //
 // +spec=`Worker creation and reclamation share one capacity lease and one control loop; a scheduled pass waits for lease contention instead of treating it as success`
 // +case:id=worker_pool_lock_contention,desc=`A contended full pass eventually reclaims expired idle capacity and realizes the remaining desired capacity`
+// +why=`Lease TTL bounds dead-holder takeover rather than controller duration; heartbeat renewal keeps a long planning section owned, while Kubernetes effects remain outside the lease`
 // +link=agentd/docs/agentd.md
 func (p *Pool) Reconcile(ctx context.Context, full bool) error {
-	token, err := p.acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("lock Worker Pool: %w", err)
-	}
-
 	var gcActions controlgc.Actions
 	var gcPlanErr error
-	if full {
-		gcActions, gcPlanErr = p.podGC.Plan(ctx)
+	var workers []model.Worker
+	var capacityPlanErr error
+	leaseErr := controllock.WithLease(ctx, p.locker, poolLockResource, controllock.LeaseOptions{
+		TTL:               p.config.ControllerLeaseTTL,
+		RetryInterval:     poolLockRetryInterval,
+		HeartbeatInterval: p.config.ControllerLeaseTTL / 3,
+		ReleaseTimeout:    poolLockReleaseTimeout,
+		OnAcquired: func(waited time.Duration) {
+			if waited >= poolLockRetryInterval {
+				p.logger.InfoContext(ctx, "acquired Worker Pool lease after contention", "wait", waited)
+			}
+		},
+	}, func(leaseCtx context.Context) error {
+		if full {
+			gcActions, gcPlanErr = p.podGC.Plan(leaseCtx)
+		}
+		workers, capacityPlanErr = p.reconciler.Plan(leaseCtx)
+		return nil
+	})
+	if leaseErr != nil {
+		return errors.Join(gcPlanErr, capacityPlanErr, fmt.Errorf("hold Worker Pool lease: %w", leaseErr))
 	}
-	workers, capacityPlanErr := p.reconciler.Plan(ctx)
-
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	unlockErr := p.locker.Unlock(unlockCtx, token)
-	cancel()
 
 	// Kubernetes effects are idempotent and deliberately happen after unlock.
 	// Attempt both sides so one failed effect does not suppress unrelated work.
 	gcApplyErr := p.podGC.Apply(ctx, gcActions)
 	capacityApplyErr := p.reconciler.Apply(ctx, workers)
-	return errors.Join(gcPlanErr, capacityPlanErr, unlockErr, gcApplyErr, capacityApplyErr)
-}
-
-func (p *Pool) acquire(ctx context.Context) (*controllock.Token, error) {
-	startedAt := time.Now()
-	conflicts := 0
-	for {
-		token, err := p.locker.Lock(ctx, poolLockResource, p.config.ControllerLeaseTTL)
-		if err == nil {
-			if conflicts > 0 {
-				p.logger.InfoContext(ctx, "acquired Worker Pool lease after contention",
-					"conflicts", conflicts, "wait", time.Since(startedAt))
-			}
-			return token, nil
-		}
-		if !errors.Is(err, controllock.ErrLocked) {
-			return nil, err
-		}
-		conflicts++
-		timer := time.NewTimer(poolLockRetryInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
+	return errors.Join(gcPlanErr, capacityPlanErr, gcApplyErr, capacityApplyErr)
 }
 
 func (p *Pool) reconcileWithTimeout(ctx context.Context, full bool) {

@@ -227,9 +227,6 @@ func loadConfig() (config, error) {
 		if value.observationTimeout <= value.observerInterval {
 			return config{}, errors.New("AGENTD_WORKER_OBSERVATION_TIMEOUT must exceed AGENTD_WORKER_OBSERVER_INTERVAL")
 		}
-		if value.workerControllerLeaseTTL <= value.workerControllerTimeout {
-			return config{}, errors.New("AGENTD_WORKER_CONTROLLER_LEASE_TTL must exceed AGENTD_WORKER_CONTROLLER_REQUEST_TIMEOUT")
-		}
 	default:
 		return config{}, fmt.Errorf("unsupported AGENTD_WORKER_SOURCE %q", value.workerSource)
 	}

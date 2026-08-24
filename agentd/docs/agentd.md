@@ -156,8 +156,9 @@ row，并立即用 `session.worker_id` 预留容量。Worker row 表达期望实
 Pod；Session Reconciler 写入新 placement 后会即时通知它。它不读取 Event，也不重新计算 Session demand。
 
 Worker Pool 是容量创建与回收的唯一控制环。容量 ticker、GC ticker 和即时通知都进入同一个 runner；
-full pass 在同一短 lease 内先持久化回收计划，再按回收后的 Worker rows 计算创建缺口。lease 冲突会在
-本轮 controller timeout 内等待重试，不能作为一次空成功被吞掉。
+full pass 在同一可续租 lease 内先持久化回收计划，再按回收后的 Worker rows 计算创建缺口。获取 lease
+只是一次短数据库操作；规划安全区内由 heartbeat 续租，续租失败会取消规划。lease 冲突会在本轮
+controller timeout 内等待重试，不能作为一次空成功被吞掉。
 
 Pool 内部计划与 Kubernetes 操作分两层：
 
@@ -192,18 +193,18 @@ Session demand：
 creating Worker 的 Pod 缺失时，Worker Pool 幂等完成创建；active Worker 的 Pod 缺失时先退役旧
 Worker，再由 Session Reconciler 根据 durable demand 发布新 Worker。Kubernetes 存在带 managed label 的 Pod 而数据库没有对应
 Worker 时，超过 grace period 后按批删除。每个 agentd 副本都运行这些循环，不依赖全局 Leader：
-Worker 创建与回收计划用 `resource_locks` 中的同一短 DB lease 串行化，单 Worker 处置权由 phase CAS 决定，
+Worker 创建与回收计划用 `resource_locks` 中的同一可续租 DB lease 串行化，单 Worker 处置权由 phase CAS 决定，
 Observer 写入带 freshness fence，外部动作保持幂等。持有者退出后，其 lease 到期或下一轮 reconcile
 由其它副本继续。
 
 ### 多实例协调
 
-agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox 任务的长 lease。Worker Pool
+agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox 任务的协调粒度。Worker Pool
 处理的是共享容量池，不执行一条 Session 的长任务，因此按动作选择最窄协调方式：
 
 | 动作 | 协调方式 |
 |---|---|
-| 回收过期容量、计算缺口并插入 `creating` Worker | 同一短 DB lease；先持久化回收状态，再读取剩余容量 |
+| 回收过期容量、计算缺口并插入 `creating` Worker | 同一可续租 DB lease；先持久化回收状态，再读取剩余容量 |
 | 为 `creating` Worker 创建 Pod | 先有 Worker 行，再幂等 `Ensure`；Pod AlreadyExists 视为成功 |
 | `creating → active` | Observer Ready 后 phase CAS |
 | `active → draining` | 条件更新同时确认零绑定 Session；CAS 胜者拥有回收权 |
@@ -211,9 +212,10 @@ agentd 借鉴 sandctl 的分布式收敛原则，但不照搬其每个 Sandbox �
 | Observer 写事实 | 按 Worker identity 合并，并用 freshness fence 拒绝旧 snapshot |
 | Session binding | 数据库事务与 Worker 行锁，不能依赖容量循环的 resource lock |
 
-短 DB lease 只保护一次“持久化回收计划并发布 creating demand”，不能覆盖 Pod 启动或删除等待。这样持有者崩溃后
-不会长时间阻塞扩容，任意副本都能看到 creating 行并补做幂等 `Ensure`。若以后出现真正需要长时间
-独占的单 Worker 动作，再为该动作加入 holder、heartbeat 和过期 takeover，而不是预先把整套协议铺开。
+DB lease 只保护一次“持久化回收计划并发布 creating demand”，不能覆盖 Pod 启动或删除等待。lease TTL
+表示持有者失联后多久允许接管，与 controller timeout 相互独立；正常执行时 heartbeat 在 TTL 到期前续租，
+续租失败则取消安全区。这样规划可以安全地超过一个 TTL，而持有者崩溃后仍能及时释放协调权；任意副本
+都能看到 creating 行并补做幂等 `Ensure`。
 
 ## GC
 
