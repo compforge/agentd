@@ -31,6 +31,8 @@ github.com/compforge/agentgo v0.0.1 h1:e3JiF7za1xN9NdGw4M8BFH9vdVwMJuD/K55eNSclK
 github.com/compforge/agentgo v0.0.1/go.mod h1:5EkjADRpln5pwK2wd1cNwUwndq2VQDbeefybMVNMhpk=
 github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f h1:haqyKhvPHqo3E8ZJfguistPpFu5V4wvCLev9eZiy3Ec=
 github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f/go.mod h1:C2ctRE3LPGTsnZgKk6GGT7K9auhokELeb8AttDOXuyw=
+github.com/compforge/case-harness/go v0.0.0-20260824101226-b5c35545e036 h1:kNGl2rxedgZzV8hWw9I7NpuYj9ob2sasKgYOudMuUBE=
+github.com/compforge/case-harness/go v0.0.0-20260824101226-b5c35545e036/go.mod h1:C2ctRE3LPGTsnZgKk6GGT7K9auhokELeb8AttDOXuyw=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 h1:uX1JmpONuD549D73r6cgnxyUu18Zb7yHAy5AYU0Pm4Q=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467/go.mod h1:uzvlm1mxhHkdfqitSA92i7Se+S9ksOn3a3qmv/kyOCw=

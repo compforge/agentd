@@ -98,20 +98,11 @@ func executeWorkerReplacementCase(ctx context.Context, state *workerReplacementC
 		}
 	}
 
-	replacement, err := state.cluster.WaitReplacement(ctx, state.workerSelector, previous, state.pollInterval)
+	state.replacementWorkerID, err = replacementWorkerIDResult(
+		ctx, state.cluster, state.workerSelector, previous, state.pollInterval,
+	)
 	if err != nil {
-		return fmt.Errorf("wait for replacement Worker Pod: %w", err)
-	}
-	replacement, err = state.cluster.WaitReady(ctx, replacement.Ref(), state.pollInterval)
-	if err != nil {
-		return fmt.Errorf("wait for replacement Worker Pod %q to become ready: %w", replacement.Name, err)
-	}
-	if replacement.Labels[managedWorkerLabel] != "true" {
-		return fmt.Errorf("replacement Pod %q is not an agentd-managed Worker", replacement.Name)
-	}
-	state.replacementWorkerID = strings.TrimSpace(replacement.Labels[workerIDLabel])
-	if state.replacementWorkerID == "" {
-		return fmt.Errorf("replacement Pod %q has no %s label", replacement.Name, workerIDLabel)
+		return err
 	}
 
 	if err := runTurnResult(
@@ -125,6 +116,31 @@ func executeWorkerReplacementCase(ctx context.Context, state *workerReplacementC
 	messages, err := agentMessagesResult(ctx, state.managed.client, state.managed.sessionID)
 	state.managed.agentMessages = len(messages)
 	return err
+}
+
+func replacementWorkerIDResult(
+	ctx context.Context,
+	cluster *kube.Client,
+	selector string,
+	previous []kube.Pod,
+	pollInterval time.Duration,
+) (string, error) {
+	replacement, err := cluster.WaitReplacement(ctx, selector, previous, pollInterval)
+	if err != nil {
+		return "", fmt.Errorf("wait for replacement Worker Pod: %w", err)
+	}
+	replacement, err = cluster.WaitReady(ctx, replacement.Ref(), pollInterval)
+	if err != nil {
+		return "", fmt.Errorf("wait for replacement Worker Pod %q to become ready: %w", replacement.Name, err)
+	}
+	if replacement.Labels[managedWorkerLabel] != "true" {
+		return "", fmt.Errorf("replacement Pod %q is not an agentd-managed Worker", replacement.Name)
+	}
+	workerID := strings.TrimSpace(replacement.Labels[workerIDLabel])
+	if workerID == "" {
+		return "", fmt.Errorf("replacement Pod %q has no %s label", replacement.Name, workerIDLabel)
+	}
+	return workerID, nil
 }
 
 func managedWorkersResult(

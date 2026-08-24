@@ -16,6 +16,10 @@ still uses the public Managed Agents API. Its canonical CaseSet is
 - `worker_replacement_resume` completes one tool turn, deletes the explicitly selected managed
   Worker Pods, waits for a new logical Worker, and completes a second turn on the same Session. It
   proves that Worker loss does not lose durable Session input or checkpoint state.
+- `mid_turn_worker_loss` force-deletes the selected Worker Pods after the Session reports `running`,
+  then waits for a replacement to converge the same durable input. If an unknown-effect tool crossed
+  its execution boundary, the case denies the exact required action and proves that agentd continues
+  without silently replaying it or duplicating the user input.
 
 The test uses unique resource names and intentionally keeps the resulting records. Agentd has no
 public delete contract for these durable audit resources; use a disposable environment or the
@@ -49,8 +53,8 @@ go test -tags=e2e -v ./tests/e2e
 | `AGENTD_E2E_RUNS_DIR` | no | `runs` | Parent directory for Run artifacts |
 | `AGENTD_REQUIRE_E2E` | no | `0` | Fail instead of skip when the target URL is absent |
 
-`worker_replacement_resume` is intentionally disruptive and skips unless explicitly enabled. Run
-it only against a disposable namespace or a dedicated Worker pool:
+`worker_replacement_resume` and `mid_turn_worker_loss` are intentionally disruptive and skip unless
+explicitly enabled. Run them only against a disposable namespace or a dedicated Worker pool:
 
 ```bash
 AGENTD_E2E_ALLOW_WORKER_DISRUPTION=1 \
@@ -59,6 +63,12 @@ AGENTD_E2E_KUBE_CONTEXT=my-context \
 AGENTD_E2E_KUBE_NAMESPACE=agentd-e2e \
 AGENTD_E2E_WORKER_SELECTOR='app.kubernetes.io/instance=agentd-e2e,agentd.compforge.dev/managed=true' \
 go test -tags=e2e -run TestManagedAgentResumesAfterWorkerReplacement -v ./tests/e2e
+```
+
+To exercise crash recovery during an active Turn, select the mid-turn case instead:
+
+```bash
+go test -tags=e2e -run TestManagedAgentRecoversAfterMidTurnWorkerLoss -v ./tests/e2e
 ```
 
 | Variable | Required | Default | Meaning |

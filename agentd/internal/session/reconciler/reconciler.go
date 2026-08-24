@@ -112,6 +112,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 //
 // +spec=`An unprocessed durable user Event remains executable after notification loss or control-plane restart; placement changes occur only after a stable execution boundary or confirmed Worker loss`
 // +case:id=worker_replacement_resume,desc=`A durable Session resumes on a new logical Worker after confirmed Worker loss`,input=`replace-worker-between-sandbox-turns`,expect=`two completed turns on different logical Workers`,forbid=`lost durable input or reuse of the retired Worker`,group=system
+// +case:id=mid_turn_worker_loss,desc=`A Worker disappears while its Session is running an unknown-effect sandbox tool`,input=`force-delete-the-assigned-worker-during-one-turn`,expect=`a replacement Worker resumes the durable input and either completes safely or asks for exact tool reconciliation before producing one answer`,forbid=`lost or duplicate input, automatic replay of an unresolved side effect, or Session termination`,group=system
 // +link=agentd/docs/agentd.md
 // +link=tests/e2e/cases/managed-agent.yaml
 func (r *Reconciler) Reconcile(ctx context.Context) error {

@@ -56,6 +56,8 @@ func TestManagedAgentResumesAcrossSandboxTurns(t *testing.T) {
 	recordSystemCase(t, result)
 }
 
+const sandboxResumeSystemPrompt = "For every user request, call bash exactly once with command `printf AGENTD_E2E_SANDBOX_OK`. After the tool succeeds, answer exactly AGENTD_E2E_OK."
+
 type managedAgentCaseState struct {
 	config        envConfig
 	client        *anthropic.Client
@@ -64,6 +66,14 @@ type managedAgentCaseState struct {
 }
 
 func prepareManagedAgentCase(ctx context.Context, state *managedAgentCaseState) error {
+	return prepareManagedAgentCaseWithSystem(ctx, state, sandboxResumeSystemPrompt)
+}
+
+func prepareManagedAgentCaseWithSystem(
+	ctx context.Context,
+	state *managedAgentCaseState,
+	systemPrompt string,
+) error {
 	config, err := readEnv()
 	if err != nil {
 		return err
@@ -81,7 +91,7 @@ func prepareManagedAgentCase(ctx context.Context, state *managedAgentCaseState) 
 	agent, err := client.Beta.Agents.New(ctx, anthropic.BetaAgentNewParams{
 		Name:   "agentd-e2e-" + suffix,
 		Model:  anthropic.BetaManagedAgentsModelConfigParams{ID: anthropic.BetaManagedAgentsModel(modelResourceID)},
-		System: anthropic.String("For every user request, call bash exactly once with command `printf AGENTD_E2E_SANDBOX_OK`. After the tool succeeds, answer exactly AGENTD_E2E_OK."),
+		System: anthropic.String(systemPrompt),
 		Tools: []anthropic.BetaAgentNewParamsToolUnion{{
 			OfAgentToolset20260401: &anthropic.BetaManagedAgentsAgentToolset20260401Params{
 				Type: anthropic.BetaManagedAgentsAgentToolset20260401ParamsTypeAgentToolset20260401,
@@ -167,7 +177,14 @@ func runTurnResult(ctx context.Context, client *anthropic.Client, sessionID, pro
 		return err
 	}
 	before := len(messages)
-	_, err = client.Beta.Sessions.Events.Send(ctx, sessionID, anthropic.BetaSessionEventSendParams{
+	if err := sendTurnResult(ctx, client, sessionID, prompt); err != nil {
+		return err
+	}
+	return waitForTurnResult(ctx, client, sessionID, prompt, before)
+}
+
+func sendTurnResult(ctx context.Context, client *anthropic.Client, sessionID, prompt string) error {
+	_, err := client.Beta.Sessions.Events.Send(ctx, sessionID, anthropic.BetaSessionEventSendParams{
 		Events: []anthropic.BetaManagedAgentsEventParamsUnion{{
 			OfUserMessage: &anthropic.BetaManagedAgentsUserMessageEventParams{
 				Type: anthropic.BetaManagedAgentsUserMessageEventParamsTypeUserMessage,
@@ -183,7 +200,16 @@ func runTurnResult(ctx context.Context, client *anthropic.Client, sessionID, pro
 	if err != nil {
 		return fmt.Errorf("send user Event: %w", err)
 	}
+	return nil
+}
 
+func waitForTurnResult(
+	ctx context.Context,
+	client *anthropic.Client,
+	sessionID string,
+	prompt string,
+	before int,
+) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
