@@ -117,8 +117,12 @@ func loadConfig() (config, error) {
 	if value.workerNamespace == "" {
 		value.workerNamespace = "default"
 	}
-	if strings.TrimSpace(value.apiKey) == "" {
+	trimmedAPIKey := strings.TrimSpace(value.apiKey)
+	if trimmedAPIKey == "" {
 		return config{}, errors.New("AGENTD_API_KEY is required")
+	}
+	if trimmedAPIKey != value.apiKey {
+		return config{}, errors.New("AGENTD_API_KEY must not contain surrounding whitespace")
 	}
 	var err error
 	if value.maxOpenConns, err = positiveIntEnv("AGENTD_MYSQL_MAX_OPEN_CONNS", value.maxOpenConns); err != nil {

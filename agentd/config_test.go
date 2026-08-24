@@ -112,3 +112,12 @@ func TestLoadConfigRequiresAPIKey(t *testing.T) {
 		t.Fatal("loadConfig() accepted an empty API key")
 	}
 }
+
+func TestLoadConfigRejectsAPIKeyWithSurroundingWhitespace(t *testing.T) {
+	t.Setenv("AGENTD_API_KEY", "test\n")
+
+	_, err := loadConfig()
+	if err == nil || err.Error() != "AGENTD_API_KEY must not contain surrounding whitespace" {
+		t.Fatalf("loadConfig() error = %v, want surrounding whitespace error", err)
+	}
+}

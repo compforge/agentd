@@ -40,7 +40,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "agentd.authSecretName" . }}
-                  key: {{ required "auth.existingSecretKey is required" .Values.auth.existingSecretKey }}
+                  key: {{ include "agentd.authSecretKey" . | quote }}
             - name: AGENTD_MYSQL_DSN
               valueFrom:
                 secretKeyRef:

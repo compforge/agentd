@@ -17,7 +17,7 @@ cases:
           - {path: wrong_status, op: eq, value: 401}
           - {path: correct_status, op: eq, value: 200}
     binding:
-      symbol_id: agentd/internal/api/auth.go::Server.authenticate
+      symbol_id: agentd/internal/api/middleware/api_key.go::APIKey.Handle
       spec: Every public API requires the configured x-api-key while health remains anonymous.
   - id: model_secret_redaction
     desc: Model credentials remain write-only across create, get, and list.
