@@ -100,6 +100,24 @@ func TestLogProjectsEventsAcrossProcesses(t *testing.T) {
 	}
 }
 
+func TestLogPageBoundsDurableRecordsAndAdvancesAcrossInternalEvents(t *testing.T) {
+	ctx := context.Background()
+	log := NewLog(agentledger.NewMemoryEventStore())
+	first := New("user.message", map[string]any{"content": []any{}})
+	second := New("user.message", map[string]any{"content": []any{}})
+	if err := log.AppendIngressBatch(ctx, "session-1", []ManagedEvent{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.MarkProcessed(ctx, "session-1", first["id"].(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	events, nextSeq, hasMore, err := log.Page(ctx, "session-1", 0, 2)
+	if err != nil || len(events) != 2 || nextSeq != 3 || hasMore {
+		t.Fatalf("first page = %#v, seq %d, hasMore %t, %v", events, nextSeq, hasMore, err)
+	}
+}
+
 func TestPendingToolResolutionUsesInternalConsumptionMarker(t *testing.T) {
 	ctx := context.Background()
 	log := NewLog(agentledger.NewMemoryEventStore())

@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/model"
+	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 func (s *Server) createModel(ctx context.Context, request *hertzapp.RequestContext) {
@@ -44,7 +45,7 @@ func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContex
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
+	query, err := parsePage(input.PageRequest, modelCursor, false)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -58,7 +59,13 @@ func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContex
 	for _, value := range page.Items {
 		data = append(data, view.NewModelResponse(value))
 	}
-	next, _ := pageLinks(query, page.HasMore)
+	var first, last service.PageAnchor
+	if len(page.Items) > 0 {
+		first = service.PageAnchor{CreatedAt: page.Items[0].CreatedAt, ID: page.Items[0].ID}
+		value := page.Items[len(page.Items)-1]
+		last = service.PageAnchor{CreatedAt: value.CreatedAt, ID: value.ID}
+	}
+	next, _ := pageLinks(modelCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.ModelResponse]{Data: data, NextPage: next})
 }
 

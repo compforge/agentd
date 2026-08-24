@@ -106,6 +106,70 @@ func (l *Log) List(ctx context.Context, sessionID string) ([]ManagedEvent, error
 	return events, err
 }
 
+// Page reads at most limit durable Lane records after afterSeq. Internal
+// projection records may make the public page shorter than limit; nextSeq still
+// advances over them so every request remains bounded.
+func (l *Log) Page(
+	ctx context.Context,
+	sessionID string,
+	afterSeq int64,
+	limit int,
+) ([]ManagedEvent, int64, bool, error) {
+	if limit < 1 {
+		return nil, afterSeq, false, errors.New("load managed event page: limit must be positive")
+	}
+	lane, exists, err := l.store.FindLane(ctx, sessionID, managedEventRun, managedEventLane)
+	if err != nil {
+		return nil, afterSeq, false, fmt.Errorf("find managed event lane: %w", err)
+	}
+	if !exists {
+		return []ManagedEvent{}, afterSeq, false, nil
+	}
+	// One public Event may be followed by one internal consumption marker. Read
+	// enough raw records to fill a public page plus one public lookahead while
+	// retaining a fixed upper bound per request.
+	page, err := l.store.LoadLanePage(ctx, lane.ID, afterSeq, limit*2+1)
+	if err != nil {
+		return nil, afterSeq, false, fmt.Errorf("load managed event page: %w", err)
+	}
+	events := make([]ManagedEvent, 0, len(page.Events))
+	processed := make(map[string]string)
+	nextSeq := afterSeq
+	hasMore := false
+	for _, stored := range page.Events {
+		raw, ok := stored.Payload["event"]
+		if !ok {
+			nextSeq = stored.Seq
+			continue
+		}
+		value, mapErr := mapEvent(raw)
+		if mapErr != nil {
+			return nil, afterSeq, false, mapErr
+		}
+		if value["type"] == "managed.event_processed" {
+			nextSeq = stored.Seq
+			if target, ok := value["event_id"].(string); ok {
+				processed[target], _ = value["processed_at"].(string)
+			}
+			continue
+		}
+		if len(events) == limit {
+			hasMore = true
+			break
+		}
+		events = append(events, value)
+		nextSeq = stored.Seq
+	}
+	for _, value := range events {
+		if id, ok := value["id"].(string); ok {
+			if timestamp, found := processed[id]; found && value["processed_at"] == nil {
+				value["processed_at"] = timestamp
+			}
+		}
+	}
+	return events, nextSeq, hasMore || page.HasMore, nil
+}
+
 // Load returns public Events committed after a durable lane sequence. The
 // cursor advances across internal projection records as well as public Events.
 func (l *Log) Load(ctx context.Context, sessionID string, afterSeq int64) ([]ManagedEvent, int64, error) {

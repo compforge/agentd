@@ -200,7 +200,7 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
+	limit, afterSeq, err := parseEventPage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -210,15 +210,17 @@ func (s *Server) listEvents(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	events, err := s.events.List(ctx, sessionID)
+	events, nextSeq, hasMore, err := s.events.Page(ctx, sessionID, afterSeq, limit)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	page := slicePage(events, query)
-	next, _ := pageLinks(query, page.HasMore)
+	var next *string
+	if hasMore {
+		next = encodeEventCursor(nextSeq)
+	}
 	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{
-		Data: page.Items, NextPage: next,
+		Data: events, NextPage: next,
 	})
 }
 

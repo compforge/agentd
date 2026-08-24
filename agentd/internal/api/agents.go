@@ -129,7 +129,7 @@ func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.Reques
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
+	query, err := parsePage(input.PageRequest, agentVersionCursor, true)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -143,7 +143,12 @@ func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.Reques
 	for _, value := range page.Items {
 		data = append(data, view.NewAgentResponse(value))
 	}
-	next, _ := pageLinks(query, page.HasMore)
+	var first, last service.PageAnchor
+	if len(page.Items) > 0 {
+		first.Version = page.Items[0].Version
+		last.Version = page.Items[len(page.Items)-1].Version
+	}
+	next, _ := pageLinks(agentVersionCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
 }
 
@@ -152,7 +157,7 @@ func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContex
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
+	query, err := parsePage(input.PageRequest, agentCursor, false)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -166,7 +171,13 @@ func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContex
 	for _, value := range page.Items {
 		data = append(data, view.NewAgentResponse(value))
 	}
-	next, _ := pageLinks(query, page.HasMore)
+	var first, last service.PageAnchor
+	if len(page.Items) > 0 {
+		first = service.PageAnchor{CreatedAt: page.Items[0].CreatedAt, ID: page.Items[0].ID}
+		value := page.Items[len(page.Items)-1]
+		last = service.PageAnchor{CreatedAt: value.CreatedAt, ID: value.ID}
+	}
+	next, _ := pageLinks(agentCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
 }
 

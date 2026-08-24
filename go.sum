@@ -25,6 +25,8 @@ github.com/cloudwego/netpoll v0.7.2 h1:4qDBGQ6CG2SvEXhZSDxMdtqt/NLDxjAVk0PC/biKi
 github.com/cloudwego/netpoll v0.7.2/go.mod h1:PI+YrmyS7cIr0+SD4seJz3Eo3ckkXdu2ZVKBLhURLNU=
 github.com/compforge/agent-ledger/go v0.0.0-20260824064430-4cd7ccaf6a97 h1:W+hAs5p8kripxIZasT0bWkolaBeUnLsHQ/lfJcrMQLk=
 github.com/compforge/agent-ledger/go v0.0.0-20260824064430-4cd7ccaf6a97/go.mod h1:J/UK6FtOpr8WZzhOKPe3y4+I0VgnEthPZ/exkaH3iYM=
+github.com/compforge/agent-ledger/go v0.0.0-20260824074809-8026d3e6efdd h1:mXEpV5s/nPHalVXdVv82/XYdAK+yie/hyLVFixi9aFQ=
+github.com/compforge/agent-ledger/go v0.0.0-20260824074809-8026d3e6efdd/go.mod h1:J/UK6FtOpr8WZzhOKPe3y4+I0VgnEthPZ/exkaH3iYM=
 github.com/compforge/agentgo v0.0.1 h1:e3JiF7za1xN9NdGw4M8BFH9vdVwMJuD/K55eNSclK1I=
 github.com/compforge/agentgo v0.0.1/go.mod h1:5EkjADRpln5pwK2wd1cNwUwndq2VQDbeefybMVNMhpk=
 github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f h1:haqyKhvPHqo3E8ZJfguistPpFu5V4wvCLev9eZiy3Ec=
