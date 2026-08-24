@@ -373,6 +373,83 @@ func TestAgentLifecycleKeepsImmutableVersionsAndPinnedSessions(t *testing.T) {
 	}
 }
 
+func TestSessionLifecycleUpdatesResourceFieldsAndArchivesAtIdleBoundary(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	placedAt := now
+	if err := repository.PutSession(ctx, model.Session{
+		ID: "session-1", AgentID: "agent-1", AgentVersionID: "agent-version-1", EnvironmentID: "env-1",
+		Title: "before", Metadata: map[string]string{"team": "quality", "obsolete": "true"},
+		Status: model.SessionStatusIdle, Revision: 4,
+		Placement: model.SessionPlacement{WorkerID: "worker-1", Fence: "placement-1", PlacedAt: &placedAt},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	title := "after"
+	team := "platform"
+	updated, err := application.UpdateSession(ctx, "session-1", service.SessionUpdate{
+		Title: &title, Metadata: map[string]*string{"team": &team, "obsolete": nil},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != title || updated.Metadata["team"] != team || updated.Metadata["obsolete"] != "" ||
+		updated.AgentVersionID != "agent-version-1" || updated.EnvironmentID != "env-1" ||
+		updated.Placement.Fence != "placement-1" || updated.Revision != 5 {
+		t.Fatalf("updated Session = %#v", updated)
+	}
+
+	persistedUpdate, err := repository.GetSession(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noOp, err := application.UpdateSession(ctx, "session-1", service.SessionUpdate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noOp.Revision != persistedUpdate.Revision || !noOp.UpdatedAt.Equal(persistedUpdate.UpdatedAt) {
+		t.Fatalf("no-op Session update changed Control State: before=%#v after=%#v", persistedUpdate, noOp)
+	}
+
+	updated.Status = model.SessionStatusRunning
+	if err := repository.PutSession(ctx, updated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.ArchiveSession(ctx, "session-1"); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("archive running Session error = %v, want ErrConflict", err)
+	}
+
+	updated.Status = model.SessionStatusIdle
+	if err := repository.PutSession(ctx, updated); err != nil {
+		t.Fatal(err)
+	}
+	archived, err := application.ArchiveSession(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil || archived.Status != model.SessionStatusTerminated || archived.Revision != 6 ||
+		archived.Placement.Fence != "placement-1" {
+		t.Fatalf("archived Session = %#v", archived)
+	}
+	if _, err := application.UpdateSession(ctx, "session-1", service.SessionUpdate{}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("update archived Session error = %v, want ErrConflict", err)
+	}
+
+	observed, err := application.ObserveSession(ctx, "session-1", model.SessionObserverStatus{
+		ObservedAt: now.Add(time.Second), PlacementFence: "placement-1",
+		Exists: true, Status: model.SessionStatusIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Status != model.SessionStatusTerminated || observed.ArchivedAt == nil {
+		t.Fatalf("observation revived archived Session = %#v", observed)
+	}
+}
+
 func TestObserveSessionUsesPlacementFenceAndMonotonicResumeRevision(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()

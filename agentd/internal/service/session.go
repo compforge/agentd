@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/compforge/agentd/agentd/internal/model"
@@ -56,6 +57,100 @@ func (a *Service) CreateSession(
 
 func (a *Service) GetSession(ctx context.Context, id string) (model.Session, error) {
 	return a.repository.GetSession(ctx, id)
+}
+
+// SessionUpdate is a partial public-resource update. Nil fields preserve the
+// current value; Metadata is a key-level patch whose nil values delete keys.
+type SessionUpdate struct {
+	Title    *string
+	Metadata map[string]*string
+}
+
+// UpdateSession changes only mutable Session resource fields and leaves the
+// pinned Agent, Environment, execution state, and placement unchanged.
+//
+// +spec=`Session updates preserve omitted fields, merge metadata keys, reject archived Sessions, and do not perturb execution placement`
+// +link=agentd/docs/kernel.md
+func (a *Service) UpdateSession(ctx context.Context, sessionID string, update SessionUpdate) (model.Session, error) {
+	var updated model.Session
+	err := a.repository.Transaction(ctx, func(repository repo.Repository) error {
+		current, err := repository.GetSessionForUpdate(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.ArchivedAt != nil {
+			return fmt.Errorf("%w: Session %q is archived", ErrConflict, sessionID)
+		}
+
+		next := current
+		next.Metadata = make(map[string]string, len(current.Metadata))
+		for key, value := range current.Metadata {
+			next.Metadata[key] = value
+		}
+		if update.Title != nil {
+			next.Title = *update.Title
+		}
+		for key, value := range update.Metadata {
+			if value == nil {
+				delete(next.Metadata, key)
+			} else {
+				next.Metadata[key] = *value
+			}
+		}
+		if current.Title == next.Title && reflect.DeepEqual(current.Metadata, next.Metadata) {
+			updated = current
+			return nil
+		}
+		now := time.Now().UTC()
+		next.Revision++
+		next.UpdatedAt = now
+		if err := repository.PutSession(ctx, next); err != nil {
+			return err
+		}
+		updated = next
+		return nil
+	})
+	if err != nil {
+		return model.Session{}, fmt.Errorf("update Session %q: %w", sessionID, err)
+	}
+	return updated, nil
+}
+
+// ArchiveSession terminates an inactive Session while preserving its Control
+// State and Ledger history. Session Reconciler remains the only owner of
+// placement release.
+//
+// +spec=`Archiving is idempotent, rejects running or rescheduling Sessions, preserves history, and permanently rejects new ingress Events`
+// +link=agentd/docs/kernel.md
+func (a *Service) ArchiveSession(ctx context.Context, sessionID string) (model.Session, error) {
+	var archived model.Session
+	err := a.repository.Transaction(ctx, func(repository repo.Repository) error {
+		current, err := repository.GetSessionForUpdate(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if current.ArchivedAt != nil {
+			archived = current
+			return nil
+		}
+		if current.Status == model.SessionStatusRunning || current.Status == model.SessionStatusRescheduling {
+			return fmt.Errorf("%w: Session %q is %s", ErrConflict, sessionID, current.Status)
+		}
+		now := time.Now().UTC()
+		current.ArchivedAt = &now
+		current.Status = model.SessionStatusTerminated
+		current.Revision++
+		current.UpdatedAt = now
+		if err := repository.PutSession(ctx, current); err != nil {
+			return err
+		}
+		archived = current
+		return nil
+	})
+	if err != nil {
+		return model.Session{}, fmt.Errorf("archive Session %q: %w", sessionID, err)
+	}
+	return archived, nil
 }
 
 func (a *Service) ListSessions(ctx context.Context) ([]model.Session, error) {

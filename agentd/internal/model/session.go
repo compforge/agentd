@@ -34,6 +34,7 @@ type Session struct {
 	ObserverStatus json.RawMessage
 	Placement      SessionPlacement
 	LastWorkerID   string
+	ArchivedAt     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
