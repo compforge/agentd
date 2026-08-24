@@ -3,26 +3,23 @@ package api
 import (
 	"context"
 	"fmt"
-	"time"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Config      map[string]any    `json:"config"`
-		Metadata    map[string]string `json:"metadata"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.CreateEnvironmentRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	if input.Config["type"] != "cloud" {
-		s.writeError(request, fmt.Errorf("%w: environment type %q", service.ErrUnsupported, input.Config["type"]))
+		s.writeError(request, fmt.Errorf(
+			"%w: environment type %q", service.ErrUnsupported, input.Config["type"],
+		))
 		return
 	}
 	created, err := s.service.CreateEnvironment(ctx, model.Environment{
@@ -32,45 +29,41 @@ func (s *Server) createEnvironment(ctx context.Context, request *hertzapp.Reques
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, environmentResponse(created))
+	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(created))
 }
 
 func (s *Server) getEnvironment(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.service.GetEnvironment(ctx, request.Param("environment_id"))
+	var input view.GetEnvironmentRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	value, err := s.service.GetEnvironment(ctx, input.EnvironmentID)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, environmentResponse(value))
+	request.JSON(consts.StatusOK, view.NewEnvironmentResponse(value))
 }
 
 func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.service.ListEnvironments(ctx)
+	var input view.ListEnvironmentsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	data := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		data = append(data, environmentResponse(value))
+	page, err := s.service.PageEnvironments(ctx, query)
+	if err != nil {
+		s.writeError(request, err)
+		return
 	}
-	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil})
-}
-
-func environmentResponse(value model.Environment) map[string]any {
-	config := make(map[string]any, len(value.Config)+2)
-	for key, item := range value.Config {
-		config[key] = item
+	data := make([]view.EnvironmentResponse, 0, len(page.Items))
+	for _, value := range page.Items {
+		data = append(data, view.NewEnvironmentResponse(value))
 	}
-	if config["networking"] == nil {
-		config["networking"] = map[string]any{"type": "unrestricted"}
-	}
-	if config["packages"] == nil {
-		config["packages"] = map[string]any{}
-	}
-	return map[string]any{
-		"id": value.ID, "type": "environment", "name": value.Name, "description": value.Description,
-		"config": config, "metadata": value.Metadata, "scope": "account", "archived_at": nil,
-		"created_at": value.CreatedAt.Format(time.RFC3339Nano), "updated_at": value.UpdatedAt.Format(time.RFC3339Nano),
-	}
+	next, _ := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.Page[view.EnvironmentResponse]{Data: data, NextPage: next})
 }

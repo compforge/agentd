@@ -5,18 +5,13 @@ import (
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/model"
 )
 
 func (s *Server) createModel(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		ID       string `json:"id"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-		BaseURL  string `json:"base_url"`
-		APIKey   string `json:"api_key"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.CreateModelRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	created, err := s.service.CreateModel(ctx, model.Model{
@@ -28,29 +23,43 @@ func (s *Server) createModel(ctx context.Context, request *hertzapp.RequestConte
 		return
 	}
 	s.logger.InfoContext(ctx, "created Model", "model_id", created.ID, "provider", created.Provider)
-	writeJSON(request, consts.StatusOK, modelResponse(created))
+	request.JSON(consts.StatusOK, view.NewModelResponse(created))
 }
 
 func (s *Server) getModel(ctx context.Context, request *hertzapp.RequestContext) {
-	value, err := s.service.GetModel(ctx, request.Param("model_id"))
+	var input view.GetModelRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	value, err := s.service.GetModel(ctx, input.ModelID)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, modelResponse(value))
+	request.JSON(consts.StatusOK, view.NewModelResponse(value))
 }
 
 func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.service.ListModels(ctx)
+	var input view.ListModelsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	data := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		data = append(data, modelResponse(value))
+	page, err := s.service.PageModels(ctx, query)
+	if err != nil {
+		s.writeError(request, err)
+		return
 	}
-	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil})
+	data := make([]view.ModelResponse, 0, len(page.Items))
+	for _, value := range page.Items {
+		data = append(data, view.NewModelResponse(value))
+	}
+	next, _ := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.Page[view.ModelResponse]{Data: data, NextPage: next})
 }
 
 // modelResponse is the only public projection of a registered Model.
@@ -59,10 +68,3 @@ func (s *Server) listModels(ctx context.Context, request *hertzapp.RequestContex
 // +case:id=model_secret_redaction,desc=`register a Model with a credential, then read it through create, get, and list`,input=`one unique external model connection and API key`,expect=`all responses identify the Model and report that a key is configured`,forbid=`returning the API key value or an api_key field`,group=system
 // +link=agentd/docs/kernel.md
 // +link=tests/e2e/cases/managed-agent.yaml
-func modelResponse(value model.Model) map[string]any {
-	return map[string]any{
-		"id": value.ID, "type": "model", "provider": value.Provider, "model": value.UpstreamID,
-		"base_url":           value.BaseURL,
-		"api_key_configured": value.APIKey != "", "created_at": value.CreatedAt, "updated_at": value.UpdatedAt,
-	}
-}

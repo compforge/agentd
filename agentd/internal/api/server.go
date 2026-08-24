@@ -8,6 +8,7 @@ import (
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/service"
 	"github.com/compforge/agentd/agentd/internal/session/connector"
 	managedevent "github.com/compforge/agentd/internal/event"
@@ -56,7 +57,7 @@ func New(
 func (s *Server) Register(engine *route.Engine) {
 	engine.Use(s.observeHTTP)
 	engine.GET("/healthz", func(_ context.Context, request *hertzapp.RequestContext) {
-		request.JSON(consts.StatusOK, map[string]any{"ok": true})
+		request.JSON(consts.StatusOK, view.HealthResponse{OK: true})
 	})
 	engine.POST("/v1/models", s.createModel)
 	engine.GET("/v1/models", s.listModels)

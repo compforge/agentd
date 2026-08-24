@@ -169,12 +169,21 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	if agent.Version != 2 || agent.Description != updatedDescription {
 		t.Fatalf("updated Agent = %#v", agent)
 	}
-	versions, err := client.Beta.Agents.Versions.List(ctx, agent.ID, anthropic.BetaAgentVersionListParams{})
+	versions, err := client.Beta.Agents.Versions.List(ctx, agent.ID, anthropic.BetaAgentVersionListParams{
+		Limit: param.NewOpt(int64(1)),
+	})
 	if err != nil {
 		t.Fatalf("list Agent versions through public control plane: %v", err)
 	}
-	if len(versions.Data) != 2 || versions.Data[0].Version != 2 || versions.Data[1].Version != 1 {
+	if len(versions.Data) != 1 || versions.Data[0].Version != 2 || versions.NextPage == "" {
 		t.Fatalf("Agent versions = %#v", versions.Data)
+	}
+	versions, err = versions.GetNextPage()
+	if err != nil {
+		t.Fatalf("list next Agent version page: %v", err)
+	}
+	if versions == nil || len(versions.Data) != 1 || versions.Data[0].Version != 1 || versions.NextPage != "" {
+		t.Fatalf("next Agent versions = %#v", versions)
 	}
 	original, err := client.Beta.Agents.Get(ctx, agent.ID, anthropic.BetaAgentGetParams{Version: param.NewOpt(int64(1))})
 	if err != nil {
@@ -228,12 +237,21 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		t.Fatalf("installed Model snapshot = %#v", installed.Agent.Model)
 	}
 
-	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
+	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{
+		Limit: param.NewOpt(int64(1)),
+	})
 	if err != nil {
 		t.Fatalf("list Event from shared Ledger: %v", err)
 	}
-	if len(page.Data) != 2 || page.Data[0].Type != "user.message" || page.Data[1].Type != "agent.message" {
+	if len(page.Data) != 1 || page.Data[0].Type != "user.message" || page.NextPage == "" {
 		t.Fatalf("listed Events = %#v", page.Data)
+	}
+	page, err = page.GetNextPage()
+	if err != nil {
+		t.Fatalf("list next Event page: %v", err)
+	}
+	if page == nil || len(page.Data) != 1 || page.Data[0].Type != "agent.message" || page.NextPage != "" {
+		t.Fatalf("next Events = %#v", page)
 	}
 
 	streamCtx, cancelStream := context.WithTimeout(ctx, 2*time.Second)

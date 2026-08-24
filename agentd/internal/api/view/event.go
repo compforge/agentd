@@ -16,7 +16,19 @@ var (
 )
 
 type SendEventsRequest struct {
-	Events []json.RawMessage `json:"events"`
+	SessionID string            `path:"session_id"`
+	Events    []json.RawMessage `json:"events"`
+}
+
+type ListEventsRequest struct {
+	SessionID string `path:"session_id"`
+	PageRequest
+}
+
+type StreamEventsRequest struct {
+	SessionID        string   `path:"session_id"`
+	EventDeltas      []string `query:"event_deltas[]"`
+	LegacyEventDelta []string `query:"event_deltas"`
 }
 
 type IngressEvent struct {
@@ -26,11 +38,6 @@ type IngressEvent struct {
 	Result      string
 	DenyMessage string
 	IsError     bool
-}
-
-type Page[T any] struct {
-	Data     []T `json:"data"`
-	NextPage any `json:"next_page"`
 }
 
 func DecodeIngressEvents(rawEvents []json.RawMessage) ([]IngressEvent, error) {

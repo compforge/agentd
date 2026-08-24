@@ -77,7 +77,7 @@ func TestHTTPObservationLogsSlowRequestAtWarnLevel(t *testing.T) {
 	engine := route.NewEngine(config.NewOptions(nil))
 	engine.Use(server.observeHTTP)
 	engine.GET("/v1/models", func(_ context.Context, request *hertzapp.RequestContext) {
-		writeJSON(request, 200, map[string]any{"data": []any{}})
+		request.JSON(200, map[string]any{"data": []any{}})
 	})
 
 	ut.PerformRequest(engine, "GET", "/v1/models", nil)

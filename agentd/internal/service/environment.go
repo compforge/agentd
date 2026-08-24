@@ -37,3 +37,11 @@ func (a *Service) GetEnvironment(ctx context.Context, id string) (model.Environm
 func (a *Service) ListEnvironments(ctx context.Context) ([]model.Environment, error) {
 	return a.repository.ListEnvironments(ctx)
 }
+
+func (a *Service) PageEnvironments(
+	ctx context.Context,
+	page PageQuery,
+) (Page[model.Environment], error) {
+	result, err := a.repository.ListEnvironmentsPage(ctx, repositoryPageQuery(page))
+	return servicePage(result), err
+}

@@ -4,28 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	hertzapp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/service"
 )
 
 func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Model       json.RawMessage   `json:"model"`
-		System      string            `json:"system"`
-		Tools       []map[string]any  `json:"tools"`
-		Metadata    map[string]string `json:"metadata"`
-		MCPServers  []json.RawMessage `json:"mcp_servers"`
-		Skills      []json.RawMessage `json:"skills"`
-		Multiagent  json.RawMessage   `json:"multiagent"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.CreateAgentRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
@@ -45,43 +35,31 @@ func (s *Server) createAgent(ctx context.Context, request *hertzapp.RequestConte
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, agentResponse(created))
+	request.JSON(consts.StatusOK, view.NewAgentResponse(created))
 }
 
 func (s *Server) getAgent(ctx context.Context, request *hertzapp.RequestContext) {
+	var input view.GetAgentRequest
+	if !bindRequest(request, &input) {
+		return
+	}
 	var value model.Agent
 	var err error
-	if raw := string(request.QueryArgs().Peek("version")); raw != "" {
-		version, parseErr := strconv.ParseInt(raw, 10, 64)
-		if parseErr != nil {
-			s.writeError(request, fmt.Errorf("%w: agent version must be an integer", service.ErrInvalid))
-			return
-		}
-		value, err = s.service.FindAgentVersion(ctx, request.Param("agent_id"), version)
+	if input.Version != nil {
+		value, err = s.service.FindAgentVersion(ctx, input.AgentID, *input.Version)
 	} else {
-		value, err = s.service.GetAgent(ctx, request.Param("agent_id"))
+		value, err = s.service.GetAgent(ctx, input.AgentID)
 	}
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, agentResponse(value))
+	request.JSON(consts.StatusOK, view.NewAgentResponse(value))
 }
 
 func (s *Server) updateAgent(ctx context.Context, request *hertzapp.RequestContext) {
-	var input struct {
-		Version     *int64            `json:"version"`
-		Name        json.RawMessage   `json:"name"`
-		Description json.RawMessage   `json:"description"`
-		Model       json.RawMessage   `json:"model"`
-		System      json.RawMessage   `json:"system"`
-		Tools       json.RawMessage   `json:"tools"`
-		Metadata    json.RawMessage   `json:"metadata"`
-		MCPServers  []json.RawMessage `json:"mcp_servers"`
-		Skills      []json.RawMessage `json:"skills"`
-		Multiagent  json.RawMessage   `json:"multiagent"`
-	}
-	if !decodeBody(request, &input) {
+	var input view.UpdateAgentRequest
+	if !bindRequest(request, &input) {
 		return
 	}
 	if len(input.MCPServers) > 0 || len(input.Skills) > 0 || present(input.Multiagent) {
@@ -122,7 +100,7 @@ func (s *Server) updateAgent(ctx context.Context, request *hertzapp.RequestConte
 		s.writeError(request, err)
 		return
 	}
-	updated, err := s.service.UpdateAgent(ctx, request.Param("agent_id"), service.AgentUpdate{
+	updated, err := s.service.UpdateAgent(ctx, input.AgentID, service.AgentUpdate{
 		Version: input.Version, Name: name, Description: description, ModelID: modelID,
 		System: system, Tools: tools, Metadata: metadata,
 	})
@@ -130,46 +108,66 @@ func (s *Server) updateAgent(ctx context.Context, request *hertzapp.RequestConte
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, agentResponse(updated))
+	request.JSON(consts.StatusOK, view.NewAgentResponse(updated))
 }
 
 func (s *Server) archiveAgent(ctx context.Context, request *hertzapp.RequestContext) {
-	archived, err := s.service.ArchiveAgent(ctx, request.Param("agent_id"))
+	var input view.AgentPathRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	archived, err := s.service.ArchiveAgent(ctx, input.AgentID)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, agentResponse(archived))
+	request.JSON(consts.StatusOK, view.NewAgentResponse(archived))
 }
 
 func (s *Server) listAgentVersions(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.service.ListAgentVersions(ctx, request.Param("agent_id"))
+	var input view.ListAgentVersionsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	data := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		data = append(data, agentResponse(value))
+	page, err := s.service.PageAgentVersions(ctx, input.AgentID, query)
+	if err != nil {
+		s.writeError(request, err)
+		return
 	}
-	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil})
+	data := make([]view.AgentResponse, 0, len(page.Items))
+	for _, value := range page.Items {
+		data = append(data, view.NewAgentResponse(value))
+	}
+	next, _ := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
 }
 
 func (s *Server) listAgents(ctx context.Context, request *hertzapp.RequestContext) {
-	values, err := s.service.ListAgents(ctx)
+	var input view.ListAgentsRequest
+	if !bindRequest(request, &input) {
+		return
+	}
+	query, err := parsePage(input.PageRequest)
 	if err != nil {
 		s.writeError(request, err)
 		return
 	}
-	data := make([]map[string]any, 0, len(values))
-	includeArchived := string(request.QueryArgs().Peek("include_archived")) == "true"
-	for _, value := range values {
-		if value.ArchivedAt != nil && !includeArchived {
-			continue
-		}
-		data = append(data, agentResponse(value))
+	page, err := s.service.PageAgents(ctx, query, input.IncludeArchived)
+	if err != nil {
+		s.writeError(request, err)
+		return
 	}
-	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil})
+	data := make([]view.AgentResponse, 0, len(page.Items))
+	for _, value := range page.Items {
+		data = append(data, view.NewAgentResponse(value))
+	}
+	next, _ := pageLinks(query, page.HasMore)
+	request.JSON(consts.StatusOK, view.Page[view.AgentResponse]{Data: data, NextPage: next})
 }
 
 func parseModel(raw json.RawMessage) (string, error) {
@@ -228,28 +226,4 @@ func parseMetadataPatch(raw json.RawMessage) (map[string]*string, error) {
 		return nil, fmt.Errorf("%w: agent metadata must map keys to strings or null", service.ErrInvalid)
 	}
 	return value, nil
-}
-
-func agentResponse(value model.Agent) map[string]any {
-	tools := make([]map[string]any, 0, len(value.Tools))
-	for _, tool := range value.Tools {
-		copy := make(map[string]any, len(tool)+2)
-		for key, item := range tool {
-			copy[key] = item
-		}
-		if copy["configs"] == nil {
-			copy["configs"] = []any{}
-		}
-		if copy["default_config"] == nil {
-			copy["default_config"] = map[string]any{"permission_policy": map[string]any{"type": "always_allow"}}
-		}
-		tools = append(tools, copy)
-	}
-	return map[string]any{
-		"id": value.ID, "type": "agent", "name": value.Name, "description": value.Description,
-		"model": map[string]any{"id": value.ModelID, "speed": "standard"}, "system": value.System,
-		"tools": tools, "mcp_servers": []any{}, "skills": []any{}, "multiagent": nil,
-		"metadata": value.Metadata, "version": value.Version, "archived_at": value.ArchivedAt,
-		"created_at": value.CreatedAt, "updated_at": value.UpdatedAt,
-	}
 }
