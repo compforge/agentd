@@ -12,9 +12,23 @@ import (
 var ErrNotFound = errors.New("resource not found")
 
 type PageQuery struct {
-	Offset     int
 	Limit      int
 	Descending bool
+	Direction  PageDirection
+	Anchor     *PageAnchor
+}
+
+type PageDirection string
+
+const (
+	PageAfter  PageDirection = "after"
+	PageBefore PageDirection = "before"
+)
+
+type PageAnchor struct {
+	CreatedAt time.Time
+	ID        string
+	Version   int64
 }
 
 type Page[T any] struct {
@@ -22,11 +36,16 @@ type Page[T any] struct {
 	HasMore bool
 }
 
-func NewPage[T any](items []T, limit int) Page[T] {
+func NewPage[T any](items []T, query PageQuery) Page[T] {
 	page := Page[T]{Items: items}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
+	if len(page.Items) > query.Limit {
+		page.Items = page.Items[:query.Limit]
 		page.HasMore = true
+	}
+	if query.Direction == PageBefore {
+		for left, right := 0, len(page.Items)-1; left < right; left, right = left+1, right-1 {
+			page.Items[left], page.Items[right] = page.Items[right], page.Items[left]
+		}
 	}
 	return page
 }

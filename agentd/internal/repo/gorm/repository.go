@@ -20,10 +20,10 @@ type GORMRepository struct {
 var _ repo.Repository = (*GORMRepository)(nil)
 
 type agentRow struct {
-	ID               string     `gorm:"primaryKey;size:191"`
+	ID               string     `gorm:"primaryKey;size:191;index:idx_agents_page,priority:2"`
 	CurrentVersionID string     `gorm:"not null;size:191;index"`
 	ArchivedAt       *time.Time `gorm:"index"`
-	CreatedAt        time.Time  `gorm:"not null"`
+	CreatedAt        time.Time  `gorm:"not null;index:idx_agents_page,priority:1"`
 	UpdatedAt        time.Time  `gorm:"not null"`
 }
 
@@ -45,24 +45,24 @@ type agentVersionRow struct {
 func (agentVersionRow) TableName() string { return "agent_versions" }
 
 type modelRow struct {
-	ID         string    `gorm:"primaryKey;size:191"`
+	ID         string    `gorm:"primaryKey;size:191;index:idx_models_page,priority:2"`
 	Provider   string    `gorm:"not null;size:64"`
 	UpstreamID string    `gorm:"column:model_id;not null;size:191"`
 	BaseURL    string    `gorm:"size:2048"`
 	APIKey     string    `gorm:"type:text;not null"`
-	CreatedAt  time.Time `gorm:"not null"`
+	CreatedAt  time.Time `gorm:"not null;index:idx_models_page,priority:1"`
 	UpdatedAt  time.Time `gorm:"not null"`
 }
 
 func (modelRow) TableName() string { return "models" }
 
 type environmentRow struct {
-	ID          string    `gorm:"primaryKey;size:191"`
+	ID          string    `gorm:"primaryKey;size:191;index:idx_environments_page,priority:2"`
 	Name        string    `gorm:"not null;size:255"`
 	Description string    `gorm:"type:text"`
 	Config      []byte    `gorm:"type:json;not null"`
 	Metadata    []byte    `gorm:"type:json;not null"`
-	CreatedAt   time.Time `gorm:"not null"`
+	CreatedAt   time.Time `gorm:"not null;index:idx_environments_page,priority:1"`
 	UpdatedAt   time.Time `gorm:"not null"`
 }
 
@@ -83,7 +83,7 @@ type workerRow struct {
 func (workerRow) TableName() string { return "workers" }
 
 type sessionRow struct {
-	ID             string  `gorm:"primaryKey;size:191"`
+	ID             string  `gorm:"primaryKey;size:191;index:idx_sessions_page,priority:2"`
 	AgentID        string  `gorm:"not null;size:191;index"`
 	AgentVersionID string  `gorm:"not null;size:191;index"`
 	EnvironmentID  string  `gorm:"not null;size:191;index"`
@@ -101,7 +101,7 @@ type sessionRow struct {
 	LastWorkerID   *string `gorm:"size:64"`
 	AssignedAt     *time.Time
 	ArchivedAt     *time.Time `gorm:"index"`
-	CreatedAt      time.Time  `gorm:"not null"`
+	CreatedAt      time.Time  `gorm:"not null;index:idx_sessions_page,priority:1"`
 	UpdatedAt      time.Time  `gorm:"not null"`
 }
 
@@ -162,7 +162,7 @@ func (r *GORMRepository) ListModels(ctx context.Context) ([]model.Model, error) 
 
 func (r *GORMRepository) ListModelsPage(ctx context.Context, page repo.PageQuery) (repo.Page[model.Model], error) {
 	var rows []modelRow
-	if err := pageQuery(r.db.WithContext(ctx).Order("created_at, id"), page).Find(&rows).Error; err != nil {
+	if err := createdAtPageQuery(r.db.WithContext(ctx), page).Find(&rows).Error; err != nil {
 		return repo.Page[model.Model]{}, fmt.Errorf("list models page: %w", err)
 	}
 	values := make([]model.Model, 0, len(rows))
@@ -173,7 +173,7 @@ func (r *GORMRepository) ListModelsPage(ctx context.Context, page repo.PageQuery
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		})
 	}
-	return repo.NewPage(values, page.Limit), nil
+	return repo.NewPage(values, page), nil
 }
 
 func (r *GORMRepository) PutAgent(ctx context.Context, agent model.Agent) error {
@@ -276,11 +276,11 @@ func (r *GORMRepository) ListAgentsPage(
 	includeArchived bool,
 ) (repo.Page[model.Agent], error) {
 	var rows []agentRow
-	query := r.db.WithContext(ctx).Order("created_at, id")
+	query := r.db.WithContext(ctx)
 	if !includeArchived {
 		query = query.Where("archived_at IS NULL")
 	}
-	if err := pageQuery(query, page).Find(&rows).Error; err != nil {
+	if err := createdAtPageQuery(query, page).Find(&rows).Error; err != nil {
 		return repo.Page[model.Agent]{}, fmt.Errorf("list agents page: %w", err)
 	}
 	values := make([]model.Agent, 0, len(rows))
@@ -291,7 +291,7 @@ func (r *GORMRepository) ListAgentsPage(
 		}
 		values = append(values, value)
 	}
-	return repo.NewPage(values, page.Limit), nil
+	return repo.NewPage(values, page), nil
 }
 
 func (r *GORMRepository) ListAgentVersions(ctx context.Context, agentID string) ([]model.Agent, error) {
@@ -331,8 +331,11 @@ func (r *GORMRepository) ListAgentVersionsPage(
 		return repo.Page[model.Agent]{}, fmt.Errorf("get agent %q: %w", agentID, err)
 	}
 	var rows []agentVersionRow
-	query := r.db.WithContext(ctx).Where("agent_id = ?", agentID).Order("version DESC")
-	if err := pageQuery(query, page).Find(&rows).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("agent_id = ?", agentID)
+	if page.Anchor != nil {
+		query = query.Where("version < ?", page.Anchor.Version)
+	}
+	if err := query.Order("version DESC").Limit(page.Limit + 1).Find(&rows).Error; err != nil {
 		return repo.Page[model.Agent]{}, fmt.Errorf("list agent %q versions page: %w", agentID, err)
 	}
 	values := make([]model.Agent, 0, len(rows))
@@ -343,7 +346,7 @@ func (r *GORMRepository) ListAgentVersionsPage(
 		}
 		values = append(values, value)
 	}
-	return repo.NewPage(values, page.Limit), nil
+	return repo.NewPage(values, page), nil
 }
 
 func (r *GORMRepository) agentFromVersion(query *gormio.DB, agent agentRow, versionID string) (model.Agent, error) {
@@ -408,7 +411,7 @@ func (r *GORMRepository) ListEnvironmentsPage(
 	page repo.PageQuery,
 ) (repo.Page[model.Environment], error) {
 	var rows []environmentRow
-	if err := pageQuery(r.db.WithContext(ctx).Order("created_at, id"), page).Find(&rows).Error; err != nil {
+	if err := createdAtPageQuery(r.db.WithContext(ctx), page).Find(&rows).Error; err != nil {
 		return repo.Page[model.Environment]{}, fmt.Errorf("list environments page: %w", err)
 	}
 	values := make([]model.Environment, 0, len(rows))
@@ -419,7 +422,7 @@ func (r *GORMRepository) ListEnvironmentsPage(
 		}
 		values = append(values, value)
 	}
-	return repo.NewPage(values, page.Limit), nil
+	return repo.NewPage(values, page), nil
 }
 
 func (r *GORMRepository) Transaction(ctx context.Context, operation func(repo.Repository) error) error {
@@ -523,7 +526,7 @@ func (r *GORMRepository) ListSessionsPage(
 	if !includeArchived {
 		query = query.Where("archived_at IS NULL")
 	}
-	if err := pageQuery(query.Order(pageOrder(page)), page).Find(&rows).Error; err != nil {
+	if err := createdAtPageQuery(query, page).Find(&rows).Error; err != nil {
 		return repo.Page[model.Session]{}, fmt.Errorf("list sessions page: %w", err)
 	}
 	values := make([]model.Session, 0, len(rows))
@@ -534,15 +537,36 @@ func (r *GORMRepository) ListSessionsPage(
 		}
 		values = append(values, value)
 	}
-	return repo.NewPage(values, page.Limit), nil
+	return repo.NewPage(values, page), nil
 }
 
-func pageQuery(query *gormio.DB, page repo.PageQuery) *gormio.DB {
-	return query.Offset(page.Offset).Limit(page.Limit + 1)
+func createdAtPageQuery(query *gormio.DB, page repo.PageQuery) *gormio.DB {
+	if page.Anchor != nil {
+		operator := ">"
+		if page.Descending {
+			operator = "<"
+		}
+		if page.Direction == repo.PageBefore {
+			if operator == ">" {
+				operator = "<"
+			} else {
+				operator = ">"
+			}
+		}
+		query = query.Where(
+			fmt.Sprintf("(created_at %s ?) OR (created_at = ? AND id %s ?)", operator, operator),
+			page.Anchor.CreatedAt, page.Anchor.CreatedAt, page.Anchor.ID,
+		)
+	}
+	return query.Order(pageOrder(page)).Limit(page.Limit + 1)
 }
 
 func pageOrder(page repo.PageQuery) string {
-	if page.Descending {
+	descending := page.Descending
+	if page.Direction == repo.PageBefore {
+		descending = !descending
+	}
+	if descending {
 		return "created_at DESC, id DESC"
 	}
 	return "created_at, id"

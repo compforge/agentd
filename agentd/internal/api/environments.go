@@ -50,7 +50,7 @@ func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.Request
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
+	query, err := parsePage(input.PageRequest, environmentCursor, false)
 	if err != nil {
 		s.writeError(request, err)
 		return
@@ -64,6 +64,12 @@ func (s *Server) listEnvironments(ctx context.Context, request *hertzapp.Request
 	for _, value := range page.Items {
 		data = append(data, view.NewEnvironmentResponse(value))
 	}
-	next, _ := pageLinks(query, page.HasMore)
+	var first, last service.PageAnchor
+	if len(page.Items) > 0 {
+		first = service.PageAnchor{CreatedAt: page.Items[0].CreatedAt, ID: page.Items[0].ID}
+		value := page.Items[len(page.Items)-1]
+		last = service.PageAnchor{CreatedAt: value.CreatedAt, ID: value.ID}
+	}
+	next, _ := pageLinks(environmentCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.Page[view.EnvironmentResponse]{Data: data, NextPage: next})
 }

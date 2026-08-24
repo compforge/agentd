@@ -42,12 +42,25 @@ func TestPageSessionsFiltersBeforeApplyingCursor(t *testing.T) {
 	if len(first.Items) != 1 || first.Items[0].ID != "session-2" || !first.HasMore {
 		t.Fatalf("first active page = %#v", first)
 	}
-	second, err := application.PageSessions(ctx, service.PageQuery{Offset: 1, Limit: 1, Descending: true}, false)
+	second, err := application.PageSessions(ctx, service.PageQuery{
+		Limit: 1, Descending: true, Direction: service.PageAfter,
+		Anchor: &service.PageAnchor{CreatedAt: first.Items[0].CreatedAt, ID: first.Items[0].ID},
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(second.Items) != 1 || second.Items[0].ID != "session-1" || second.HasMore {
 		t.Fatalf("second active page = %#v", second)
+	}
+	previous, err := application.PageSessions(ctx, service.PageQuery{
+		Limit: 1, Descending: true, Direction: service.PageBefore,
+		Anchor: &service.PageAnchor{CreatedAt: second.Items[0].CreatedAt, ID: second.Items[0].ID},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previous.Items) != 1 || previous.Items[0].ID != "session-2" || previous.HasMore {
+		t.Fatalf("previous active page = %#v", previous)
 	}
 	withArchived, err := application.PageSessions(ctx, service.PageQuery{Limit: 1, Descending: true}, true)
 	if err != nil {

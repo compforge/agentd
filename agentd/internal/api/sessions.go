@@ -96,19 +96,20 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 	if !bindRequest(request, &input) {
 		return
 	}
-	query, err := parsePage(input.PageRequest)
-	if err != nil {
-		s.writeError(request, err)
-		return
-	}
+	descending := false
 	switch input.Order {
 	case "", "desc":
-		query.Descending = true
+		descending = true
 	case "asc":
 	default:
 		s.writeError(request, fmt.Errorf(
 			"%w: order must be asc or desc", service.ErrInvalid,
 		))
+		return
+	}
+	query, err := parsePage(input.PageRequest, sessionCursor, descending)
+	if err != nil {
+		s.writeError(request, err)
 		return
 	}
 	page, err := s.service.PageSessions(ctx, query, input.IncludeArchived)
@@ -130,7 +131,13 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 		}
 		data = append(data, response)
 	}
-	next, previous := pageLinks(query, page.HasMore)
+	var first, last service.PageAnchor
+	if len(page.Items) > 0 {
+		first = service.PageAnchor{CreatedAt: page.Items[0].CreatedAt, ID: page.Items[0].ID}
+		value := page.Items[len(page.Items)-1]
+		last = service.PageAnchor{CreatedAt: value.CreatedAt, ID: value.ID}
+	}
+	next, previous := pageLinks(sessionCursor, query, page.HasMore, first, last)
 	request.JSON(consts.StatusOK, view.BidirectionalPage[view.SessionResponse]{
 		Data: data, NextPage: next, PrevPage: previous,
 	})
