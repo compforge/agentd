@@ -3,7 +3,7 @@ focus: Managed Agent resource security and durable tool-using Session continuity
 schema_version: 1
 facets:
   boundary: {values: [control-plane, system]}
-  recovery: {values: [checkpoint, worker-replacement]}
+  recovery: {values: [checkpoint, worker-replacement, mid-turn]}
   security: {values: [authentication, credential]}
 cases:
   - id: api_key_authentication
@@ -56,3 +56,17 @@ cases:
     binding:
       symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
       spec: Confirmed Worker loss changes placement while durable Session input resumes from its checkpoint.
+  - id: mid_turn_worker_loss
+    desc: A running managed Session converges safely after its Worker is force-deleted.
+    input: {operation: force-delete-worker-during-running-turn, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: mid-turn}
+    judge:
+      e2e:
+        assert:
+          - {path: user_messages, op: eq, value: 1}
+          - {path: agent_messages, op: eq, value: 1}
+          - {path: replacement_worker_id, op: not_in, value_path: previous_worker_ids}
+          - {path: safe_outcome, op: eq, value: true}
+    binding:
+      symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
+      spec: Running input survives Worker loss; uncertain side effects require exact reconciliation instead of automatic replay.
