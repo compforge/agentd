@@ -194,20 +194,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	session, err := client.Beta.Sessions.New(ctx, anthropic.BetaSessionNewParams{
 		Agent:         anthropic.BetaSessionNewParamsAgentUnion{OfString: param.NewOpt(agent.ID)},
 		EnvironmentID: environment.ID,
-	})
-	if err != nil {
-		t.Fatalf("create Session through public control plane: %v", err)
-	}
-	page, err := client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
-	if err != nil {
-		t.Fatalf("list unassigned Session Events: %v", err)
-	}
-	if len(page.Data) != 0 {
-		t.Fatalf("unassigned Session Events = %d", len(page.Data))
-	}
-
-	_, err = client.Beta.Sessions.Events.Send(ctx, session.ID, anthropic.BetaSessionEventSendParams{
-		Events: []anthropic.BetaManagedAgentsEventParamsUnion{{
+		InitialEvents: []anthropic.BetaSessionNewParamsInitialEventUnion{{
 			OfUserMessage: &anthropic.BetaManagedAgentsUserMessageEventParams{
 				Type: anthropic.BetaManagedAgentsUserMessageEventParamsTypeUserMessage,
 				Content: []anthropic.BetaManagedAgentsUserMessageEventParamsContentUnion{{
@@ -217,7 +204,14 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		}},
 	})
 	if err != nil {
-		t.Fatalf("persist Event for asynchronous execution: %v", err)
+		t.Fatalf("create Session through public control plane: %v", err)
+	}
+	page, err := client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
+	if err != nil {
+		t.Fatalf("list unassigned Session Events: %v", err)
+	}
+	if len(page.Data) != 1 || page.Data[0].Type != "user.message" {
+		t.Fatalf("initial Session Events = %#v", page.Data)
 	}
 	if err := executionReconciler.Reconcile(ctx); err != nil {
 		t.Fatalf("reconcile durable Event into Agentlet execution: %v", err)
@@ -295,6 +289,58 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	}
 	if len(page.Data) != 2 || page.Data[1].Type != "agent.message" {
 		t.Fatalf("Events after Assignment release = %#v", page.Data)
+	}
+	updatedSession, err := client.Beta.Sessions.Update(ctx, session.ID, anthropic.BetaSessionUpdateParams{
+		Title: param.NewOpt("renamed"), Metadata: map[string]string{"suite": "managed-api"},
+	})
+	if err != nil {
+		t.Fatalf("update Session through public control plane: %v", err)
+	}
+	if updatedSession.Title != "renamed" || updatedSession.Metadata["suite"] != "managed-api" {
+		t.Fatalf("updated Session = %#v", updatedSession)
+	}
+	archivedSession, err := client.Beta.Sessions.Archive(ctx, session.ID, anthropic.BetaSessionArchiveParams{})
+	if err != nil {
+		t.Fatalf("archive Session through public control plane: %v", err)
+	}
+	if archivedSession.ArchivedAt.IsZero() || archivedSession.Status != anthropic.BetaManagedAgentsSessionStatusTerminated {
+		t.Fatalf("archived Session = %#v", archivedSession)
+	}
+	page, err = client.Beta.Sessions.Events.List(ctx, session.ID, anthropic.BetaSessionEventListParams{})
+	if err != nil {
+		t.Fatalf("list archived Session Events: %v", err)
+	}
+	if len(page.Data) != 2 || page.Data[0].Type != "user.message" || page.Data[1].Type != "agent.message" {
+		t.Fatalf("archived Session Events = %#v", page.Data)
+	}
+	_, err = client.Beta.Sessions.Events.Send(ctx, session.ID, anthropic.BetaSessionEventSendParams{
+		Events: []anthropic.BetaManagedAgentsEventParamsUnion{{
+			OfUserMessage: &anthropic.BetaManagedAgentsUserMessageEventParams{
+				Type: anthropic.BetaManagedAgentsUserMessageEventParamsTypeUserMessage,
+				Content: []anthropic.BetaManagedAgentsUserMessageEventParamsContentUnion{{
+					OfText: &anthropic.BetaManagedAgentsTextBlockParam{Type: anthropic.BetaManagedAgentsTextBlockTypeText, Text: "too late"},
+				}},
+			},
+		}},
+	})
+	if err == nil {
+		t.Fatal("archived Session accepted a new Event")
+	}
+	sessions, err := client.Beta.Sessions.List(ctx, anthropic.BetaSessionListParams{})
+	if err != nil {
+		t.Fatalf("list active Sessions through public control plane: %v", err)
+	}
+	if len(sessions.Data) != 0 {
+		t.Fatalf("active Sessions after archive = %#v", sessions.Data)
+	}
+	sessions, err = client.Beta.Sessions.List(ctx, anthropic.BetaSessionListParams{
+		IncludeArchived: param.NewOpt(true),
+	})
+	if err != nil {
+		t.Fatalf("list archived Sessions through public control plane: %v", err)
+	}
+	if len(sessions.Data) != 1 || sessions.Data[0].ArchivedAt.IsZero() {
+		t.Fatalf("archived Sessions = %#v", sessions.Data)
 	}
 	archived, err := client.Beta.Agents.Archive(ctx, agent.ID, anthropic.BetaAgentArchiveParams{})
 	if err != nil {

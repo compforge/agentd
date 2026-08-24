@@ -116,6 +116,12 @@ Session 在创建时把公开的 Agent ID/版本解析为内部 `agent_version_i
 不跟随 Agent 的当前版本漂移。有效更新才创建新版本，no-op 不创建；archive 改变 Agent 身份的生命周期，
 不产生配置版本。archive 后不再创建新 Session，已有 Session 仍可按原版本继续。
 
+Session 的 title 与 metadata 可以独立更新，不改变已锁定的 AgentVersion、Environment 或当前 placement。
+创建请求中的 `initial_events` 与普通 Event ingress 共用同一条 Ledger 写入边界；只有全部输入完成协议校验后
+才创建 Session，且响应前必须按原顺序完成一次原子 Event batch 持久化。archive 只终止 Session、拒绝后续
+ingress 并保留 Ledger 历史；placement 仍由 Session Reconciler 在安全边界释放，archive 不直接操作
+Agentlet 或 Sandbox。
+
 ## 服务主流程
 
 1. 应用通过 agentd 创建可版本化的 Agent 和 Environment，再创建锁定两者具体版本的

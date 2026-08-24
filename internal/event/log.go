@@ -67,10 +67,24 @@ func NewTurn(inputID, eventType string, fields map[string]any) ManagedEvent {
 // +spec=`agentd writes user ingress facts and Agentlet writes execution facts even when both share one Ledger store`
 // +link=`agentd/docs/kernel.md`
 func (l *Log) AppendIngress(ctx context.Context, sessionID string, value ManagedEvent) error {
-	if !hasTypePrefix(value, "user.") {
-		return errors.New("append ingress event: event type must start with user.")
+	return l.AppendIngressBatch(ctx, sessionID, []ManagedEvent{value})
+}
+
+// AppendIngressBatch atomically records an ordered batch accepted by the
+// public API. Validation completes before opening the Ledger append.
+//
+// +spec=`An accepted ingress request becomes one ordered atomic Ledger append; retries by public Event ID do not duplicate facts`
+// +link=agentd/docs/kernel.md
+func (l *Log) AppendIngressBatch(ctx context.Context, sessionID string, values []ManagedEvent) error {
+	if len(values) == 0 {
+		return errors.New("append ingress events: at least one event is required")
 	}
-	return l.append(ctx, sessionID, value, l.ingressActor)
+	for _, value := range values {
+		if !hasTypePrefix(value, "user.") {
+			return errors.New("append ingress events: event type must start with user.")
+		}
+	}
+	return l.append(ctx, sessionID, values, l.ingressActor)
 }
 
 // AppendExecution rejects ingress facts so Agentlet cannot impersonate agentd.
@@ -78,7 +92,7 @@ func (l *Log) AppendExecution(ctx context.Context, sessionID string, value Manag
 	if hasTypePrefix(value, "user.") {
 		return errors.New("append execution event: event type must not start with user.")
 	}
-	return l.append(ctx, sessionID, value, l.executionActor)
+	return l.append(ctx, sessionID, []ManagedEvent{value}, l.executionActor)
 }
 
 func (l *Log) MarkProcessed(ctx context.Context, sessionID, eventID string) error {
@@ -248,38 +262,82 @@ func requiredEventIDs(raw any) []string {
 	return result
 }
 
-func (l *Log) append(ctx context.Context, sessionID string, value ManagedEvent, actor agentledger.Actor) error {
-	cloned, err := cloneEvent(value)
-	if err != nil {
-		return err
+func (l *Log) append(ctx context.Context, sessionID string, values []ManagedEvent, actor agentledger.Actor) error {
+	cloned := make([]ManagedEvent, 0, len(values))
+	for _, value := range values {
+		copy, err := cloneEvent(value)
+		if err != nil {
+			return err
+		}
+		cloned = append(cloned, copy)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	storedActor, err := l.store.EnsureActor(ctx, actor)
+	if err != nil {
+		return fmt.Errorf("ensure managed event actor: %w", err)
+	}
+	recorder, err := l.openRecorder(ctx, sessionID, storedActor)
+	if err != nil {
+		return err
+	}
+	pending, err := l.filterExisting(ctx, recorder.Lane().ID, cloned)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	proposed := proposeManagedEvents(recorder.Lane().ID, storedActor, pending)
+	appendID := agentledger.NewID()
 	for attempt := 0; attempt < maxAppendAttempts; attempt++ {
-		err = l.appendOnce(ctx, sessionID, cloned, actor)
+		_, err = recorder.Append(ctx, appendID, proposed...)
 		if !errors.Is(err, agentledger.ErrLaneConflict) {
+			if err != nil {
+				return fmt.Errorf("append managed events: %w", err)
+			}
+			return nil
+		}
+		recorder, err = l.openRecorder(ctx, sessionID, storedActor)
+		if err != nil {
 			return err
 		}
+		pending, err = l.filterExisting(ctx, recorder.Lane().ID, pending)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			return nil
+		}
+		proposed = proposeManagedEvents(recorder.Lane().ID, storedActor, pending)
 	}
 	return fmt.Errorf("append managed event after %d lane conflicts: %w", maxAppendAttempts, err)
 }
 
-func (l *Log) appendOnce(ctx context.Context, sessionID string, value ManagedEvent, actor agentledger.Actor) error {
-	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
-		Store: l.store, SessionID: sessionID, RunID: managedEventRun,
-		LaneName: managedEventLane, Actor: actor,
-	})
-	if err != nil {
-		return fmt.Errorf("open managed event recorder: %w", err)
+func proposeManagedEvents(
+	laneID string,
+	actor agentledger.Actor,
+	values []ManagedEvent,
+) []agentledger.ProposedEvent {
+	proposed := make([]agentledger.ProposedEvent, 0, len(values))
+	for _, value := range values {
+		event := agentledger.NewEvent("lane.managed.api_event", laneID, laneID, actor)
+		event.Payload = map[string]any{"event": map[string]any(value)}
+		proposed = append(proposed, event)
 	}
-	for stored, loadErr := range l.store.LoadLane(ctx, recorder.Lane().ID, 0) {
+	return proposed
+}
+
+func (l *Log) filterExisting(
+	ctx context.Context,
+	laneID string,
+	values []ManagedEvent,
+) ([]ManagedEvent, error) {
+	existingIDs := make(map[string]bool)
+	for stored, loadErr := range l.store.LoadLane(ctx, laneID, 0) {
 		if loadErr != nil {
-			return fmt.Errorf("load managed event lane: %w", loadErr)
-		}
-		eventID, _ := value["id"].(string)
-		if eventID == "" {
-			continue
+			return nil, fmt.Errorf("load managed event lane: %w", loadErr)
 		}
 		raw, ok := stored.Payload["event"]
 		if !ok {
@@ -287,18 +345,39 @@ func (l *Log) appendOnce(ctx context.Context, sessionID string, value ManagedEve
 		}
 		existing, mapErr := mapEvent(raw)
 		if mapErr != nil {
-			return mapErr
+			return nil, mapErr
 		}
-		if existingID, _ := existing["id"].(string); existingID == eventID {
-			return nil
+		if id, ok := existing["id"].(string); ok && id != "" {
+			existingIDs[id] = true
 		}
 	}
-	if _, err := recorder.Record(ctx, "lane.managed.api_event", recorder.Lane().ID, map[string]any{
-		"event": map[string]any(value),
-	}, ""); err != nil {
-		return fmt.Errorf("append managed event: %w", err)
+	pending := make([]ManagedEvent, 0, len(values))
+	for _, value := range values {
+		id, _ := value["id"].(string)
+		if id != "" && existingIDs[id] {
+			continue
+		}
+		pending = append(pending, value)
+		if id != "" {
+			existingIDs[id] = true
+		}
 	}
-	return nil
+	return pending, nil
+}
+
+func (l *Log) openRecorder(
+	ctx context.Context,
+	sessionID string,
+	actor agentledger.Actor,
+) (*agentledger.LaneRecorder, error) {
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: l.store, SessionID: sessionID, RunID: managedEventRun,
+		LaneName: managedEventLane, Actor: actor,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open managed event recorder: %w", err)
+	}
+	return recorder, nil
 }
 
 func hasTypePrefix(value ManagedEvent, prefix string) bool {

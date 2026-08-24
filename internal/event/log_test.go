@@ -19,6 +19,39 @@ func TestLogSeparatesIngressAndExecutionWriters(t *testing.T) {
 	}
 }
 
+func TestAppendIngressBatchValidatesBeforeAtomicOrderedAppend(t *testing.T) {
+	ctx := context.Background()
+	log := NewLog(agentledger.NewMemoryEventStore())
+	first := New("user.message", map[string]any{"content": []any{map[string]any{"type": "text", "text": "first"}}})
+	second := New("user.message", map[string]any{"content": []any{map[string]any{"type": "text", "text": "second"}}})
+	invalid := New("agent.message", nil)
+	if err := log.AppendIngressBatch(ctx, "session-1", []ManagedEvent{first, invalid}); err == nil {
+		t.Fatal("AppendIngressBatch accepted an invalid mixed-writer batch")
+	}
+	events, err := log.List(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("invalid ingress batch partially persisted: %#v", events)
+	}
+
+	batch := []ManagedEvent{first, second}
+	if err := log.AppendIngressBatch(ctx, "session-1", batch); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.AppendIngressBatch(ctx, "session-1", batch); err != nil {
+		t.Fatalf("idempotent batch retry: %v", err)
+	}
+	events, err = log.List(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0]["id"] != first["id"] || events[1]["id"] != second["id"] {
+		t.Fatalf("ordered ingress batch = %#v", events)
+	}
+}
+
 func TestLogProjectsEventsAcrossProcesses(t *testing.T) {
 	ctx := context.Background()
 	store := agentledger.NewMemoryEventStore()

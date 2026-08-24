@@ -126,7 +126,9 @@ func (a *Service) ObserveSession(
 		now := time.Now().UTC()
 		session.ObserverStatus = raw
 		projectedStatus := status.Status
-		if !status.Exists {
+		if session.ArchivedAt != nil {
+			projectedStatus = model.SessionStatusTerminated
+		} else if !status.Exists {
 			projectedStatus = model.SessionStatusRescheduling
 		}
 		changed := session.Status != projectedStatus

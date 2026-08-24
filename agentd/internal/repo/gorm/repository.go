@@ -100,8 +100,9 @@ type sessionRow struct {
 	WorkerID       *string `gorm:"size:64;index"`
 	LastWorkerID   *string `gorm:"size:64"`
 	AssignedAt     *time.Time
-	CreatedAt      time.Time `gorm:"not null"`
-	UpdatedAt      time.Time `gorm:"not null"`
+	ArchivedAt     *time.Time `gorm:"index"`
+	CreatedAt      time.Time  `gorm:"not null"`
+	UpdatedAt      time.Time  `gorm:"not null"`
 }
 
 func (sessionRow) TableName() string { return "sessions" }
@@ -579,7 +580,8 @@ func sessionToRow(session model.Session) (sessionRow, error) {
 		ObserverStatus: session.ObserverStatus,
 		AssignmentID:   optionalString(session.Placement.Fence), WorkerID: optionalString(session.Placement.WorkerID),
 		LastWorkerID: optionalString(session.LastWorkerID),
-		AssignedAt:   session.Placement.PlacedAt, CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
+		AssignedAt:   session.Placement.PlacedAt, ArchivedAt: session.ArchivedAt,
+		CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 	}, nil
 }
 
@@ -595,6 +597,7 @@ func (r sessionRow) session() (model.Session, error) {
 			Fence: stringValue(r.AssignmentID), WorkerID: stringValue(r.WorkerID), PlacedAt: r.AssignedAt,
 		},
 		LastWorkerID: stringValue(r.LastWorkerID),
+		ArchivedAt:   r.ArchivedAt,
 		CreatedAt:    r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if err := json.Unmarshal(r.Metadata, &value.Metadata); err != nil {

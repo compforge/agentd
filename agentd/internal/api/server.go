@@ -73,6 +73,8 @@ func (s *Server) Register(engine *route.Engine) {
 	engine.POST("/v1/sessions", s.createSession)
 	engine.GET("/v1/sessions", s.listSessions)
 	engine.GET("/v1/sessions/:session_id", s.getSession)
+	engine.POST("/v1/sessions/:session_id", s.updateSession)
+	engine.POST("/v1/sessions/:session_id/archive", s.archiveSession)
 	engine.POST("/v1/sessions/:session_id/events", s.sendEvents)
 	engine.GET("/v1/sessions/:session_id/events", s.listEvents)
 	engine.GET("/v1/sessions/:session_id/events/stream", s.streamEvents)
