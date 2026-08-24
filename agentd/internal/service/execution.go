@@ -33,7 +33,7 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 	if !ready {
 		return ExecutionTarget{}, fmt.Errorf("%w: Worker %q has no fresh ready endpoint", ErrUnavailable, worker.ID)
 	}
-	agent, err := a.repository.GetAgent(ctx, session.AgentID)
+	agent, err := a.repository.GetAgentVersion(ctx, session.AgentVersionID)
 	if err != nil {
 		return ExecutionTarget{}, fmt.Errorf("load Session %q Agent: %w", sessionID, err)
 	}

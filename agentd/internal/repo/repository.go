@@ -14,8 +14,13 @@ var ErrNotFound = errors.New("resource not found")
 type Repository interface {
 	Transaction(context.Context, func(Repository) error) error
 	PutAgent(context.Context, model.Agent) error
+	CreateAgentVersion(context.Context, model.Agent) error
 	GetAgent(context.Context, string) (model.Agent, error)
+	GetAgentForUpdate(context.Context, string) (model.Agent, error)
+	GetAgentVersion(context.Context, string) (model.Agent, error)
+	FindAgentVersion(context.Context, string, int64) (model.Agent, error)
 	ListAgents(context.Context) ([]model.Agent, error)
+	ListAgentVersions(context.Context, string) ([]model.Agent, error)
 	PutModel(context.Context, model.Model) error
 	GetModel(context.Context, string) (model.Model, error)
 	ListModels(context.Context) ([]model.Model, error)

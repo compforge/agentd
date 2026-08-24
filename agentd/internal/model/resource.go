@@ -4,6 +4,7 @@ import "time"
 
 type Agent struct {
 	ID          string
+	VersionID   string
 	Name        string
 	Description string
 	ModelID     string
@@ -11,6 +12,7 @@ type Agent struct {
 	Tools       []map[string]any
 	Metadata    map[string]string
 	Version     int64
+	ArchivedAt  *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

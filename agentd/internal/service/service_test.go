@@ -222,11 +222,15 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.PutAgent(ctx, model.Agent{
-		ID: "agent-1", Name: "test", ModelID: "model-1", Version: 3,
+	agent := model.Agent{
+		ID: "agent-1", VersionID: "agent-version-3", Name: "test", ModelID: "model-1", Version: 3,
 		System: "be concise", Tools: []map[string]any{{"type": "agent_toolset_20260401"}},
 		CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
+	}
+	if err := repository.CreateAgentVersion(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutAgent(ctx, agent); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.PutEnvironment(ctx, model.Environment{
@@ -236,7 +240,7 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repository.PutSession(ctx, model.Session{
-		ID: "session-1", AgentID: "agent-1", AgentVersion: 3, EnvironmentID: "env-1",
+		ID: "session-1", AgentID: "agent-1", AgentVersionID: "agent-version-3", EnvironmentID: "env-1",
 		Metadata: map[string]string{"suite": "contract"}, Status: model.SessionStatusIdle,
 		Harness: "agentgo", HarnessVersion: "v1", CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
@@ -265,6 +269,107 @@ func TestCurrentExecutionBuildsPlacedWorkSnapshot(t *testing.T) {
 		target.Work.Agent.Model.UpstreamID != "claude-sonnet-4-6" ||
 		target.Work.Agent.Model.BaseURL != "https://model.example.test" || target.Work.Agent.Model.APIKey != "secret" {
 		t.Fatalf("model snapshot = %#v", target.Work.Agent.Model)
+	}
+}
+
+func TestAgentLifecycleKeepsImmutableVersionsAndPinnedSessions(t *testing.T) {
+	application, repository := newTestControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := repository.PutModel(ctx, model.Model{
+		ID: "model-1", Provider: "anthropic", UpstreamID: "claude-sonnet-4-6", APIKey: "secret",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := application.CreateAgent(ctx, model.Agent{
+		Name: "reviewer", Description: "reviews code", ModelID: "model-1", System: "be precise",
+		Tools: []map[string]any{{"type": "agent_toolset_20260401"}}, Metadata: map[string]string{"team": "quality"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Version != 1 || created.VersionID == "" {
+		t.Fatalf("created Agent = %#v", created)
+	}
+
+	expectedVersion := created.Version
+	updatedDescription := "reviews and tests code"
+	updatedTeam := "platform"
+	updated, err := application.UpdateAgent(ctx, created.ID, service.AgentUpdate{
+		Version: &expectedVersion, Description: &updatedDescription,
+		Metadata: map[string]*string{"team": &updatedTeam, "obsolete": nil},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != 2 || updated.VersionID == created.VersionID || updated.Description != updatedDescription ||
+		updated.Metadata["team"] != updatedTeam {
+		t.Fatalf("updated Agent = %#v", updated)
+	}
+
+	noOpVersion := updated.Version
+	noOp, err := application.UpdateAgent(ctx, created.ID, service.AgentUpdate{
+		Version: &noOpVersion, Description: &updatedDescription,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noOp.Version != updated.Version || noOp.VersionID != updated.VersionID {
+		t.Fatalf("no-op update created version: before=%#v after=%#v", updated, noOp)
+	}
+	if _, err := application.UpdateAgent(ctx, created.ID, service.AgentUpdate{
+		Version: &expectedVersion, Description: &updatedDescription,
+	}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("stale update error = %v, want ErrConflict", err)
+	}
+
+	versions, err := application.ListAgentVersions(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].Version != 2 || versions[1].Version != 1 ||
+		versions[1].Description != "reviews code" {
+		t.Fatalf("Agent versions = %#v", versions)
+	}
+
+	environment, err := application.CreateEnvironment(ctx, model.Environment{
+		Name: "test", Config: map[string]any{"type": "cloud"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := application.CreateSession(ctx, created.ID, 1, environment.ID, "pinned", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := application.CreateSession(ctx, created.ID, 0, environment.ID, "latest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.AgentVersionID != created.VersionID || latest.AgentVersionID != updated.VersionID {
+		t.Fatalf("Session version pins: pinned=%#v latest=%#v", pinned, latest)
+	}
+
+	archived, err := application.ArchiveAgent(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil || archived.Version != 2 {
+		t.Fatalf("archived Agent = %#v", archived)
+	}
+	if _, err := application.UpdateAgent(ctx, created.ID, service.AgentUpdate{}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("archived update error = %v, want ErrConflict", err)
+	}
+	if _, err := application.CreateSession(ctx, created.ID, 0, environment.ID, "blocked", nil); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("archived Session create error = %v, want ErrConflict", err)
+	}
+	resolved, err := application.GetAgentVersion(ctx, pinned.AgentVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Version != 1 || resolved.Description != "reviews code" || resolved.ArchivedAt == nil {
+		t.Fatalf("resolved pinned Agent version = %#v", resolved)
 	}
 }
 

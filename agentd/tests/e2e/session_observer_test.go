@@ -61,10 +61,14 @@ func TestSessionReconcilerReleasesObservedIdlePlacement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.PutAgent(ctx, model.Agent{
-		ID: "agent-e2e", Name: "e2e", ModelID: "model-e2e", Version: 1,
+	agent := model.Agent{
+		ID: "agent-e2e", VersionID: "agent-version-e2e", Name: "e2e", ModelID: "model-e2e", Version: 1,
 		Tools: []map[string]any{}, Metadata: map[string]string{}, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
+	}
+	if err := repository.CreateAgentVersion(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PutAgent(ctx, agent); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.PutEnvironment(ctx, model.Environment{
@@ -74,7 +78,7 @@ func TestSessionReconcilerReleasesObservedIdlePlacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repository.PutSession(ctx, model.Session{
-		ID: "session-e2e", AgentID: "agent-e2e", AgentVersion: 1,
+		ID: "session-e2e", AgentID: "agent-e2e", AgentVersionID: "agent-version-e2e",
 		EnvironmentID: "environment-e2e", Metadata: map[string]string{},
 		Status: model.SessionStatusIdle, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
