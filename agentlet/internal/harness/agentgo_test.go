@@ -387,12 +387,18 @@ func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	}
 	currentInput := agentgo.UserMsg("current")
 	currentInput.Metadata = map[string]any{agentdInputID: "input-2"}
+	currentToolCall := agentgo.Message{
+		Role: agentgo.RoleAssistant,
+		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
+			ID: "call-2", Name: "bash", Args: json.RawMessage(`{"command":"true"}`),
+		})},
+	}
 	currentOutput := agentgo.Message{
 		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("current output")},
 	}
 	var projected []ManagedEvent
 	err := projectAssistantMessages(
-		[]agentgo.AgentMessage{oldInput, oldOutput, currentInput, currentOutput},
+		[]agentgo.AgentMessage{oldInput, oldOutput, currentInput, currentToolCall, currentOutput},
 		"input-2",
 		func(event ManagedEvent) error {
 			projected = append(projected, event)
@@ -404,5 +410,27 @@ func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	}
 	if len(projected) != 1 || projected[0]["content"].([]map[string]any)[0]["text"] != "current output" {
 		t.Fatalf("projected events = %#v", projected)
+	}
+}
+
+func TestManagedAssistantEventProjectsOnlyUserVisibleText(t *testing.T) {
+	toolCall := agentgo.Message{
+		Role: agentgo.RoleAssistant,
+		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
+			ID: "call-1", Name: "bash", Args: json.RawMessage(`{"command":"true"}`),
+		})},
+	}
+	if event, ok, err := managedAssistantEvent("input-1", toolCall); err != nil || ok || event != nil {
+		t.Fatalf("tool-call projection = event:%#v ok:%t err:%v, want skipped", event, ok, err)
+	}
+
+	mixed := toolCall
+	mixed.Content = append([]agentgo.ContentBlock{agentgo.TextBlock("working")}, mixed.Content...)
+	event, ok, err := managedAssistantEvent("input-1", mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || event["content"].([]map[string]any)[0]["text"] != "working" {
+		t.Fatalf("mixed projection = event:%#v ok:%t", event, ok)
 	}
 }
