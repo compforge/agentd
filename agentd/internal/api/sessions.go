@@ -69,7 +69,12 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, sessionResponse(created, agent))
+	response, err := s.sessionResponse(ctx, created, agent)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, response)
 }
 
 func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContext) {
@@ -83,7 +88,12 @@ func (s *Server) getSession(ctx context.Context, request *hertzapp.RequestContex
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, sessionResponse(value, agent))
+	response, err := s.sessionResponse(ctx, value, agent)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, response)
 }
 
 func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestContext) {
@@ -103,7 +113,12 @@ func (s *Server) listSessions(ctx context.Context, request *hertzapp.RequestCont
 			s.writeError(request, err)
 			return
 		}
-		data = append(data, sessionResponse(value, agent))
+		response, err := s.sessionResponse(ctx, value, agent)
+		if err != nil {
+			s.writeError(request, err)
+			return
+		}
+		data = append(data, response)
 	}
 	writeJSON(request, consts.StatusOK, map[string]any{"data": data, "next_page": nil, "prev_page": nil})
 }
@@ -145,7 +160,12 @@ func (s *Server) updateSession(ctx context.Context, request *hertzapp.RequestCon
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, sessionResponse(updated, agent))
+	response, err := s.sessionResponse(ctx, updated, agent)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, response)
 }
 
 // +case:id=session_archive_preserves_history,desc=`archive an idle Session after it has executed Events`,expect=`terminated Session remains readable with its Event history`,forbid=`accepting new ingress or deleting Ledger history`,group=system
@@ -163,7 +183,12 @@ func (s *Server) archiveSession(ctx context.Context, request *hertzapp.RequestCo
 		s.writeError(request, err)
 		return
 	}
-	writeJSON(request, consts.StatusOK, sessionResponse(archived, agent))
+	response, err := s.sessionResponse(ctx, archived, agent)
+	if err != nil {
+		s.writeError(request, err)
+		return
+	}
+	writeJSON(request, consts.StatusOK, response)
 }
 
 func decodeInitialEvents(rawEvents []json.RawMessage) ([]view.IngressEvent, error) {
@@ -233,19 +258,39 @@ func parseAgentReference(raw json.RawMessage) (string, int64, error) {
 	return id, int64(version), nil
 }
 
-func sessionResponse(value model.Session, agent model.Agent) map[string]any {
+func (s *Server) sessionResponse(ctx context.Context, value model.Session, agent model.Agent) (map[string]any, error) {
+	usage, err := s.events.SessionUsage(ctx, value.ID)
+	if err != nil {
+		return nil, err
+	}
 	agentValue := agentResponse(agent)
 	delete(agentValue, "metadata")
 	delete(agentValue, "created_at")
 	delete(agentValue, "updated_at")
 	delete(agentValue, "archived_at")
-	return map[string]any{
+	durationEnd := time.Now()
+	if value.Status == "terminated" {
+		durationEnd = value.UpdatedAt
+	}
+	durationSeconds := max(durationEnd.Sub(value.CreatedAt).Seconds(), 0)
+	response := map[string]any{
 		"id": value.ID, "type": "session", "agent": agentValue, "environment_id": value.EnvironmentID,
 		"title": value.Title, "metadata": value.Metadata, "status": value.Status,
 		"created_at": value.CreatedAt, "updated_at": value.UpdatedAt, "archived_at": value.ArchivedAt,
 		"budget": nil, "outcome_evaluations": []any{}, "resources": []any{}, "vault_ids": []any{},
 		"deployment_id": nil,
-		"stats":         map[string]any{"active_seconds": 0, "duration_seconds": time.Since(value.CreatedAt).Seconds()},
-		"usage":         map[string]any{"active_seconds": 0, "cache_creation": map[string]any{}, "cache_read_input_tokens": 0, "input_tokens": 0, "list_cost": nil, "output_tokens": 0, "server_tool_use": nil},
+		"stats":         map[string]any{"active_seconds": 0, "duration_seconds": durationSeconds},
+		"usage": map[string]any{
+			"active_seconds": 0,
+			// Ledger currently records cache creation as one combined value. The public
+			// contract splits it by TTL, so do not invent a 5m/1h attribution here.
+			"cache_creation": map[string]any{
+				"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0,
+			},
+			"cache_read_input_tokens": usage.CacheReadInputTokens,
+			"input_tokens":            usage.InputTokens, "list_cost": nil,
+			"output_tokens": usage.OutputTokens, "server_tool_use": nil,
+		},
 	}
+	return response, nil
 }
