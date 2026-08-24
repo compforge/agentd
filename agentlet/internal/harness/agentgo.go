@@ -60,9 +60,9 @@ func (r *AgentGoRunner) PrepareSession(ctx context.Context, session Session) (st
 	return r.Name() + "/" + session.ID, nil
 }
 
-// Run executes one AgentGo turn and projects only durable assistant messages.
+// Run executes one AgentGo turn and projects only user-visible assistant text.
 //
-// +spec=`Each AgentGo turn restores the latest validated Session checkpoint, uses its configured model and Sandbox, persists only complete assistant messages, and keeps model/tool attempts auditable`
+// +spec=`Each AgentGo turn restores the latest validated Session checkpoint, uses its configured model and Sandbox, projects only complete user-visible assistant text as agent.message, and keeps model/tool attempts auditable`
 // +case:id=model_question_answer,desc=`answer through the configured streaming model provider`,expect=`the final answer is persisted once and the model attempt completes in the ledger`
 // +case:id=model_stream_timeout,desc=`a model stream times out after partial output and a later user input succeeds`,expect=`the timed-out attempt is audited and only the later complete answer is persisted`,forbid=`persisting partial output or losing the failed model attempt`
 // +case:id=sandbox_resume,desc=`send two tool-using turns to one managed Session`,input=`each turn requires the isolated bash tool and the same final marker`,expect=`both turns finish, the second restores the first checkpoint, and durable Event history contains both answers`,forbid=`losing Session identity, bypassing the Sandbox, or duplicating a completed input`,group=system
@@ -229,9 +229,12 @@ func (r *AgentGoRunner) Run(
 		if event.Message.GetRole() != agentgo.RoleAssistant {
 			return
 		}
-		managed, err := managedAssistantEvent(input.ID, event.Message)
+		managed, ok, err := managedAssistantEvent(input.ID, event.Message)
 		if err != nil {
 			emitErr = err
+			return
+		}
+		if !ok {
 			return
 		}
 		emitErr = emit(managed)
@@ -572,9 +575,12 @@ func projectAssistantMessages(
 		if message.GetRole() != agentgo.RoleAssistant {
 			continue
 		}
-		managed, err := managedAssistantEvent(inputID, message)
+		managed, ok, err := managedAssistantEvent(inputID, message)
 		if err != nil {
 			return err
+		}
+		if !ok {
+			continue
 		}
 		if err := emit(managed); err != nil {
 			return err
@@ -583,20 +589,27 @@ func projectAssistantMessages(
 	return nil
 }
 
-func managedAssistantEvent(inputID string, message agentgo.AgentMessage) (ManagedEvent, error) {
+func managedAssistantEvent(inputID string, message agentgo.AgentMessage) (ManagedEvent, bool, error) {
+	text := message.TextContent()
+	// AgentGo keeps tool-call assistant messages in its checkpoint so the loop can
+	// recover, but the public agent.message event carries user-visible content.
+	// Tool actions use their own Managed Agent event types instead of empty text.
+	if text == "" {
+		return nil, false, nil
+	}
 	encoded, err := json.Marshal(message)
 	if err != nil {
-		return nil, fmt.Errorf("encode assistant event identity: %w", err)
+		return nil, false, fmt.Errorf("encode assistant event identity: %w", err)
 	}
 	digest := sha256.Sum256(append([]byte(inputID+"\x00"), encoded...))
 	event := NewManagedEvent("agent.message", map[string]any{
-		"content": []map[string]any{{"type": "text", "text": message.TextContent()}},
+		"content": []map[string]any{{"type": "text", "text": text}},
 	})
 	event["id"] = fmt.Sprintf("event_%x", digest[:12])
 	if timestamp := message.GetTimestamp(); !timestamp.IsZero() {
 		event["processed_at"] = timestamp.UTC().Format(time.RFC3339Nano)
 	}
-	return event, nil
+	return event, true, nil
 }
 
 func (r *AgentGoRunner) Interrupt(sessionID string) {
