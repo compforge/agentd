@@ -149,3 +149,62 @@ func TestPendingToolResolutionUsesInternalConsumptionMarker(t *testing.T) {
 		t.Fatalf("queued input was not released after resolution: %#v", pending)
 	}
 }
+
+func TestSessionUsageProjectsTerminalModelAttempts(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	log := NewLog(store)
+	actor, err := store.EnsureActor(ctx, agentledger.NewActorWithKey("test/harness", "agent", "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: store, SessionID: "session-1", RunID: "run-1", LaneName: "main", Actor: actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := recorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelAttempt, err := recorder.BeforeModelCall(ctx, turn.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.ModelCompleted(ctx, modelAttempt, map[string]any{"usage": map[string]any{
+		"input_tokens": 12, "output_tokens": 5,
+		"cache_read_input_tokens": 7, "cache_write_input_tokens": 3,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	failedAttempt, err := recorder.BeforeModelCall(ctx, turn.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.ModelFailed(ctx, failedAttempt, context.DeadlineExceeded, map[string]any{
+		"usage": map[string]any{"input_tokens": 2, "cache_read_input_tokens": 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	toolAttempt, err := recorder.BeforeToolCall(ctx, turn.ID, "tool-call-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.ToolCompleted(ctx, toolAttempt, map[string]any{"usage": map[string]any{
+		"input_tokens": 100, "output_tokens": 100,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err := log.SessionUsage(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := SessionUsage{
+		InputTokens: 14, OutputTokens: 5, CacheReadInputTokens: 8, CacheWriteInputTokens: 3,
+	}
+	if usage != want {
+		t.Fatalf("Session usage = %#v, want %#v", usage, want)
+	}
+}

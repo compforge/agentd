@@ -122,6 +122,12 @@ Session 的 title 与 metadata 可以独立更新，不改变已锁定的 AgentV
 ingress 并保留 Ledger 历史；placement 仍由 Session Reconciler 在安全边界释放，archive 不直接操作
 Agentlet 或 Sandbox。
 
+Session 的公开 `usage` 是 Ledger 执行事实的读投影，不是 Control State 中持续累加的可变字段。模型 token
+用量累计 `model_call` 终态 Event 中已观测到的 usage；失败调用已产生的 token 仍计入，未完成、未报告
+usage 的 Attempt 以及形状相似的 Tool payload 不计入。Ledger 尚未提供或无法无损映射到公开协议的数据
+保持空值或零值，不由 agentd 猜测。terminated Session 的 `duration_seconds` 冻结在最后一次状态更新，
+历史查询不会继续增长。
+
 ## 服务主流程
 
 1. 应用通过 agentd 创建可版本化的 Agent 和 Environment，再创建锁定两者具体版本的

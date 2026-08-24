@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,7 +39,8 @@ import (
 func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	events := managedevent.NewLog(agentledger.NewMemoryEventStore())
+	ledgerStore := agentledger.NewMemoryEventStore()
+	events := managedevent.NewLog(ledgerStore)
 	worker := &fakeAgentlet{workerID: "worker-1", events: events}
 	workerServer := httptest.NewServer(worker)
 	defer workerServer.Close()
@@ -252,6 +254,39 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	}
 	cancelStream()
 
+	usageRecorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: ledgerStore, SessionID: session.ID, RunID: "usage-test", LaneName: "main",
+		Actor: agentledger.NewActor("agent", "contract-test"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageTurn, err := usageRecorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedCall, err := usageRecorder.BeforeModelCall(ctx, usageTurn.ID, map[string]any{"input": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := usageRecorder.ModelCompleted(ctx, completedCall, map[string]any{
+		"output": "done", "usage": map[string]any{
+			"input_tokens": 10, "output_tokens": 4,
+			"cache_read_input_tokens": 6, "cache_write_input_tokens": 2,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failedCall, err := usageRecorder.BeforeModelCall(ctx, usageTurn.ID, map[string]any{"input": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := usageRecorder.ModelFailed(ctx, failedCall, errors.New("provider timeout"), map[string]any{
+		"usage": map[string]any{"input_tokens": 3, "cache_read_input_tokens": 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	source, err := sessionobserver.NewAgentletSource(controlService, agentletConnector)
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +309,10 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 	}
 	if current.Status != anthropic.BetaManagedAgentsSessionStatusIdle {
 		t.Fatalf("Session status = %q, want idle", current.Status)
+	}
+	if current.Usage.InputTokens != 13 || current.Usage.OutputTokens != 4 ||
+		current.Usage.CacheReadInputTokens != 7 {
+		t.Fatalf("Session usage = %#v", current.Usage)
 	}
 	stored, err := repository.GetSession(ctx, session.ID)
 	if err != nil {

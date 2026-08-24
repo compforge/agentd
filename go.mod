@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.63.1
 	github.com/cloudwego/hertz v0.10.4
-	github.com/compforge/agent-ledger/go v0.0.0-20260824032037-77098b778916
+	github.com/compforge/agent-ledger/go v0.0.0-20260824064430-4cd7ccaf6a97
 	github.com/compforge/agentgo v0.0.1
 	github.com/compforge/case-harness/go v0.0.0-20260821131719-8f76378b280f
 	github.com/go-sql-driver/mysql v1.9.3
