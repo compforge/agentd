@@ -128,7 +128,9 @@ func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := recorder.BeforeToolCall(context.Background(), turn.ID, map[string]any{"tool_call_id": "call-1"}); err != nil {
+	if _, err := recorder.BeforeToolCall(context.Background(), turn.ID, "call-1", map[string]any{
+		"tool_name": "write", "input": map[string]any{},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
@@ -158,8 +160,8 @@ func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, map[string]any{
-		"tool_call_id": "call-1", "tool_name": "write", "arguments": `{"path":"README.md"}`,
+	first, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, "call-1", map[string]any{
+		"tool_name": "write", "input": map[string]any{"path": "README.md"},
 	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
 	if err != nil {
 		t.Fatal(err)
@@ -177,15 +179,15 @@ func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
 	}
 
 	retry, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{
-		"tool_call_id": "call-1", "tool_name": "write", "arguments": `{"path":"README.md"}`,
+		"tool_name": "write", "input": map[string]any{"path": "README.md"},
 		"recovery_decision_id": input.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := recorder.Record(ctx, agentledger.EventTypeAttemptFailed, first.AttemptID, map[string]any{
-		"error": map[string]any{"type": "outcome_unknown"}, "superseded_by_attempt_id": retry.AttemptID,
-	}, first.RequestedEventID); err != nil {
+	if _, err := recorder.MarkAttemptOutcomeUnknown(
+		ctx, first, "superseded by an authorized retry", retry.AttemptID,
+	); err != nil {
 		t.Fatal(err)
 	}
 	_, err = runner.planToolResolution(ctx, "session-1", input)
@@ -217,7 +219,9 @@ func TestAgentGoResumeRetriesReadToolBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	readEffect := agentledger.Effect{Kind: agentledger.EffectKindRead, Idempotency: agentledger.IdempotencyNotApplicable}
-	if _, err := recorder.BeforeToolCallWithEffect(context.Background(), turn.ID, map[string]any{"tool_call_id": "call-1"}, readEffect); err != nil {
+	if _, err := recorder.BeforeToolCallWithEffect(context.Background(), turn.ID, "call-1", map[string]any{
+		"tool_name": "read", "input": map[string]any{},
+	}, readEffect); err != nil {
 		t.Fatal(err)
 	}
 	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}

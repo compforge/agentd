@@ -186,10 +186,9 @@ func seedUnresolvedWriteAttempt(
 	if err != nil {
 		t.Fatalf("seed AgentGo turn: %v", err)
 	}
-	attempt, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, map[string]any{
-		"tool_call_id": toolCallID,
-		"tool_name":    "write",
-		"arguments":    `{"path":"release.txt","content":"released"}`,
+	attempt, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, toolCallID, map[string]any{
+		"tool_name": "write",
+		"input":     map[string]any{"path": "release.txt", "content": "released"},
 	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
 	if err != nil {
 		t.Fatalf("seed unresolved write attempt: %v", err)

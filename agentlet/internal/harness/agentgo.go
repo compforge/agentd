@@ -164,15 +164,17 @@ func (r *AgentGoRunner) Run(
 		Actor:            actor,
 		NativeSessionID:  session.ID,
 		OperationTimeout: r.config.OperationTimeout,
-		ToolEffect:       agentGoToolEffect,
+		ToolSemantics: func(call agentgo.ToolCall) agentgoadapter.ToolSemantics {
+			return agentgoadapter.ToolSemantics{Effect: agentGoToolEffect(call)}
+		},
 		CanRetryTool: func(action agentledger.Action, attempt agentledger.Attempt, _ agentgo.ToolCall) agentgoadapter.ToolRetryDecision {
 			if canRetryToolEffect(action.Effect) {
 				return agentgoadapter.ToolRetryDecision{Approved: true}
 			}
 			if retryAuthorization.ActionID == action.ID && retryAuthorization.AttemptID == attempt.ID {
 				return agentgoadapter.ToolRetryDecision{
-					Approved: true,
-					Metadata: map[string]any{"recovery_decision_id": retryAuthorization.DecisionID},
+					Approved:           true,
+					RecoveryDecisionID: retryAuthorization.DecisionID,
 				}
 			}
 			return agentgoadapter.ToolRetryDecision{}

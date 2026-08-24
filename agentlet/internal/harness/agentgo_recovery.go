@@ -109,16 +109,17 @@ func toolAttemptRecords(
 		switch event.EventType {
 		case agentledger.EventTypeAttemptRequested:
 			record.RequestedEventID = event.ID
-			record.ToolCallID, _ = event.Payload["tool_call_id"].(string)
+			record.ToolCallID = record.Action.Key
 			record.ToolName, _ = event.Payload["tool_name"].(string)
-			switch arguments := event.Payload["arguments"].(type) {
+			switch arguments := event.Payload["input"].(type) {
 			case string:
 				record.Arguments = json.RawMessage(arguments)
 			case map[string]any:
 				record.Arguments, _ = json.Marshal(arguments)
 			}
 			record.RecoveryDecisionID, _ = event.Payload["recovery_decision_id"].(string)
-		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed:
+		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed,
+			agentledger.EventTypeAttemptCancelled, agentledger.EventTypeAttemptOutcomeUnknown:
 			record.Terminal = true
 			record.TerminalType = event.EventType
 			record.TerminalPayload = event.Payload
@@ -194,8 +195,8 @@ func (r *AgentGoRunner) planToolResolution(
 		toolResult := agentgo.ToolResultMsg(target.ToolCallID, encoded, true)
 		plan.ToolResult = &toolResult
 		plan.FailurePayload = map[string]any{
-			"error":               map[string]any{"type": "user_denied", "message": message},
-			"resolution_event_id": input.ID,
+			"error":                 map[string]any{"type": "user_denied", "message": message},
+			"external_operation_id": input.ID,
 		}
 	case "result":
 		encoded, err := json.Marshal(resolution.Content)
@@ -206,12 +207,12 @@ func (r *AgentGoRunner) planToolResolution(
 		plan.ToolResult = &toolResult
 		if resolution.IsError {
 			plan.FailurePayload = map[string]any{
-				"error":               map[string]any{"type": "user_supplied_error", "message": string(encoded)},
-				"resolution_event_id": input.ID,
+				"error":                 map[string]any{"type": "user_supplied_error", "message": string(encoded)},
+				"external_operation_id": input.ID,
 			}
 		} else {
 			plan.CompletionPayload = map[string]any{
-				"result": resolution.Content, "source": "user.tool_result", "resolution_event_id": input.ID,
+				"output": resolution.Content, "external_operation_id": input.ID,
 			}
 		}
 	default:
@@ -263,7 +264,7 @@ func hasToolResult(messages []agentgo.AgentMessage, toolCallID string) bool {
 
 func toolResultFromTerminal(record toolAttemptRecord) *agentgo.Message {
 	isError := record.TerminalType == agentledger.EventTypeAttemptFailed
-	content := record.TerminalPayload["result"]
+	content := record.TerminalPayload["output"]
 	if isError {
 		content = record.TerminalPayload["error"]
 	}
