@@ -3,7 +3,7 @@ focus: Managed Agent resource security and durable tool-using Session continuity
 schema_version: 1
 facets:
   boundary: {values: [control-plane, system]}
-  recovery: {values: [checkpoint, worker-replacement, mid-turn]}
+  recovery: {values: [checkpoint, worker-replacement, mid-turn, graceful-drain]}
   security: {values: [authentication, credential]}
 cases:
   - id: api_key_authentication
@@ -70,3 +70,17 @@ cases:
     binding:
       symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
       spec: Running input survives Worker loss; uncertain side effects require exact reconciliation instead of automatic replay.
+  - id: agentlet_graceful_drain
+    desc: A running managed Session remains recoverable when its Worker receives normal Pod termination.
+    input: {operation: delete-worker-during-running-turn, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: graceful-drain}
+    judge:
+      e2e:
+        assert:
+          - {path: user_messages, op: eq, value: 1}
+          - {path: agent_messages, op: eq, value: 1}
+          - {path: replacement_worker_id, op: not_in, value_path: previous_worker_ids}
+          - {path: safe_outcome, op: eq, value: true}
+    binding:
+      symbol_id: agentlet/internal/service/service.go::Service.Shutdown
+      spec: Process termination drains accepted Work or leaves its durable input recoverable after the grace deadline.

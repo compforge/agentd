@@ -16,6 +16,9 @@ import (
 // process-local cache. Repeating the same Assignment is idempotent; a new
 // Assignment replaces only inactive cached state.
 func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec) (Session, error) {
+	if err := a.requireWorkAdmission(); err != nil {
+		return Session{}, err
+	}
 	if strings.TrimSpace(spec.AssignmentID) == "" || strings.TrimSpace(spec.WorkerID) == "" ||
 		strings.TrimSpace(spec.Session.ID) == "" || strings.TrimSpace(spec.Agent.ID) == "" ||
 		strings.TrimSpace(spec.Agent.Model.ID) == "" || strings.TrimSpace(spec.Agent.Model.Provider) == "" ||
@@ -106,6 +109,15 @@ func (a *Service) ApplyWorkSpec(ctx context.Context, spec executionapi.WorkSpec)
 			"placement_fence", spec.AssignmentID, "resume_revision", session.Control.ResumeRevision)
 	}
 	return session, nil
+}
+
+func (a *Service) requireWorkAdmission() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closing {
+		return fmt.Errorf("%w: Agentlet is draining", ErrConflict)
+	}
+	return nil
 }
 
 // ValidateAssignment uses the persisted local Session as the fence. A settled

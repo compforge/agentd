@@ -5,6 +5,7 @@
 .worktrees/
 /tests/perf/.venv/
 /tests/perf/runs/
+/tests/e2e/runs/
 __pycache__/
 .pytest_cache/
 .ruff_cache/

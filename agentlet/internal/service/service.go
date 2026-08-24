@@ -14,17 +14,22 @@ import (
 	"github.com/qiankunli/go-stdx/uuid"
 )
 
+const forcedWorkStopTimeout = 5 * time.Second
+
 type Service struct {
-	repository Repository
-	events     *EventLog
-	harness    Harness
-	logger     *slog.Logger
-	works      *sessionwork.Manager
-	ctx        context.Context
-	cancel     context.CancelFunc
+	repository      Repository
+	events          *EventLog
+	harness         Harness
+	logger          *slog.Logger
+	works           *sessionwork.Manager
+	workCtx         context.Context
+	cancelWork      context.CancelFunc
+	reconcileCtx    context.Context
+	cancelReconcile context.CancelFunc
 
 	mu                sync.Mutex
-	workerSet         sync.WaitGroup
+	workSet           sync.WaitGroup
+	reconcileSet      sync.WaitGroup
 	workCapacity      int
 	reconcileInterval time.Duration
 	started           bool
@@ -56,9 +61,12 @@ func WithWorkCapacity(capacity int) Option {
 }
 
 func New(repository Repository, events *EventLog, harness Harness, options ...Option) *Service {
-	ctx, cancel := context.WithCancel(context.Background())
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	reconcileCtx, cancelReconcile := context.WithCancel(context.Background())
 	executionService := &Service{
-		repository: repository, events: events, harness: harness, ctx: ctx, cancel: cancel,
+		repository: repository, events: events, harness: harness,
+		workCtx: workCtx, cancelWork: cancelWork,
+		reconcileCtx: reconcileCtx, cancelReconcile: cancelReconcile,
 		logger: slog.Default(), workCapacity: 1,
 	}
 	for _, option := range options {
@@ -78,56 +86,94 @@ func (a *Service) Start(ctx context.Context) error {
 		return errors.New("start service: service is already started or closing")
 	}
 	a.started = true
+	a.reconcileSet.Add(1)
 	a.mu.Unlock()
 	if err := a.Recover(ctx); err != nil {
 		a.mu.Lock()
 		a.started = false
 		a.mu.Unlock()
+		a.reconcileSet.Done()
 		return fmt.Errorf("initial session reconciliation: %w", err)
 	}
 
-	a.workerSet.Add(1)
 	go a.reconcileLoop()
 	return nil
 }
 
 func (a *Service) reconcileLoop() {
-	defer a.workerSet.Done()
+	defer a.reconcileSet.Done()
 	ticker := time.NewTicker(a.reconcileInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-a.ctx.Done():
+		case <-a.reconcileCtx.Done():
 			return
 		case <-ticker.C:
-			if err := a.Recover(a.ctx); err != nil && a.ctx.Err() == nil {
+			if err := a.Recover(a.reconcileCtx); err != nil && a.reconcileCtx.Err() == nil {
 				a.logger.Error("reconcile durable session inputs", "error", err)
 			}
 		}
 	}
 }
 
+// Shutdown stops admission and background reconciliation before waiting for
+// accepted Work to reach a stable boundary. Only an expired shutdown deadline
+// aborts Harness execution; that forced path must leave durable input pending.
+//
+// +spec=`Agentlet shutdown drains accepted Work to a stable checkpoint without treating process termination as a user interrupt; forced cancellation leaves durable input recoverable`
+// +case:id=agentlet_graceful_drain,desc=`terminate a Worker Pod during a running Turn`,expect=`the Turn either settles before exit or resumes on a replacement Worker without lost or duplicate input`,forbid=`marking shutdown cancellation as retries_exhausted or consuming the input without a safe result`,group=system
+// +why=`User interrupt is a product action, while process shutdown is a placement lifecycle event; sharing their terminal path can consume recoverable input as a failed completed Turn`
+// +link=agentd/docs/agentlet.md
+// +link=tests/e2e/cases/managed-agent.yaml
 func (a *Service) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closing = true
-	for _, work := range a.works.Snapshots() {
-		if work.Active {
-			a.harness.Interrupt(work.Spec.Session.ID)
-		}
-	}
-	a.cancel()
+	a.cancelReconcile()
+	active := activeWorkCount(a.works.Snapshots())
 	a.mu.Unlock()
+	a.logger.InfoContext(ctx, "draining Agentlet service", "active_work", active)
+
 	done := make(chan struct{})
 	go func() {
-		a.workerSet.Wait()
+		a.reconcileSet.Wait()
+		a.workSet.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
+		a.cancelWork()
+		a.logger.InfoContext(ctx, "drained Agentlet service")
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("shut down service workers: %w", ctx.Err())
+		a.cancelWork()
+		remaining := a.works.Snapshots()
+		for _, work := range remaining {
+			if work.Active {
+				a.harness.Interrupt(work.Spec.Session.ID)
+			}
+		}
+		a.logger.Warn("Agentlet drain deadline exceeded; canceling active Work",
+			"active_work", activeWorkCount(remaining), "error", ctx.Err())
+		forceTimer := time.NewTimer(forcedWorkStopTimeout)
+		defer forceTimer.Stop()
+		select {
+		case <-done:
+			a.logger.Info("stopped Agentlet Work after forced drain cancellation")
+			return nil
+		case <-forceTimer.C:
+			return fmt.Errorf("force-stop Agentlet Work after drain deadline: %w", ctx.Err())
+		}
 	}
+}
+
+func activeWorkCount(works []WorkSnapshot) int {
+	active := 0
+	for _, work := range works {
+		if work.Active {
+			active++
+		}
+	}
+	return active
 }
 
 func (a *Service) CreateAgent(ctx context.Context, value Agent) (Agent, error) {
@@ -358,7 +404,7 @@ func (a *Service) enqueue(session Session) error {
 			"placement_fence", session.Control.AssignmentID)
 		return nil
 	}
-	a.workerSet.Add(1)
+	a.workSet.Add(1)
 	a.logger.Info("started Session Work", "session_id", session.ID,
 		"placement_fence", session.Control.AssignmentID)
 	go a.runWorker(session.ID, session.Control.AssignmentID, resident)
@@ -367,7 +413,7 @@ func (a *Service) enqueue(session Session) error {
 
 func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwork.Work) {
 	finished := false
-	defer a.workerSet.Done()
+	defer a.workSet.Done()
 	defer func() {
 		if finished {
 			return
@@ -377,10 +423,10 @@ func (a *Service) runWorker(sessionID, assignmentID string, resident *sessionwor
 		}
 	}()
 	for {
-		if a.ctx.Err() != nil {
+		if a.workCtx.Err() != nil {
 			return
 		}
-		pending, err := a.events.PendingInputs(a.ctx, sessionID)
+		pending, err := a.events.PendingInputs(a.workCtx, sessionID)
 		if err != nil {
 			a.handleWorkerFailure(sessionID, fmt.Errorf("list pending inputs: %w", err))
 			return
@@ -442,11 +488,11 @@ func translateWorkError(sessionID string, err error) error {
 }
 
 func (a *Service) handleWorkerFailure(sessionID string, workerErr error) {
-	if a.ctx.Err() != nil {
+	if a.workCtx.Err() != nil {
 		return
 	}
 	a.logger.Error("session worker stopped", "session_id", sessionID, "error", workerErr)
-	if err := a.markRescheduling(a.ctx, sessionID); err != nil {
+	if err := a.markRescheduling(a.workCtx, sessionID); err != nil {
 		a.logger.Error("mark failed session for reconciliation", "session_id", sessionID, "error", err)
 	}
 }
@@ -472,7 +518,7 @@ func (a *Service) process(
 	resident *sessionwork.Work,
 	input ManagedEvent,
 ) (bool, error) {
-	ctx := a.ctx
+	ctx := a.workCtx
 	session, err := a.repository.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf("load session: %w", err)
@@ -502,6 +548,11 @@ func (a *Service) process(
 		outputMu.Unlock()
 		return err
 	})
+	// A shutdown deadline is not a completed Turn outcome. Leave the input and
+	// any unresolved Ledger Attempt pending so another Assignment can recover it.
+	if err := a.workCtx.Err(); err != nil {
+		return false, fmt.Errorf("Agentlet Work canceled during drain: %w", err)
+	}
 	outputMu.Lock()
 	persistErr := outputErr
 	outputMu.Unlock()

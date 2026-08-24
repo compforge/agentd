@@ -203,6 +203,23 @@ Agentlet 对 Harness Checkpoint 和 Agent Ledger 的使用顺序定义在 `agent
 协议和存储规范由 Agent Ledger 项目拥有。三者的权威来源独立，Kernel 不解释 Ledger Run，也不重复
 展开其内部结构。
 
+冻结不是暂停某个进程，而是让 Work 到达一个可由持久化材料重建的边界：Control State 保存当前
+placement 与 ResumeRef，Checkpoint 保存 Harness 原生状态，Ledger 保存 checkpoint 前后已经发生的
+执行事实。**卸载**是冻结之后释放当前 Agentlet 上的 Harness runtime、Work reservation 和必要时的
+Worker placement；恢复也不要求回到原来的 Agentlet。冻结是安全条件，卸载是资源动作，两者不能混为
+一个进程级 pause。
+
+| 场景 | 收敛方式 |
+|---|---|
+| Agentlet 正常退出 | 停止接纳新 Work，等待活跃 Turn 到达稳定 checkpoint；宽限期耗尽时保留未处理输入，由其它 Agentlet 从最近安全恢复点继续 |
+| Agentlet 或 Worker 意外消失 | agentd 在确认 Worker 不存在后重新 placement；新 Agentlet 组合最近 checkpoint 与其后的 Ledger 事实恢复，结果不明的外部副作用保持 fail-closed |
+| agentd 进程重启 | 已有有效 Assignment 上的 Agentlet 可以继续执行；重启后的 Observer 和 Reconciler 从共享数据库重新收敛 Control State、placement 和 durable demand |
+| Agent 等待用户且长期无响应 | Harness 把问题或 `requires_action` 持久化为 Event 和 checkpoint 后进入 idle，Work 可以从当前 Agentlet 卸载；用户后来回复会形成新的 durable demand，由任意可用 Agentlet 恢复同一 Work |
+
+因此“可恢复”不只指进程崩溃后的重启，也包括主动释放长期等待的执行资源。它保证 Session 和 Work
+连续，不承诺每个物理调用 exactly-once；模型调用、工具副作用和 sandbox workspace 分别按 Harness、
+Ledger Effect 与 Sandbox Engine 的契约恢复。
+
 ## 日志与运行观测
 
 agentd 和 Agentlet 统一使用标准库 `log/slog`，二进制入口默认输出 JSON。日志记录状态变化、真实动作和

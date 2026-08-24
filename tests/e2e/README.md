@@ -20,6 +20,10 @@ still uses the public Managed Agents API. Its canonical CaseSet is
   then waits for a replacement to converge the same durable input. If an unknown-effect tool crossed
   its execution boundary, the case denies the exact required action and proves that agentd continues
   without silently replaying it or duplicating the user input.
+- `agentlet_graceful_drain` normally deletes the selected Worker Pods after the Session reports
+  `running`. It proves that SIGTERM drains accepted Work to a stable boundary, or leaves the durable
+  input recoverable when the grace deadline expires, without converting shutdown into
+  `retries_exhausted`.
 
 The test uses unique resource names and intentionally keeps the resulting records. Agentd has no
 public delete contract for these durable audit resources; use a disposable environment or the
@@ -69,6 +73,12 @@ To exercise crash recovery during an active Turn, select the mid-turn case inste
 
 ```bash
 go test -tags=e2e -run TestManagedAgentRecoversAfterMidTurnWorkerLoss -v ./tests/e2e
+```
+
+To exercise normal Pod termination and Agentlet drain during an active Turn:
+
+```bash
+go test -tags=e2e -run TestManagedAgentDrainsOnWorkerTermination -v ./tests/e2e
 ```
 
 | Variable | Required | Default | Meaning |
