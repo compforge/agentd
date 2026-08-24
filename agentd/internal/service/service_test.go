@@ -505,6 +505,77 @@ func TestSessionLifecycleUpdatesResourceFieldsAndArchivesAtIdleBoundary(t *testi
 	}
 }
 
+func TestEnvironmentLifecyclePreservesExistingSessionsAndBlocksNewOnes(t *testing.T) {
+	application, _ := newTestControl(t)
+	ctx := context.Background()
+	environment, err := application.CreateEnvironment(ctx, model.Environment{
+		Name: "before", Description: "before", Config: map[string]any{"type": "cloud"},
+		Metadata: map[string]string{"team": "quality", "obsolete": "true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "after"
+	team := "platform"
+	updated, err := application.UpdateEnvironment(ctx, environment.ID, service.EnvironmentUpdate{
+		Name: &name, Metadata: map[string]*string{"team": &team, "obsolete": nil},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != name || updated.Metadata["team"] != team || updated.Metadata["obsolete"] != "" {
+		t.Fatalf("updated Environment = %#v", updated)
+	}
+	noOp, err := application.UpdateEnvironment(ctx, environment.ID, service.EnvironmentUpdate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !noOp.UpdatedAt.Equal(updated.UpdatedAt) {
+		t.Fatalf("no-op Environment update changed UpdatedAt: before=%s after=%s", updated.UpdatedAt, noOp.UpdatedAt)
+	}
+	if _, err := application.CreateModel(ctx, model.Model{
+		ID: "model-1", Provider: "anthropic", APIKey: "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := application.CreateAgent(ctx, model.Agent{Name: "agent", ModelID: "model-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := application.CreateSession(ctx, agent.ID, 0, environment.ID, "existing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := application.ArchiveEnvironment(ctx, environment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil {
+		t.Fatalf("archived Environment = %#v", archived)
+	}
+	again, err := application.ArchiveEnvironment(ctx, environment.ID)
+	if err != nil || again.ArchivedAt == nil || !again.ArchivedAt.Equal(*archived.ArchivedAt) {
+		t.Fatalf("idempotent archive = %#v, %v", again, err)
+	}
+	if _, err := application.GetSession(ctx, existing.ID); err != nil {
+		t.Fatalf("existing Session lost archived Environment: %v", err)
+	}
+	if _, err := application.UpdateEnvironment(ctx, environment.ID, service.EnvironmentUpdate{}); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("update archived Environment error = %v, want ErrConflict", err)
+	}
+	if _, err := application.CreateSession(ctx, agent.ID, 0, environment.ID, "blocked", nil); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("create Session with archived Environment error = %v, want ErrConflict", err)
+	}
+	active, err := application.PageEnvironments(ctx, service.PageQuery{Limit: 10}, false)
+	if err != nil || len(active.Items) != 0 {
+		t.Fatalf("active Environments = %#v, %v", active, err)
+	}
+	withArchived, err := application.PageEnvironments(ctx, service.PageQuery{Limit: 10}, true)
+	if err != nil || len(withArchived.Items) != 1 || withArchived.Items[0].ID != environment.ID {
+		t.Fatalf("archived Environments = %#v, %v", withArchived, err)
+	}
+}
+
 func TestObserveSessionUsesPlacementFenceAndMonotonicResumeRevision(t *testing.T) {
 	application, repository := newTestControl(t)
 	ctx := context.Background()

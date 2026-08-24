@@ -57,13 +57,14 @@ type modelRow struct {
 func (modelRow) TableName() string { return "models" }
 
 type environmentRow struct {
-	ID          string    `gorm:"primaryKey;size:191;index:idx_environments_page,priority:2"`
-	Name        string    `gorm:"not null;size:255"`
-	Description string    `gorm:"type:text"`
-	Config      []byte    `gorm:"type:json;not null"`
-	Metadata    []byte    `gorm:"type:json;not null"`
-	CreatedAt   time.Time `gorm:"not null;index:idx_environments_page,priority:1"`
-	UpdatedAt   time.Time `gorm:"not null"`
+	ID          string     `gorm:"primaryKey;size:191;index:idx_environments_page,priority:2"`
+	Name        string     `gorm:"not null;size:255"`
+	Description string     `gorm:"type:text"`
+	Config      []byte     `gorm:"type:json;not null"`
+	Metadata    []byte     `gorm:"type:json;not null"`
+	ArchivedAt  *time.Time `gorm:"index"`
+	CreatedAt   time.Time  `gorm:"not null;index:idx_environments_page,priority:1"`
+	UpdatedAt   time.Time  `gorm:"not null"`
 }
 
 func (environmentRow) TableName() string { return "environments" }
@@ -380,8 +381,16 @@ func (r *GORMRepository) PutEnvironment(ctx context.Context, environment model.E
 }
 
 func (r *GORMRepository) GetEnvironment(ctx context.Context, environmentID string) (model.Environment, error) {
+	return r.getEnvironment(r.db.WithContext(ctx), environmentID)
+}
+
+func (r *GORMRepository) GetEnvironmentForUpdate(ctx context.Context, environmentID string) (model.Environment, error) {
+	return r.getEnvironment(r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}), environmentID)
+}
+
+func (r *GORMRepository) getEnvironment(query *gormio.DB, environmentID string) (model.Environment, error) {
 	var row environmentRow
-	if err := r.db.WithContext(ctx).Where("id = ?", environmentID).First(&row).Error; err != nil {
+	if err := query.Where("id = ?", environmentID).First(&row).Error; err != nil {
 		if errors.Is(err, gormio.ErrRecordNotFound) {
 			return model.Environment{}, repo.ErrNotFound
 		}
@@ -409,9 +418,14 @@ func (r *GORMRepository) ListEnvironments(ctx context.Context) ([]model.Environm
 func (r *GORMRepository) ListEnvironmentsPage(
 	ctx context.Context,
 	page repo.PageQuery,
+	includeArchived bool,
 ) (repo.Page[model.Environment], error) {
 	var rows []environmentRow
-	if err := createdAtPageQuery(r.db.WithContext(ctx), page).Find(&rows).Error; err != nil {
+	query := r.db.WithContext(ctx)
+	if !includeArchived {
+		query = query.Where("archived_at IS NULL")
+	}
+	if err := createdAtPageQuery(query, page).Find(&rows).Error; err != nil {
 		return repo.Page[model.Environment]{}, fmt.Errorf("list environments page: %w", err)
 	}
 	values := make([]model.Environment, 0, len(rows))
@@ -686,13 +700,15 @@ func environmentToRow(environment model.Environment) (environmentRow, error) {
 	}
 	return environmentRow{
 		ID: environment.ID, Name: environment.Name, Description: environment.Description,
-		Config: config, Metadata: metadata, CreatedAt: environment.CreatedAt, UpdatedAt: environment.UpdatedAt,
+		Config: config, Metadata: metadata, ArchivedAt: environment.ArchivedAt,
+		CreatedAt: environment.CreatedAt, UpdatedAt: environment.UpdatedAt,
 	}, nil
 }
 
 func (r environmentRow) environment() (model.Environment, error) {
 	value := model.Environment{
-		ID: r.ID, Name: r.Name, Description: r.Description, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		ID: r.ID, Name: r.Name, Description: r.Description, ArchivedAt: r.ArchivedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if err := json.Unmarshal(r.Config, &value.Config); err != nil {
 		return model.Environment{}, fmt.Errorf("decode environment %q config: %w", r.ID, err)

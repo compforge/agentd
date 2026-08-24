@@ -40,8 +40,12 @@ func (a *Service) CreateSession(
 				return fmt.Errorf("resolve session agent version %d: %w", agentVersion, err)
 			}
 		}
-		if _, err := repository.GetEnvironment(ctx, environmentID); err != nil {
+		environment, err := repository.GetEnvironmentForUpdate(ctx, environmentID)
+		if err != nil {
 			return fmt.Errorf("resolve session environment: %w", err)
+		}
+		if environment.ArchivedAt != nil {
+			return fmt.Errorf("%w: environment %q is archived", ErrConflict, environmentID)
 		}
 		session = model.Session{
 			ID: uuid.NewWithPrefix("session"), AgentID: agent.ID, AgentVersionID: agent.VersionID,

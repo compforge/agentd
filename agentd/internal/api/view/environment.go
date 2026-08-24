@@ -1,6 +1,7 @@
 package view
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/compforge/agentd/agentd/internal/model"
@@ -10,10 +11,24 @@ type CreateEnvironmentRequest struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Config      map[string]any    `json:"config"`
+	Scope       string            `json:"scope"`
 	Metadata    map[string]string `json:"metadata"`
 }
 
+type UpdateEnvironmentRequest struct {
+	EnvironmentID string          `path:"environment_id"`
+	Name          json.RawMessage `json:"name"`
+	Description   json.RawMessage `json:"description"`
+	Config        json.RawMessage `json:"config"`
+	Scope         json.RawMessage `json:"scope"`
+	Metadata      json.RawMessage `json:"metadata"`
+}
+
 type GetEnvironmentRequest struct {
+	EnvironmentID string `path:"environment_id"`
+}
+
+type EnvironmentPathRequest struct {
 	EnvironmentID string `path:"environment_id"`
 }
 
@@ -49,6 +64,6 @@ func NewEnvironmentResponse(value model.Environment) EnvironmentResponse {
 	return EnvironmentResponse{
 		ID: value.ID, Type: "environment", Name: value.Name, Description: value.Description,
 		Config: config, Metadata: value.Metadata, Scope: "account",
-		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		ArchivedAt: value.ArchivedAt, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
