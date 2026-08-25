@@ -3,7 +3,8 @@ focus: Managed Agent resource security and durable tool-using Session continuity
 schema_version: 1
 facets:
   boundary: {values: [control-plane, system]}
-  recovery: {values: [checkpoint, worker-replacement, mid-turn, graceful-drain]}
+  recovery: {values: [checkpoint, worker-replacement, mid-turn, graceful-drain, control-plane-restart]}
+  fault_window: {values: [before-dispatch, during-turn]}
   security: {values: [authentication, credential]}
 cases:
   - id: api_key_authentication
@@ -84,3 +85,30 @@ cases:
     binding:
       symbol_id: agentlet/internal/service/service.go::Service.Shutdown
       spec: Process termination drains accepted Work or leaves its durable input recoverable after the grace deadline.
+  - id: control_plane_restart_before_dispatch
+    desc: Durable ingress converges after the single Control Plane Pod is replaced immediately after acceptance.
+    input: {operation: restart-control-plane-after-ingress-before-dispatch, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: control-plane-restart, fault_window: before-dispatch}
+    judge:
+      e2e:
+        assert:
+          - {path: user_messages, op: eq, value: 1}
+          - {path: agent_messages, op: eq, value: 1}
+          - {path: control_plane_replaced, op: eq, value: true}
+    binding:
+      symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
+      spec: Durable Session demand is rediscovered after notification loss or Control Plane restart.
+  - id: control_plane_restart_during_turn
+    desc: A running Agentlet finishes its Turn while the single Control Plane Pod is replaced.
+    input: {operation: restart-control-plane-during-running-turn, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: control-plane-restart, fault_window: during-turn}
+    judge:
+      e2e:
+        assert:
+          - {path: user_messages, op: eq, value: 1}
+          - {path: agent_messages, op: eq, value: 1}
+          - {path: control_plane_replaced, op: eq, value: true}
+          - {path: worker_set_stable, op: eq, value: true}
+    binding:
+      symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
+      spec: Agentlet execution remains independent while a replacement Control Plane rebuilds observation from shared state.

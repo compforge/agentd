@@ -197,38 +197,9 @@ func readWorkerDisruptionEnv() (workerDisruptionConfig, error) {
 		return workerDisruptionConfig{}, errors.New("AGENTD_E2E_WORKER_SELECTOR is required for Worker disruption")
 	}
 
-	options := kube.Options{
-		Namespace:      namespace,
-		RequestTimeout: 10 * time.Second,
-		QPS:            5,
-		Burst:          10,
-	}
-	var (
-		cluster *kube.Client
-		err     error
-	)
-	if os.Getenv("AGENTD_E2E_KUBE_IN_CLUSTER") == "1" {
-		if strings.TrimSpace(os.Getenv("AGENTD_E2E_KUBECONFIG")) != "" {
-			return workerDisruptionConfig{}, errors.New(
-				"AGENTD_E2E_KUBECONFIG and AGENTD_E2E_KUBE_IN_CLUSTER=1 are mutually exclusive",
-			)
-		}
-		cluster, err = kube.InCluster(options)
-	} else {
-		kubeconfig := strings.TrimSpace(os.Getenv("AGENTD_E2E_KUBECONFIG"))
-		if kubeconfig == "" {
-			return workerDisruptionConfig{}, errors.New(
-				"AGENTD_E2E_KUBECONFIG is required unless AGENTD_E2E_KUBE_IN_CLUSTER=1",
-			)
-		}
-		cluster, err = kube.FromKubeconfig(
-			kubeconfig,
-			strings.TrimSpace(os.Getenv("AGENTD_E2E_KUBE_CONTEXT")),
-			options,
-		)
-	}
+	cluster, err := kubernetesClientResult(namespace)
 	if err != nil {
-		return workerDisruptionConfig{}, fmt.Errorf("create Kubernetes E2E client: %w", err)
+		return workerDisruptionConfig{}, err
 	}
 	return workerDisruptionConfig{
 		cluster: cluster, workerSelector: selector, pollInterval: 500 * time.Millisecond,

@@ -24,6 +24,12 @@ still uses the public Managed Agents API. Its canonical CaseSet is
   `running`. It proves that SIGTERM drains accepted Work to a stable boundary, or leaves the durable
   input recoverable when the grace deadline expires, without converting shutdown into
   `retries_exhausted`.
+- `control_plane_restart_before_dispatch` force-deletes the single Control Plane Pod immediately
+  after durable ingress is accepted. It proves that the replacement process rediscovers demand
+  from shared state and produces exactly one answer without a client retry.
+- `control_plane_restart_during_turn` force-deletes the single Control Plane Pod after the Session
+  reports `running`. It proves that Agentlet execution continues independently, the Worker set does
+  not change, and the replacement Control Plane converges the final Session and Event projection.
 
 The test uses unique resource names and intentionally keeps the resulting records. Agentd has no
 public delete contract for these durable audit resources; use a disposable environment or the
@@ -81,11 +87,23 @@ To exercise normal Pod termination and Agentlet drain during an active Turn:
 go test -tags=e2e -run TestManagedAgentDrainsOnWorkerTermination -v ./tests/e2e
 ```
 
+Control Plane restart cases require a stable `AGENTD_E2E_BASE_URL` route that survives Pod
+replacement; a port-forward bound to one physical Pod is not sufficient. Run them only in a
+disposable namespace whose selector matches exactly one Ready Control Plane Pod:
+
+```bash
+AGENTD_E2E_ALLOW_CONTROL_PLANE_DISRUPTION=1 \
+AGENTD_E2E_CONTROL_PLANE_SELECTOR='app.kubernetes.io/instance=agentd-e2e,app.kubernetes.io/component=control-plane' \
+go test -tags=e2e -run 'TestManagedAgent(RecoversAfterControlPlaneRestartBeforeDispatch|ContinuesDuringControlPlaneRestart)' -v ./tests/e2e
+```
+
 | Variable | Required | Default | Meaning |
 |---|---:|---|---|
 | `AGENTD_E2E_ALLOW_WORKER_DISRUPTION` | yes | `0` | Must be `1` before the case can delete Worker Pods |
-| `AGENTD_E2E_KUBE_NAMESPACE` | yes | — | Namespace-scoped boundary for Kubernetes operations |
-| `AGENTD_E2E_WORKER_SELECTOR` | yes | — | Dedicated managed Worker pool to validate and disrupt |
+| `AGENTD_E2E_KUBE_NAMESPACE` | yes for disruption cases | — | Namespace-scoped boundary for Kubernetes operations |
+| `AGENTD_E2E_WORKER_SELECTOR` | yes for Worker disruption and during-Turn Control Plane restart | — | Dedicated managed Worker pool to validate and observe |
+| `AGENTD_E2E_ALLOW_CONTROL_PLANE_DISRUPTION` | yes for Control Plane restart | `0` | Must be `1` before a case can force-delete the Control Plane Pod |
+| `AGENTD_E2E_CONTROL_PLANE_SELECTOR` | yes for Control Plane restart | — | Selector that must match exactly one Ready `component=control-plane` Pod |
 | `AGENTD_E2E_KUBECONFIG` | yes on a client | — | Kubeconfig used by case-harness |
 | `AGENTD_E2E_KUBE_CONTEXT` | no | current | Optional kubeconfig context override |
 | `AGENTD_E2E_KUBE_IN_CLUSTER` | yes in a Job | `0` | Use in-cluster credentials instead of a kubeconfig |
