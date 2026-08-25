@@ -3,14 +3,18 @@
 ARG GO_VERSION=1.25.0
 
 FROM golang:${GO_VERSION}-bookworm AS builder
+ARG REVISION=unknown
+ARG BUILD_TIME=unknown
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -trimpath -ldflags="-s -w" -o /out/agentd ./cmd/agentd && \
-    go build -trimpath -ldflags="-s -w" -o /out/agentlet ./cmd/agentlet
+RUN VERSION="$(tr -d '\r\n' < VERSION)" && \
+    BUILD_LDFLAGS="-s -w -X github.com/compforge/agentd/internal/buildinfo.Version=${VERSION} -X github.com/compforge/agentd/internal/buildinfo.Revision=${REVISION} -X github.com/compforge/agentd/internal/buildinfo.BuildTime=${BUILD_TIME}" && \
+    go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/agentd ./cmd/agentd && \
+    go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/agentlet ./cmd/agentlet
 
 FROM gcr.io/distroless/cc-debian12:nonroot AS agentd
 WORKDIR /tmp
