@@ -78,11 +78,7 @@ func prepareManagedAgentCaseWithSystem(
 	if err != nil {
 		return err
 	}
-	client := anthropic.NewClient(
-		option.WithoutEnvironmentDefaults(),
-		option.WithAPIKey(config.apiKey),
-		option.WithBaseURL(config.baseURL),
-	)
+	client := newManagedAgentClient(config)
 	suffix := fmt.Sprintf("%d", time.Now().UTC().UnixNano())
 	modelResourceID := "agentd-e2e-model-" + suffix
 	if _, err := registerModelResult(ctx, config, modelResourceID); err != nil {
@@ -120,9 +116,18 @@ func prepareManagedAgentCaseWithSystem(
 		return fmt.Errorf("create Session: %w", err)
 	}
 	state.config = config
-	state.client = &client
+	state.client = client
 	state.sessionID = session.ID
 	return nil
+}
+
+func newManagedAgentClient(config envConfig) *anthropic.Client {
+	client := anthropic.NewClient(
+		option.WithoutEnvironmentDefaults(),
+		option.WithAPIKey(config.apiKey),
+		option.WithBaseURL(config.baseURL),
+	)
+	return &client
 }
 
 func registerModelResult(ctx context.Context, config envConfig, resourceID string) ([]byte, error) {
