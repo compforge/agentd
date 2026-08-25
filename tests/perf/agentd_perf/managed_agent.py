@@ -6,7 +6,15 @@ import uuid
 from dataclasses import dataclass, field
 
 import httpx
-from perf_harness import MetricFamily, Outcome, TrialContext, Verdict, Workload, register_workload
+from perf_harness import (
+    FireContext,
+    MetricFamily,
+    Outcome,
+    TrialContext,
+    Verdict,
+    Workload,
+    register_workload,
+)
 
 
 @dataclass
@@ -139,7 +147,12 @@ class ManagedAgentWorkload(Workload):
             )
             self._available.put_nowait(SessionSlot(session_id=session["id"]))
 
-    async def fire(self, target, client: httpx.AsyncClient, case, run_id: str) -> Outcome:
+    async def fire(self, ctx: FireContext) -> Outcome:
+        trial = ctx.trial
+        target = trial.target
+        client = trial.client
+        case = ctx.case
+        run_id = trial.run_id
         started = time.monotonic()
         deadline = started + self.timeout_s
         transport = TransportStats()

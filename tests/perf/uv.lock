@@ -61,8 +61,8 @@ wheels = [
 
 [[package]]
 name = "case-harness"
-version = "0.1.0"
-source = { git = "https://github.com/compforge/case-harness?subdirectory=python#0e43ba6c07a67e6d071ab79b238103e17de60b27" }
+version = "0.1.1"
+source = { git = "https://github.com/compforge/case-harness?subdirectory=python#057b9a56dd4381718b84d8a7244b11d74667f1d0" }
 dependencies = [
     { name = "httpx" },
     { name = "prombed" },
