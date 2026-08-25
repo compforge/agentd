@@ -1,11 +1,29 @@
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
-from perf_harness import Case, Outcome, Target
+from perf_harness import (
+    Case,
+    FireContext,
+    LoadProfile,
+    Outcome,
+    ResourceProfile,
+    Schedule,
+    Target,
+    TrialContext,
+)
 
 from agentd_perf.managed_agent import ManagedAgentWorkload, _build_workload
+
+
+def _trial_context(target: Target, client: httpx.AsyncClient) -> TrialContext:
+    return TrialContext(
+        target=target,
+        client=client,
+        run_id="run-1",
+        resources=ResourceProfile(),
+        load=LoadProfile(model="closed", schedule=Schedule.ramp_hold(1, 0.0, 1.0)),
+    )
 
 
 @pytest.mark.asyncio
@@ -45,18 +63,17 @@ async def test_turn_uses_bounded_session_pool_and_waits_for_idle() -> None:
 
     workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         outcome = await workload.fire(
-            target,
-            client,
-            Case(
-                "sandbox_turn",
-                {"prompt": "run it", "expected_text": "AGENTD_PERF_OK"},
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "sandbox_turn",
+                    {"prompt": "run it", "expected_text": "AGENTD_PERF_OK"},
+                ),
             ),
-            "run-1",
         )
 
     assert workload.judge(outcome).ok
@@ -136,15 +153,17 @@ async def test_turn_reports_session_error_without_waiting_for_agent_message() ->
 
     workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         outcome = await workload.fire(
-            target,
-            client,
-            Case("failed_turn", {"prompt": "run it", "expected_text": "AGENTD_PERF_OK"}),
-            "run-1",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "failed_turn",
+                    {"prompt": "run it", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
 
     verdict = workload.judge(outcome)
@@ -193,15 +212,17 @@ async def test_event_history_read_retries_without_failing_the_turn() -> None:
 
     workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         outcome = await workload.fire(
-            target,
-            client,
-            Case("plain_turn", {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"}),
-            "run-1",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "plain_turn",
+                    {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
 
     assert workload.judge(outcome).ok
@@ -258,15 +279,17 @@ async def test_lost_send_response_is_reconciled_without_replaying_the_post() -> 
 
     workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         outcome = await workload.fire(
-            target,
-            client,
-            Case("plain_turn", {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"}),
-            "run-1",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "plain_turn",
+                    {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
 
     assert workload.judge(outcome).ok
@@ -320,21 +343,26 @@ async def test_unconfirmed_send_is_not_replayed_and_retires_the_session_slot() -
         send_reconcile_timeout_s=0.01,
     )
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         first = await workload.fire(
-            target,
-            client,
-            Case("plain_turn", {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"}),
-            "run-1",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "plain_turn",
+                    {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
         outcome = await workload.fire(
-            target,
-            client,
-            Case("plain_turn", {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"}),
-            "run-2",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "plain_turn",
+                    {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
 
     assert workload.judge(first).ok
@@ -390,15 +418,17 @@ async def test_retrying_session_error_waits_for_the_final_turn_events() -> None:
 
     workload = ManagedAgentWorkload(pool_size=1, timeout_s=1, poll_interval_s=0.001)
     target = Target("http://agentd", headers={"x-api-key": "test"})
-    ctx = SimpleNamespace(target=target)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        ctx.client = client
-        await workload.setup(ctx)
+        trial = _trial_context(target, client)
+        await workload.setup(trial)
         outcome = await workload.fire(
-            target,
-            client,
-            Case("plain_turn", {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"}),
-            "run-1",
+            FireContext(
+                trial=trial,
+                case=Case(
+                    "plain_turn",
+                    {"prompt": "reply", "expected_text": "AGENTD_PERF_OK"},
+                ),
+            )
         )
 
     assert workload.judge(outcome).ok
