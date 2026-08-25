@@ -4,7 +4,7 @@ schema_version: 1
 facets:
   boundary: {values: [control-plane, system]}
   recovery: {values: [checkpoint, worker-replacement, mid-turn, graceful-drain, control-plane-restart]}
-  fault_window: {values: [before-dispatch, during-turn]}
+  fault_window: {values: [before-dispatch, during-turn, single-replica]}
   security: {values: [authentication, credential]}
 cases:
   - id: api_key_authentication
@@ -112,3 +112,18 @@ cases:
     binding:
       symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
       spec: Agentlet execution remains independent while a replacement Control Plane rebuilds observation from shared state.
+  - id: control_plane_multi_replica_failover
+    desc: A two-replica Control Plane continues serving and reconciling while one replica is replaced.
+    input: {operation: delete-one-of-two-control-plane-replicas, expected_marker: AGENTD_E2E_OK}
+    facets: {boundary: system, recovery: control-plane-restart, fault_window: single-replica}
+    judge:
+      e2e:
+        assert:
+          - {path: user_messages, op: eq, value: 3}
+          - {path: agent_messages, op: eq, value: 3}
+          - {path: accepted_with_one_replica, op: eq, value: true}
+          - {path: replacement_rejoined, op: eq, value: true}
+          - {path: worker_set_stable, op: eq, value: true}
+    binding:
+      symbol_id: agentd/internal/session/reconciler/reconciler.go::Reconciler.Reconcile
+      spec: Every Control Plane replica can independently rediscover durable demand; duplicate reconciliation remains idempotent.

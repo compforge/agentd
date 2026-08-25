@@ -30,6 +30,10 @@ still uses the public Managed Agents API. Its canonical CaseSet is
 - `control_plane_restart_during_turn` force-deletes the single Control Plane Pod after the Session
   reports `running`. It proves that Agentlet execution continues independently, the Worker set does
   not change, and the replacement Control Plane converges the final Session and Event projection.
+- `control_plane_multi_replica_failover` starts with exactly two Ready Control Plane Pods, completes
+  one Turn, force-deletes one replica, completes another Turn through the surviving replica before
+  the replacement is Ready, then completes a third Turn after it rejoins. It proves that no global
+  leader is required and duplicate reconciliation remains idempotent without Worker churn.
 
 The test uses unique resource names and intentionally keeps the resulting records. Agentd has no
 public delete contract for these durable audit resources; use a disposable environment or the
@@ -97,13 +101,24 @@ AGENTD_E2E_CONTROL_PLANE_SELECTOR='app.kubernetes.io/instance=agentd-e2e,app.kub
 go test -tags=e2e -run 'TestManagedAgent(RecoversAfterControlPlaneRestartBeforeDispatch|ContinuesDuringControlPlaneRestart)' -v ./tests/e2e
 ```
 
+The multi-replica failover case is a separate topology profile. Deploy exactly two agentd replicas,
+leave the single-replica disruption flag disabled, and enable only its failover gate:
+
+```bash
+AGENTD_E2E_ALLOW_CONTROL_PLANE_FAILOVER=1 \
+AGENTD_E2E_CONTROL_PLANE_SELECTOR='app.kubernetes.io/instance=agentd-e2e,app.kubernetes.io/component=control-plane' \
+AGENTD_E2E_WORKER_SELECTOR='app.kubernetes.io/instance=agentd-e2e,agentd.compforge.dev/managed=true' \
+go test -tags=e2e -run TestManagedAgentConvergesAcrossControlPlaneReplicaLoss -v ./tests/e2e
+```
+
 | Variable | Required | Default | Meaning |
 |---|---:|---|---|
 | `AGENTD_E2E_ALLOW_WORKER_DISRUPTION` | yes | `0` | Must be `1` before the case can delete Worker Pods |
 | `AGENTD_E2E_KUBE_NAMESPACE` | yes for disruption cases | — | Namespace-scoped boundary for Kubernetes operations |
-| `AGENTD_E2E_WORKER_SELECTOR` | yes for Worker disruption and during-Turn Control Plane restart | — | Dedicated managed Worker pool to validate and observe |
+| `AGENTD_E2E_WORKER_SELECTOR` | yes for Worker disruption and Control Plane during-Turn/failover cases | — | Dedicated managed Worker pool to validate and observe |
 | `AGENTD_E2E_ALLOW_CONTROL_PLANE_DISRUPTION` | yes for Control Plane restart | `0` | Must be `1` before a case can force-delete the Control Plane Pod |
-| `AGENTD_E2E_CONTROL_PLANE_SELECTOR` | yes for Control Plane restart | — | Selector that must match exactly one Ready `component=control-plane` Pod |
+| `AGENTD_E2E_ALLOW_CONTROL_PLANE_FAILOVER` | yes for multi-replica failover | `0` | Must be `1` before the case can delete one of two Control Plane replicas |
+| `AGENTD_E2E_CONTROL_PLANE_SELECTOR` | yes for Control Plane cases | — | Dedicated `component=control-plane` selector; restart cases require one Ready Pod, failover requires two |
 | `AGENTD_E2E_KUBECONFIG` | yes on a client | — | Kubeconfig used by case-harness |
 | `AGENTD_E2E_KUBE_CONTEXT` | no | current | Optional kubeconfig context override |
 | `AGENTD_E2E_KUBE_IN_CLUSTER` | yes in a Job | `0` | Use in-cluster credentials instead of a kubeconfig |

@@ -322,6 +322,10 @@ func readControlPlaneDisruptionEnv() (controlPlaneDisruptionConfig, error) {
 			"AGENTD_E2E_ALLOW_CONTROL_PLANE_DISRUPTION is not 1; skipping Control Plane restart e2e",
 		)
 	}
+	return readControlPlaneKubernetesEnv()
+}
+
+func readControlPlaneKubernetesEnv() (controlPlaneDisruptionConfig, error) {
 	namespace := strings.TrimSpace(os.Getenv("AGENTD_E2E_KUBE_NAMESPACE"))
 	if namespace == "" {
 		return controlPlaneDisruptionConfig{}, errors.New(
