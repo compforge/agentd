@@ -5,224 +5,41 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	agentledger "github.com/compforge/agent-ledger/go"
+	agentgoadapter "github.com/compforge/agent-ledger/go/adapters/agentgo"
 	"github.com/compforge/agentgo"
 )
 
-func TestAgentGoMessagesUseCheckpointStore(t *testing.T) {
-	state := agentledger.NewMemoryEventStore()
-	actor := agentledger.NewActor("agent", "agentgo")
-	if err := state.CreateActor(context.Background(), actor); err != nil {
-		t.Fatal(err)
-	}
-	recorder, err := agentledger.OpenRecorder(context.Background(), agentledger.RecorderOptions{
-		Store: state, SessionID: "session-1", RunID: "run-1", Actor: actor,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := recorder.StartRun(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	runner := &AgentGoRunner{config: AgentGoRunnerConfig{
-		OperationTimeout: time.Second,
-		Ledger:           state,
-		Checkpoints:      state,
-	}}
-	revision := int64(0)
-	checkpointID := "agentgo/session-1"
-	commit := runner.messageCommitter(
-		"agentgo/session-1", actor.ID, "session-1", "run-1", nil, &checkpointID, &revision,
-	)
-	want := agentgo.UserMsg("hello")
-	if err := commit(want); err != nil {
-		t.Fatal(err)
-	}
-	firstCheckpointID := checkpointID
-
-	messages, loadedRef, loadedRevision, err := runner.loadMessages(
-		context.Background(), firstCheckpointID, "agentgo/session-1", revision,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loadedRef != firstCheckpointID || loadedRevision != 1 ||
-		len(messages) != 1 || messages[0].TextContent() != "hello" {
-		t.Fatalf("messages=%#v ref=%q revision=%d", messages, loadedRef, loadedRevision)
-	}
-	checkpoint, exists, err := state.GetCheckpoint(context.Background(), firstCheckpointID)
-	if err != nil || !exists {
-		t.Fatalf("checkpoint exists=%v err=%v", exists, err)
-	}
-	if checkpoint.Anchor == nil || checkpoint.Anchor.LastAppliedSeq != 1 {
-		t.Fatalf("checkpoint anchor = %#v", checkpoint.Anchor)
-	}
-	if err := commit(agentgo.Message{
-		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	latestCheckpointID := checkpointID
-	staleControlMessages, staleControlRef, staleControlRevision, err := runner.loadMessages(
-		context.Background(), firstCheckpointID, "agentgo/session-1", 1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if staleControlRef != latestCheckpointID || staleControlRevision != 2 || len(staleControlMessages) != 2 {
-		t.Fatalf(
-			"stale control loaded messages=%d ref=%q revision=%d, want latest %q/2",
-			len(staleControlMessages), staleControlRef, staleControlRevision, latestCheckpointID,
-		)
-	}
-	initialControlMessages, initialControlRef, initialControlRevision, err := runner.loadMessages(
-		context.Background(), "agentgo/session-1", "agentgo/session-1", 0,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initialControlRef != latestCheckpointID || initialControlRevision != 2 || len(initialControlMessages) != 2 {
-		t.Fatalf(
-			"initial control loaded messages=%d ref=%q revision=%d, want latest %q/2",
-			len(initialControlMessages), initialControlRef, initialControlRevision, latestCheckpointID,
-		)
-	}
-	latestMessages, latestRef, latestRevision, err := runner.loadMessages(
-		context.Background(), checkpointID, "agentgo/session-1", revision,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(latestMessages) != 2 || latestRef != latestCheckpointID || latestRevision != 2 {
-		t.Fatalf("latest=%d ref=%q revision=%d", len(latestMessages), latestRef, latestRevision)
-	}
-}
-
-func TestAgentGoRunAdoptsCheckpointAheadOfControlState(t *testing.T) {
+func TestAgentGoLoadsNativeSnapshotAheadOfControlState(t *testing.T) {
 	ctx := context.Background()
-	state := agentledger.NewMemoryEventStore()
+	store := agentledger.NewMemoryEventStore()
 	actor := agentledger.NewActor("agent", "agentgo")
-	if err := state.CreateActor(ctx, actor); err != nil {
+	if err := store.CreateActor(ctx, actor); err != nil {
 		t.Fatal(err)
 	}
-	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
-		Store: state, SessionID: "session-1", RunID: "input/input-1", Actor: actor,
+	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Checkpoints: store}}
+	key := "agentgo/session-1"
+	first := saveAgentGoCheckpoint(t, ctx, store, actor.ID, key, 0, "scope-1", []agentgo.AgentMessage{
+		agentgo.UserMsg("first"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := recorder.StartRun(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	runner := &AgentGoRunner{config: AgentGoRunnerConfig{
-		OperationTimeout: time.Second,
-		Ledger:           state,
-		Checkpoints:      state,
-	}}
-	revision := int64(0)
-	checkpointID := "agentgo/session-1"
-	commit := runner.messageCommitter(
-		"agentgo/session-1", actor.ID, "session-1", "input/input-1", nil, &checkpointID, &revision,
-	)
-	input := agentgo.UserMsg("hello")
-	input.Metadata = map[string]any{agentdInputID: "input-1"}
-	if err := commit(input); err != nil {
-		t.Fatal(err)
-	}
-	if err := commit(agentgo.Message{
-		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	latestCheckpointID := checkpointID
-
-	var emitted []ManagedEvent
-	result, err := runner.Run(ctx, Session{
-		ID: "session-1", ResumeRef: "agentgo/session-1", ResumeRevision: 0,
-	}, TurnInput{ID: "input-1", Text: "hello"}, func(event ManagedEvent) error {
-		emitted = append(emitted, event)
-		return nil
+	second := saveAgentGoCheckpoint(t, ctx, store, actor.ID, key, first.Revision, "scope-2", []agentgo.AgentMessage{
+		agentgo.UserMsg("first"),
+		agentgo.Message{Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")}},
 	})
+
+	native, checkpoint, exists, err := runner.loadAgentGoCheckpoint(ctx, first.ID, key, first.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ResumeRef != latestCheckpointID || result.ResumeRevision != 2 {
-		t.Fatalf("resume point = %q/%d, want %q/2", result.ResumeRef, result.ResumeRevision, latestCheckpointID)
+	if !exists || checkpoint.ID != second.ID || checkpoint.Revision != 2 {
+		t.Fatalf("checkpoint = %#v exists=%t", checkpoint, exists)
 	}
-	if len(emitted) != 1 || emitted[0]["type"] != "agent.message" {
-		t.Fatalf("emitted events = %#v", emitted)
+	if len(native.Snapshot.State.Messages) != 2 || native.Snapshot.State.Messages[1].TextContent() != "done" {
+		t.Fatalf("snapshot messages = %#v", native.Snapshot.State.Messages)
 	}
-	if latest, exists, loadErr := state.LoadLatestCheckpoint(ctx, "agentgo/session-1"); loadErr != nil || !exists || latest.Revision != 2 {
-		t.Fatalf("latest checkpoint exists=%v revision=%d err=%v", exists, latest.Revision, loadErr)
-	}
-}
-
-func TestAgentGoResumeActionDoesNotDuplicateCommittedInput(t *testing.T) {
-	input := agentgo.UserMsg("hello")
-	input.Metadata = map[string]any{agentdInputID: "input-1"}
-	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: agentledger.NewMemoryEventStore()}}
-
-	action, err := runner.resumeAction(context.Background(), "session-1", []agentgo.AgentMessage{input}, "input-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if action != resumeContinue {
-		t.Fatalf("action = %v, want resumeContinue", action)
-	}
-
-	final := agentgo.Message{
-		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")}, Timestamp: time.Now(),
-	}
-	action, err = runner.resumeAction(
-		context.Background(), "session-1", []agentgo.AgentMessage{input, final}, "input-1",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if action != resumeCompleted {
-		t.Fatalf("action = %v, want resumeCompleted", action)
-	}
-}
-
-func TestAgentGoResumeBlocksUncertainToolBoundary(t *testing.T) {
-	input := agentgo.UserMsg("change something")
-	input.Metadata = map[string]any{agentdInputID: "input-1"}
-	toolCall := agentgo.Message{
-		Role: agentgo.RoleAssistant,
-		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
-			ID: "call-1", Name: "write", Args: json.RawMessage(`{}`),
-		})},
-		Timestamp: time.Now(),
-	}
-	ledger := agentledger.NewMemoryEventStore()
-	recorder, err := agentledger.OpenRecorder(context.Background(), agentledger.RecorderOptions{
-		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: agentledger.NewActor("agent", "agentgo"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	turn, err := recorder.StartTurn(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := recorder.BeforeToolCall(context.Background(), turn.ID, "call-1", map[string]any{
-		"tool_name": "write", "input": map[string]any{},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
-
-	_, err = runner.resumeAction(
-		context.Background(), "session-1", []agentgo.AgentMessage{input, toolCall}, "input-1",
-	)
-	if errors.Is(err, ErrUnsafeRecovery) {
-		t.Fatalf("required user action was classified as terminal unsafe recovery: %v", err)
-	}
-	var required *RequiresActionError
-	if !errors.As(err, &required) || len(required.ToolUses) != 1 || required.ToolUses[0].ID == "" {
-		t.Fatalf("required action = %#v", required)
+	if native.ExecutionScope != "scope-2" || !native.ScopeComplete {
+		t.Fatalf("native checkpoint = %#v", native)
 	}
 }
 
@@ -239,8 +56,8 @@ func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, "call-1", map[string]any{
-		"tool_name": "write", "input": map[string]any{"path": "README.md"},
+	first, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, "scope-1/call-1", map[string]any{
+		"tool_call_id": "call-1", "tool_name": "write", "input": map[string]any{"path": "README.md"},
 	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +75,7 @@ func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
 	}
 
 	retry, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{
-		"tool_name": "write", "input": map[string]any{"path": "README.md"},
+		"tool_call_id": "call-1", "tool_name": "write", "input": map[string]any{"path": "README.md"},
 		"recovery_decision_id": input.ID,
 	})
 	if err != nil {
@@ -271,48 +88,67 @@ func TestAgentGoToolAuthorizationIsScopedToOneAttempt(t *testing.T) {
 	}
 	_, err = runner.planToolResolution(ctx, "session-1", input)
 	var required *RequiresActionError
-	if !errors.As(err, &required) || len(required.ToolUses) != 1 || required.ToolUses[0].ID != "event_"+retry.AttemptID {
+	if !errors.As(err, &required) || len(required.ToolUses) != 1 ||
+		required.ToolUses[0].ID != "event_"+retry.AttemptID || required.ToolUses[0].InputID != "original" {
 		t.Fatalf("reused authorization error = %v, required = %#v", err, required)
 	}
 }
 
-func TestAgentGoResumeRetriesReadToolBoundary(t *testing.T) {
-	input := agentgo.UserMsg("inspect something")
-	input.Metadata = map[string]any{agentdInputID: "input-1"}
-	toolCall := agentgo.Message{
-		Role: agentgo.RoleAssistant,
-		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
-			ID: "call-1", Name: "read", Args: json.RawMessage(`{}`),
-		})},
-		Timestamp: time.Now(),
-	}
+func TestAgentGoUserToolResultUsesReplayablePayload(t *testing.T) {
+	ctx := context.Background()
 	ledger := agentledger.NewMemoryEventStore()
-	recorder, err := agentledger.OpenRecorder(context.Background(), agentledger.RecorderOptions{
-		Store: ledger, SessionID: "session-1", RunID: "input/input-1", Actor: agentledger.NewActor("agent", "agentgo"),
+	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: ledger, SessionID: "session-1", RunID: "input/original", Actor: agentledger.NewActor("agent", "agentgo"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn, err := recorder.StartTurn(context.Background(), nil)
+	turn, err := recorder.StartTurn(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	readEffect := agentledger.Effect{Kind: agentledger.EffectKindRead, Idempotency: agentledger.IdempotencyNotApplicable}
-	if _, err := recorder.BeforeToolCallWithEffect(context.Background(), turn.ID, "call-1", map[string]any{
-		"tool_name": "read", "input": map[string]any{},
-	}, readEffect); err != nil {
+	attempt, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, "scope-1/call-1", map[string]any{
+		"tool_call_id": "call-1", "tool_name": "write", "input": map[string]any{"path": "README.md"},
+	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
+	if err != nil {
 		t.Fatal(err)
 	}
 	runner := &AgentGoRunner{config: AgentGoRunnerConfig{Ledger: ledger}}
-
-	action, err := runner.resumeAction(
-		context.Background(), "session-1", []agentgo.AgentMessage{input, toolCall}, "input-1",
-	)
+	input := TurnInput{ID: "result-1", ToolResolution: &ToolResolution{
+		ToolUseID: "event_" + attempt.AttemptID, Decision: "result", Content: map[string]any{"ok": true},
+	}}
+	plan, err := runner.planToolResolution(ctx, "session-1", input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action != resumeContinue {
-		t.Fatalf("action = %v, want resumeContinue", action)
+	if err := runner.recordToolResolution(ctx, recorder, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := toolAttemptRecords(ctx, ledger, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].TerminalType != agentledger.EventTypeAttemptCompleted {
+		t.Fatalf("tool records = %#v", records)
+	}
+	output, ok := records[0].TerminalPayload["output"].(map[string]any)
+	if !ok || output["tool_call_id"] != "call-1" || records[0].TerminalPayload["external_operation_id"] != input.ID {
+		t.Fatalf("terminal payload = %#v", records[0].TerminalPayload)
+	}
+}
+
+func TestAgentGoRecoveryBlockCarriesDurableInput(t *testing.T) {
+	blocked := &agentgoadapter.RecoveryBlockedError{Tools: []agentgoadapter.PendingToolRecovery{{
+		Attempt: agentledger.Attempt{ID: "attempt-1"},
+		Call: agentgo.ToolCall{
+			ID: "call-1", Name: "write", Args: json.RawMessage(`{"path":"README.md"}`),
+		},
+	}}}
+	required := requiresActionFromAgentGo("input/input-1", blocked)
+	if len(required.ToolUses) != 1 || required.ToolUses[0].ID != "event_attempt-1" ||
+		required.ToolUses[0].InputID != "input-1" || required.ToolUses[0].Input["path"] != "README.md" {
+		t.Fatalf("required action = %#v", required)
 	}
 }
 
@@ -400,6 +236,7 @@ func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	err := projectAssistantMessages(
 		[]agentgo.AgentMessage{oldInput, oldOutput, currentInput, currentToolCall, currentOutput},
 		"input-2",
+		"confirmation-1",
 		func(event ManagedEvent) error {
 			projected = append(projected, event)
 			return nil
@@ -410,6 +247,10 @@ func TestProjectAssistantMessagesScopesCurrentInput(t *testing.T) {
 	}
 	if len(projected) != 1 || projected[0]["content"].([]map[string]any)[0]["text"] != "current output" {
 		t.Fatalf("projected events = %#v", projected)
+	}
+	want, _, err := managedAssistantEvent("confirmation-1", currentOutput)
+	if err != nil || projected[0]["id"] != want["id"] {
+		t.Fatalf("projected event identity = %#v, want %#v", projected[0]["id"], want["id"])
 	}
 }
 
@@ -433,4 +274,40 @@ func TestManagedAssistantEventProjectsOnlyUserVisibleText(t *testing.T) {
 	if !ok || event["content"].([]map[string]any)[0]["text"] != "working" {
 		t.Fatalf("mixed projection = event:%#v ok:%t", event, ok)
 	}
+}
+
+func saveAgentGoCheckpoint(
+	t *testing.T,
+	ctx context.Context,
+	store agentledger.CheckpointStore,
+	actorID string,
+	key string,
+	expectedRevision int64,
+	scope string,
+	messages []agentgo.AgentMessage,
+) agentledger.Checkpoint {
+	t.Helper()
+	codec, err := agentgo.NewCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := codec.Marshal(agentGoCheckpoint{
+		Snapshot:       agentgo.AgentSnapshot{State: agentgo.AgentState{Messages: messages}},
+		ExecutionScope: scope,
+		ScopeComplete:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(encoded, &state); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.SaveCheckpoint(ctx, expectedRevision, agentledger.NewCheckpoint(
+		key, actorID, agentgoadapter.CheckpointFormat, state,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checkpoint
 }

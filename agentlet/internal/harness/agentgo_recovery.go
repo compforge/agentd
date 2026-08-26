@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	agentledger "github.com/compforge/agent-ledger/go"
+	agentgoadapter "github.com/compforge/agent-ledger/go/adapters/agentgo"
 	"github.com/compforge/agentgo"
 )
 
@@ -28,7 +30,10 @@ func (r toolAttemptRecord) blockingToolUse() BlockingToolUse {
 	if len(r.Arguments) > 0 {
 		_ = json.Unmarshal(r.Arguments, &input)
 	}
-	return BlockingToolUse{ID: "event_" + r.Attempt.ID, Name: r.ToolName, Input: input}
+	return BlockingToolUse{
+		ID: "event_" + r.Attempt.ID, Name: r.ToolName, Input: input,
+		InputID: strings.TrimPrefix(r.RunID, "input/"),
+	}
 }
 
 type retryAuthorization struct {
@@ -40,35 +45,13 @@ type retryAuthorization struct {
 type toolResolutionPlan struct {
 	Attempt            toolAttemptRecord
 	RetryAuthorization retryAuthorization
-	ToolResult         *agentgo.Message
-	FailurePayload     map[string]any
-	CompletionPayload  map[string]any
+	TerminalResult     *agentgo.ToolResult
+	TerminalError      map[string]any
+	DecisionID         string
 }
 
-func unresolvedToolAttempts(
-	ctx context.Context,
-	store agentledger.EventStore,
-	sessionID string,
-	runID string,
-) ([]toolAttemptRecord, error) {
-	records, err := toolAttemptRecords(ctx, store, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	latest := make(map[string]toolAttemptRecord)
-	for _, record := range records {
-		if record.RunID != runID || record.Terminal {
-			continue
-		}
-		if current, ok := latest[record.Action.ID]; !ok || record.Attempt.AttemptNo > current.Attempt.AttemptNo {
-			latest[record.Action.ID] = record
-		}
-	}
-	result := make([]toolAttemptRecord, 0, len(latest))
-	for _, record := range latest {
-		result = append(result, record)
-	}
-	return result, nil
+func (p toolResolutionPlan) hasTerminalOutcome() bool {
+	return p.TerminalResult != nil
 }
 
 func toolAttemptRecords(
@@ -109,7 +92,7 @@ func toolAttemptRecords(
 		switch event.EventType {
 		case agentledger.EventTypeAttemptRequested:
 			record.RequestedEventID = event.ID
-			record.ToolCallID = record.Action.Key
+			record.ToolCallID, _ = event.Payload["tool_call_id"].(string)
 			record.ToolName, _ = event.Payload["tool_name"].(string)
 			switch arguments := event.Payload["input"].(type) {
 			case string:
@@ -171,18 +154,21 @@ func (r *AgentGoRunner) planToolResolution(
 			return toolResolutionPlan{}, &RequiresActionError{ToolUses: []BlockingToolUse{latest.blockingToolUse()}}
 		}
 		if latest.RecoveryDecisionID == input.ID && latest.Terminal {
-			plan := toolResolutionPlan{Attempt: latest}
-			plan.ToolResult = toolResultFromTerminal(latest)
-			return plan, nil
+			return toolResolutionPlan{Attempt: latest}, nil
 		}
 		return toolResolutionPlan{}, fmt.Errorf("%w: tool use %q was superseded by attempt %s", ErrUnsafeRecovery, resolution.ToolUseID, latest.Attempt.ID)
 	}
 	plan := toolResolutionPlan{Attempt: target}
+	if target.Terminal {
+		if operationID, _ := target.TerminalPayload["external_operation_id"].(string); operationID == input.ID {
+			return plan, nil
+		}
+		return toolResolutionPlan{}, fmt.Errorf(
+			"%w: tool use %q is already resolved", ErrUnsafeRecovery, resolution.ToolUseID,
+		)
+	}
 	switch resolution.Decision {
 	case "allow":
-		if target.Terminal {
-			return toolResolutionPlan{}, fmt.Errorf("%w: tool use %q is already resolved", ErrUnsafeRecovery, resolution.ToolUseID)
-		}
 		plan.RetryAuthorization = retryAuthorization{
 			ActionID: target.Action.ID, AttemptID: target.Attempt.ID, DecisionID: input.ID,
 		}
@@ -192,29 +178,26 @@ func (r *AgentGoRunner) planToolResolution(
 			message = "tool execution denied by user"
 		}
 		encoded, _ := json.Marshal(map[string]any{"error": message})
-		toolResult := agentgo.ToolResultMsg(target.ToolCallID, encoded, true)
-		plan.ToolResult = &toolResult
-		plan.FailurePayload = map[string]any{
-			"error":                 map[string]any{"type": "user_denied", "message": message},
-			"external_operation_id": input.ID,
+		plan.TerminalResult = &agentgo.ToolResult{
+			ToolCallID: target.ToolCallID, ToolName: target.ToolName, Content: encoded, IsError: true,
 		}
+		plan.TerminalError = map[string]any{"type": "user_denied", "message": message}
+		plan.DecisionID = input.ID
 	case "result":
 		encoded, err := json.Marshal(resolution.Content)
 		if err != nil {
 			return toolResolutionPlan{}, fmt.Errorf("encode supplied tool result: %w", err)
 		}
-		toolResult := agentgo.ToolResultMsg(target.ToolCallID, encoded, resolution.IsError)
-		plan.ToolResult = &toolResult
+		plan.TerminalResult = &agentgo.ToolResult{
+			ToolCallID: target.ToolCallID, ToolName: target.ToolName,
+			Content: encoded, IsError: resolution.IsError,
+		}
 		if resolution.IsError {
-			plan.FailurePayload = map[string]any{
-				"error":                 map[string]any{"type": "user_supplied_error", "message": string(encoded)},
-				"external_operation_id": input.ID,
-			}
-		} else {
-			plan.CompletionPayload = map[string]any{
-				"output": resolution.Content, "external_operation_id": input.ID,
+			plan.TerminalError = map[string]any{
+				"type": "user_supplied_error", "message": string(encoded),
 			}
 		}
+		plan.DecisionID = input.ID
 	default:
 		return toolResolutionPlan{}, fmt.Errorf("resolve AgentGo tool: unsupported decision %q", resolution.Decision)
 	}
@@ -229,11 +212,23 @@ func (r *AgentGoRunner) recordToolResolution(
 	if plan.Attempt.Terminal {
 		return nil
 	}
+	if plan.TerminalResult == nil {
+		return nil
+	}
 	eventType := agentledger.EventTypeAttemptCompleted
-	payload := plan.CompletionPayload
-	if plan.FailurePayload != nil {
+	payload := map[string]any{
+		"output": map[string]any{
+			"tool_call_id": plan.TerminalResult.ToolCallID,
+			"tool_name":    plan.TerminalResult.ToolName,
+			"content":      plan.TerminalResult.Content,
+			"is_error":     plan.TerminalResult.IsError,
+			"details":      plan.TerminalResult.Details,
+		},
+		"external_operation_id": plan.DecisionID,
+	}
+	if plan.TerminalError != nil {
 		eventType = agentledger.EventTypeAttemptFailed
-		payload = plan.FailurePayload
+		payload["error"] = plan.TerminalError
 	}
 	if _, err := recorder.Record(
 		ctx, eventType, plan.Attempt.Attempt.ID, payload, plan.Attempt.RequestedEventID,
@@ -243,37 +238,18 @@ func (r *AgentGoRunner) recordToolResolution(
 	return nil
 }
 
-func hasToolResult(messages []agentgo.AgentMessage, toolCallID string) bool {
-	for _, item := range messages {
-		if item.GetRole() != agentgo.RoleTool {
-			continue
-		}
-		var metadata map[string]any
-		switch message := item.(type) {
-		case agentgo.Message:
-			metadata = message.Metadata
-		case *agentgo.Message:
-			metadata = message.Metadata
-		}
-		if storedID, _ := metadata["tool_call_id"].(string); storedID == toolCallID {
-			return true
-		}
+func requiresActionFromAgentGo(runID string, blocked *agentgoadapter.RecoveryBlockedError) *RequiresActionError {
+	inputID := strings.TrimPrefix(runID, "input/")
+	uses := make([]BlockingToolUse, 0, len(blocked.Tools))
+	for _, pending := range blocked.Tools {
+		input := make(map[string]any)
+		_ = json.Unmarshal(pending.Call.Args, &input)
+		uses = append(uses, BlockingToolUse{
+			ID: "event_" + pending.Attempt.ID, Name: pending.Call.Name,
+			Input: input, InputID: inputID,
+		})
 	}
-	return false
-}
-
-func toolResultFromTerminal(record toolAttemptRecord) *agentgo.Message {
-	isError := record.TerminalType == agentledger.EventTypeAttemptFailed
-	content := record.TerminalPayload["output"]
-	if isError {
-		content = record.TerminalPayload["error"]
-	}
-	encoded, err := json.Marshal(content)
-	if err != nil {
-		encoded = json.RawMessage(`{"error":"unable to encode recorded tool outcome"}`)
-	}
-	message := agentgo.ToolResultMsg(record.ToolCallID, encoded, isError)
-	return &message
+	return &RequiresActionError{ToolUses: uses}
 }
 
 func agentGoToolEffect(call agentgo.ToolCall) agentledger.Effect {

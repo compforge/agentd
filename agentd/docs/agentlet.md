@@ -103,9 +103,10 @@ Adapter saves checkpoint
 
 恢复时 Agentlet 先验证 Control State 指向的 checkpoint 确实属于当前 Session key 和 revision chain，
 再读取该 key 的最新 revision。较新的 checkpoint 可以作为恢复基线；Control State 指向缺失或其它
-Session 的 checkpoint、或者 Store 反而落后于 Control State 时保持 fail-closed。随后结合 Ledger
-未决 Attempt 判断是否可以继续：已经完成的结果只幂等吸收到 Harness State，不重新执行。Action 在
-首次执行前固化 `Effect(kind, idempotency)`：
+Session 的 checkpoint、或者 Store 反而落后于 Control State 时保持 fail-closed。AgentGo Adapter 在
+`BeforeRun` 加载 admission `AgentSnapshot`，再由 Model/Tool middleware 把 checkpoint 之后已经完成的
+outcome 返回原生 Loop；Loop 以相同 execution ID 重建消息和进度，Agentlet 不手工回放 message。
+Action 在首次执行前固化 `Effect(kind, idempotency)`：
 `none/read` 和已知幂等的 `write` 可以在原 Action 下递增 `attempt_no` 后重试；`write+none/unknown`、
 `unknown` 或缺失声明都保持 fail-closed。Ledger 只保存 Effect 事实，是否重试由 Agentlet 的 Harness
 恢复策略决定。
@@ -115,7 +116,9 @@ Fail-closed 不等于终止 Session。Agentlet 释放本轮执行资源，把未
 只接受 Claude Managed Agents 已有的 `user.tool_confirmation` 与 `user.tool_result` 来解除阻塞：deny
 或外部对账结果成为 Tool Result 后继续模型循环；allow 只允许原 Action 创建一个新 Attempt。确认
 Event ID 会写入新 Attempt 的 requested payload；如果新 Attempt 的结果再次不明确，旧确认不能重放，
-必须生成新的 `agent.tool_use` 再次询问。普通 user message 在 required action 解决前保持排队。
+必须生成新的 `agent.tool_use` 再次询问。Agentlet 在 tool use 投影中保留原始 input Event ID；处理确认
+时从 durable inbox 取回并重投该输入，使新进程可以从 admission checkpoint 重建同一次 Loop。普通
+user message 在 required action 解决前保持排队。
 
 进程退出与用户 Interrupt 是两种语义。Agentlet shutdown 先关闭新 Work admission 并停止后台
 reconcile，再等待已经接受的 Work 自然到达稳定 checkpoint；只有退出宽限期耗尽才取消执行，并在活跃

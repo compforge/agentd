@@ -5,7 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io/fs"
 	"net/http"
 	"path/filepath"
@@ -18,11 +18,14 @@ import (
 	"github.com/compforge/agentd/agentlet/internal/harness"
 	"github.com/compforge/agentd/agentlet/internal/sandbox/engine"
 	"github.com/compforge/agentd/agentlet/internal/service"
-	"github.com/compforge/agentgo"
 )
 
 func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
-	model := newAnthropicModelStub(t, func(_ int, writer http.ResponseWriter, _ *http.Request) {
+	model := newAnthropicModelStub(t, func(attempt int, writer http.ResponseWriter, _ *http.Request) {
+		if attempt == 1 {
+			writeAnthropicWriteCall(writer)
+			return
+		}
 		writeAnthropicAnswer(writer, "AGENTD_TOOL_RESOLUTION_OK")
 	})
 	backend := openSQLiteE2EBackend(
@@ -31,7 +34,8 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 	t.Cleanup(func() { backend.close(t) })
 	events := service.NewEventLog(backend.ledger)
 	sandbox := &countingWriteSandbox{}
-	seedRunner := newToolResolutionRunner(t, backend, model.URL(), sandbox)
+	seedLedger := &failToolOutcomeStore{EventStore: backend.ledger}
+	seedRunner := newToolResolutionRunner(t, backend, seedLedger, model.URL(), sandbox)
 	seed := service.New(backend.resources, events, seedRunner)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -65,9 +69,30 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 	if err := events.AppendIngress(ctx, session.ID, input); err != nil {
 		t.Fatal(err)
 	}
-	toolUseID := seedUnresolvedWriteAttempt(t, ctx, backend, agent, &session, input)
+	inputID, _ := input["id"].(string)
+	resume, seedErr := seedRunner.Run(ctx, harness.Session{
+		ID: session.ID,
+		Agent: harness.Agent{
+			ID: agent.ID, Model: agent.Model, System: agent.System, Tools: agent.Tools, Version: agent.Version,
+		},
+		EnvironmentID:  session.EnvironmentID,
+		ResumeRef:      session.Control.ResumeRef,
+		ResumeRevision: session.Control.ResumeRevision,
+	}, harness.TurnInput{ID: inputID, Text: "Write the release marker."}, func(harness.ManagedEvent) error {
+		return nil
+	})
+	if seedErr == nil {
+		t.Fatal("seed execution unexpectedly persisted the uncertain tool outcome")
+	}
+	t.Logf("seed execution stopped at injected boundary: %v", seedErr)
+	session.Control.ResumeRef = resume.ResumeRef
+	session.Control.ResumeRevision = resume.ResumeRevision
+	if err := backend.resources.PutSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	toolUseID := unresolvedToolUseID(t, ctx, backend.ledger, session.ID)
 
-	recoveredRunner := newToolResolutionRunner(t, backend, model.URL(), sandbox)
+	recoveredRunner := newToolResolutionRunner(t, backend, backend.ledger, model.URL(), sandbox)
 	recovered := service.New(backend.resources, events, recoveredRunner)
 	t.Cleanup(func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
@@ -81,9 +106,9 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 		t.Fatalf("required tool use = %q, want %q", got, toolUseID)
 	}
 	assertSQLiteE2EEventContains(t, ctx, &sqliteE2EClient{events: events}, session.ID, "session.status_idle", "requires_action")
-	model.assertRequests(t, 0)
-	if writes := sandbox.writeCount(); writes != 0 {
-		t.Fatalf("Sandbox writes before resolution = %d, want 0", writes)
+	model.assertRequests(t, 1)
+	if writes := sandbox.writeCount(); writes != 1 {
+		t.Fatalf("Sandbox writes before resolution = %d, want one uncertain execution", writes)
 	}
 
 	denyMessage := "operator reconciled the unknown write without replay"
@@ -98,8 +123,8 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 	}
 	waitForResolvedAgentMessage(t, ctx, recovered, events, session.ID, "AGENTD_TOOL_RESOLUTION_OK")
 
-	if writes := sandbox.writeCount(); writes != 0 {
-		t.Fatalf("uncertain write was replayed %d time(s)", writes)
+	if writes := sandbox.writeCount(); writes != 1 {
+		t.Fatalf("uncertain write execution count = %d, want no replay", writes)
 	}
 	blocking, err := events.UnresolvedToolUses(ctx, session.ID)
 	if err != nil {
@@ -108,20 +133,22 @@ func TestUnsafeToolResolutionResumesWithoutReplay(t *testing.T) {
 	if len(blocking) != 0 {
 		t.Fatalf("resolved tool uses = %#v, want none", blocking)
 	}
-	model.assertRequests(t, 1, denyMessage)
+	model.assertRequests(t, 2)
+	model.assertLastRequestContains(t, denyMessage)
 	assertDeniedAttemptWasNotReplayed(t, ctx, backend.ledger, session.ID)
 }
 
 func newToolResolutionRunner(
 	t *testing.T,
 	backend *sqliteE2EBackend,
+	ledger agentledger.EventStore,
 	modelURL string,
 	sandbox engine.Engine,
 ) *harness.AgentGoRunner {
 	t.Helper()
 	runner, err := harness.NewAgentGoRunner(harness.AgentGoRunnerConfig{
 		RequestTimeout: time.Second, OperationTimeout: 2 * time.Second, ToolTimeout: 2 * time.Second,
-		Ledger: backend.ledger, Checkpoints: backend.checkpoints, Sandbox: sandbox,
+		Ledger: ledger, Checkpoints: backend.checkpoints, Sandbox: sandbox,
 	})
 	if err != nil {
 		t.Fatalf("create AgentGo tool-resolution runner: %v", err)
@@ -129,71 +156,107 @@ func newToolResolutionRunner(
 	return runner
 }
 
-func seedUnresolvedWriteAttempt(
+func writeAnthropicWriteCall(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	_, _ = writer.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_e2e\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"))
+	_, _ = writer.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_uncertain_write\",\"name\":\"write\",\"input\":{}}}\n\n"))
+	_, _ = writer.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\":\\\"release.txt\\\",\\\"content\\\":\\\"released\\\"}\"}}\n\n"))
+	_, _ = writer.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+	_, _ = writer.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":1}}\n\n"))
+	_, _ = writer.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+}
+
+func unresolvedToolUseID(
 	t *testing.T,
 	ctx context.Context,
-	backend *sqliteE2EBackend,
-	agent service.Agent,
-	session *service.Session,
-	input service.ManagedEvent,
+	store agentledger.EventStore,
+	sessionID string,
 ) string {
 	t.Helper()
-	actor, err := backend.checkpoints.EnsureActor(ctx, agentledger.NewActorWithKey(
-		fmt.Sprintf("agentd/agents/%s/versions/%d", agent.ID, agent.Version), "agent", "agentgo",
-	))
+	view, err := store.LoadSession(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("seed AgentGo actor: %v", err)
+		t.Fatal(err)
 	}
-	inputID, _ := input["id"].(string)
-	userMessage := agentgo.UserMsg("Write the release marker.")
-	userMessage.Metadata = map[string]any{"agentd.input_id": inputID}
-	toolCallID := "toolu_uncertain_write"
-	assistantMessage := agentgo.Message{
-		Role: agentgo.RoleAssistant,
-		Content: []agentgo.ContentBlock{agentgo.ToolCallBlock(agentgo.ToolCall{
-			ID: toolCallID, Name: "write",
-			Args: json.RawMessage(`{"path":"release.txt","content":"released"}`),
-		})},
-		StopReason: agentgo.StopReasonToolUse,
-		Timestamp:  time.Now().UTC(),
+	actions := make(map[string]string, len(view.Actions))
+	for _, action := range view.Actions {
+		actions[action.ID] = action.Type
 	}
-	checkpoint := agentledger.NewCheckpoint(
-		"agentgo/"+session.ID,
-		actor.ID,
-		"application/vnd.compforge.agentgo.messages+json;version=1",
-		map[string]any{"messages": []agentgo.Message{userMessage, assistantMessage}},
-	)
-	stored, err := backend.checkpoints.SaveCheckpoint(ctx, 0, checkpoint)
-	if err != nil {
-		t.Fatalf("seed AgentGo checkpoint: %v", err)
+	toolAttempts := make(map[string]bool)
+	for _, attempt := range view.Attempts {
+		if actions[attempt.ActionID] == agentledger.ActionTypeToolCall {
+			toolAttempts[attempt.ID] = true
+		}
 	}
-	session.Control.ResumeRef = stored.ID
-	session.Control.ResumeRevision = stored.Revision
-	if err := backend.resources.PutSession(ctx, *session); err != nil {
-		t.Fatalf("seed Session resume point: %v", err)
+	requested := make(map[string]bool)
+	terminal := make(map[string]bool)
+	for _, event := range view.Events {
+		if !toolAttempts[event.SubjectID] {
+			continue
+		}
+		switch event.EventType {
+		case agentledger.EventTypeAttemptRequested:
+			requested[event.SubjectID] = true
+		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed,
+			agentledger.EventTypeAttemptCancelled, agentledger.EventTypeAttemptOutcomeUnknown:
+			terminal[event.SubjectID] = true
+		}
 	}
+	for attemptID := range requested {
+		if !terminal[attemptID] {
+			return "event_" + attemptID
+		}
+	}
+	t.Fatalf("no unresolved tool attempt was recorded: actions=%#v attempts=%#v events=%#v", view.Actions, view.Attempts, view.Events)
+	return ""
+}
 
-	recorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
-		Store: backend.ledger, SessionID: session.ID, RunID: "input/" + inputID, Actor: actor,
-	})
-	if err != nil {
-		t.Fatalf("open seeded AgentGo recorder: %v", err)
+// failToolOutcomeStore lets the external write finish, then drops its durable
+// outcome once. That is the ambiguity recovery must never interpret as safe to
+// replay automatically.
+type failToolOutcomeStore struct {
+	agentledger.EventStore
+
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *failToolOutcomeStore) Append(
+	ctx context.Context,
+	laneID string,
+	expectedLastSeq int64,
+	appendID string,
+	events ...agentledger.ProposedEvent,
+) (agentledger.AppendReceipt, error) {
+	s.mu.Lock()
+	shouldFail := false
+	for _, event := range events {
+		if event.EventType != agentledger.EventTypeAttemptCompleted || s.failed {
+			continue
+		}
+		encoded, _ := json.Marshal(event.Payload["output"])
+		if strings.Contains(string(encoded), `"tool_call_id"`) {
+			s.failed = true
+			shouldFail = true
+		}
 	}
-	if _, err := recorder.StartRun(ctx, map[string]any{"agent_version": agent.Version}); err != nil {
-		t.Fatalf("seed AgentGo run: %v", err)
+	s.mu.Unlock()
+	if shouldFail {
+		return agentledger.AppendReceipt{}, errors.New("injected tool outcome persistence failure")
 	}
-	turn, err := recorder.StartTurn(ctx, nil)
-	if err != nil {
-		t.Fatalf("seed AgentGo turn: %v", err)
+	return s.EventStore.Append(ctx, laneID, expectedLastSeq, appendID, events...)
+}
+
+func (s *anthropicModelStub) assertLastRequestContains(t *testing.T, expected string) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.requests) == 0 {
+		t.Fatal("model received no requests")
 	}
-	attempt, err := recorder.BeforeToolCallWithEffect(ctx, turn.ID, toolCallID, map[string]any{
-		"tool_name": "write",
-		"input":     map[string]any{"path": "release.txt", "content": "released"},
-	}, agentledger.Effect{Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyNone})
-	if err != nil {
-		t.Fatalf("seed unresolved write attempt: %v", err)
+	last := s.requests[len(s.requests)-1]
+	if !strings.Contains(string(last), expected) {
+		t.Fatalf("last model request does not contain %q: %s", expected, last)
 	}
-	return "event_" + attempt.AttemptID
 }
 
 func waitForRequiredToolAction(

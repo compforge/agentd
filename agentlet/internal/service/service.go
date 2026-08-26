@@ -539,7 +539,15 @@ func (a *Service) process(
 
 	var outputErr error
 	var outputMu sync.Mutex
-	result, runErr := a.harness.Run(ctx, executionSession(session), turnInput(input), func(event ManagedEvent) error {
+	turn := turnInput(input)
+	if turn.ToolResolution != nil {
+		recoveryInput, recoveryErr := a.toolRecoveryInput(ctx, sessionID, turn.ToolResolution.ToolUseID)
+		if recoveryErr != nil {
+			return false, recoveryErr
+		}
+		turn.RecoveryInput = &recoveryInput
+	}
+	result, runErr := a.harness.Run(ctx, executionSession(session), turn, func(event ManagedEvent) error {
 		err := a.events.AppendExecution(ctx, sessionID, event)
 		outputMu.Lock()
 		if outputErr == nil {
@@ -573,8 +581,13 @@ func (a *Service) process(
 	if errors.As(runErr, &requiresAction) {
 		eventIDs := make([]string, 0, len(requiresAction.ToolUses))
 		for _, toolUse := range requiresAction.ToolUses {
+			toolInputID := toolUse.InputID
+			if toolInputID == "" {
+				toolInputID = inputID
+			}
 			value := NewManagedEvent("agent.tool_use", map[string]any{
 				"name": toolUse.Name, "input": toolUse.Input, "evaluated_permission": "ask",
+				"input_event_id": toolInputID,
 			})
 			value["id"] = toolUse.ID
 			if err := a.events.AppendExecution(ctx, sessionID, value); err != nil {
@@ -694,6 +707,43 @@ func turnInput(event ManagedEvent) TurnInput {
 	}
 	input.ToolResolution = resolution
 	return input
+}
+
+// toolRecoveryInput resolves the accepted user message that originally drove
+// a blocked tool execution. AgentGo restores the admission snapshot, so the
+// host must redeliver this durable inbox item when a later confirmation or
+// supplied result resumes the same native loop.
+func (a *Service) toolRecoveryInput(
+	ctx context.Context,
+	sessionID string,
+	toolUseID string,
+) (harness.RecoveryInput, error) {
+	events, err := a.events.List(ctx, sessionID)
+	if err != nil {
+		return harness.RecoveryInput{}, fmt.Errorf("load tool recovery input: %w", err)
+	}
+	var inputID string
+	for _, event := range events {
+		id, _ := event["id"].(string)
+		if id == toolUseID && event["type"] == "agent.tool_use" {
+			inputID, _ = event["input_event_id"].(string)
+			break
+		}
+	}
+	if inputID == "" {
+		return harness.RecoveryInput{}, fmt.Errorf(
+			"%w: tool use %q has no source input", ErrUnsafeRecovery, toolUseID,
+		)
+	}
+	for _, event := range events {
+		id, _ := event["id"].(string)
+		if id == inputID {
+			return harness.RecoveryInput{ID: inputID, Text: textContent(event)}, nil
+		}
+	}
+	return harness.RecoveryInput{}, fmt.Errorf(
+		"%w: source input %q for tool use %q is missing", ErrUnsafeRecovery, inputID, toolUseID,
+	)
 }
 
 func invalid(message string) error {
