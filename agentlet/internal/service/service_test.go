@@ -216,8 +216,15 @@ func TestUnsafeRecoveryPausesSessionForRequiredAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(blocking) != 1 || blocking[0]["id"] != "event_attempt-1" {
+	if len(blocking) != 1 || blocking[0]["id"] != "event_attempt-1" || blocking[0]["input_event_id"] != input["id"] {
 		t.Fatalf("blocking tool uses = %#v", blocking)
+	}
+	recoveryInput, err := application.toolRecoveryInput(ctx, session.ID, "event_attempt-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveryInput.ID != input["id"] || recoveryInput.Text != "resume" {
+		t.Fatalf("tool recovery input = %#v", recoveryInput)
 	}
 }
 

@@ -17,7 +17,7 @@ Session 和 Event 的产品语义保持不变。
 | Agentlet | Assignment 内的本地执行、runtime 生命周期与 observed state 上报 | 全局 placement、跨实例资源真相 |
 | Harness Adapter | Harness runtime、原生状态恢复、模型与工具循环、输出投影 | 长期 Session 身份、执行所有权 |
 | Sandbox Engine | 隔离环境及文件、命令等执行能力 | Tool 语义、模型循环 |
-| Agent Ledger Adapter | 将原生模型和工具 hook 记录为规范化执行事实 | Harness State、恢复和重放决策 |
+| Agent Ledger Adapter | 将原生 checkpoint 与模型、工具 hook 接入 Checkpoint Store 和 Ledger，并把已知结果交还原生 Loop | 调度、durable inbox、Tool 重试策略 |
 
 具体业务目标、任务拆分和验收方式由 Agent、Skill 或更上层编排提供，不属于 Harness Adapter。
 
@@ -62,26 +62,31 @@ commit native state + project Managed Event
 Agentlet returns the committed revision to agentd
 ```
 
-Harness runtime 是本轮执行资源，不是 Session 本身。当前 AgentGo Adapter 每次 `Run` 都从持久化
-消息创建新的 `agentgo.Agent`，执行结束后释放；等待下一条用户输入不需要长期占用 AgentGo runtime。
+Harness runtime 是本轮执行资源，不是 Session 本身。当前 AgentGo Adapter 每次 `Run` 都创建新的
+`agentgo.Agent`，由 `BeforeRun` 恢复持久化 snapshot，执行结束后释放；等待下一条用户输入不需要
+长期占用 AgentGo runtime。
 
 ## 状态与恢复
 
 Harness State 由对应 Adapter 解释。agentd 和 Agentlet 只传递 `ResumeRef` 和 revision，不要求不同
-Harness 转换成统一消息或 checkpoint schema。当前 AgentGo Adapter 使用版本化 opaque record 追加
-已提交的原生 message，并以 revision 做乐观并发检查。恢复器先验证 Control State 指向的 revision，
-再采用同一 checkpoint key 上可能更高的已持久 revision。
+Harness 转换成统一消息或 checkpoint schema。当前 AgentGo Adapter 把 `AgentSnapshot` 连同本次
+execution scope 保存为版本化 opaque checkpoint，并以 revision 做乐观并发检查。恢复器先验证
+Control State 指向的 revision，再采用同一 checkpoint key 上可能更高的已持久 revision。
 
 Adapter 恢复同一 input 时必须保证：
 
-1. 未提交原生 user message 时才重新注入 Prompt；
-2. 已提交 input 但尚未完成时从原生上下文继续；
+1. Agentlet 从 durable inbox 重投同一个稳定 input，Adapter 从 admission checkpoint 恢复原生 snapshot；
+2. checkpoint 之后已经完成的 model/tool outcome 由 middleware 返回给 AgentGo，由原生 Loop 重建状态，
+   不由 Agentlet 手工拼接 message；
 3. 已存在完整 assistant message 时只幂等补齐 Managed Event；
 4. 无法证明结果且不满足自动重试策略的 Tool Attempt 不自动重放，而是返回带精确 tool use 的
    `RequiresActionError`；Agentlet 将其投影为 `idle/requires_action`，并把后续
    `user.tool_confirmation` / `user.tool_result` 作为新的 Harness 输入交回 Adapter 对账。
 
-allow 不是 Session 级“强制恢复”开关，而是绑定 `ActionID + AttemptID + confirmation Event ID` 的
+工具确认是新的 ingress Event，但恢复仍需原始 user input。Agentlet 在 `agent.tool_use` 中保留其稳定
+input Event ID；处理确认或外部结果时从 durable Event 账本取回原始输入，交给 Adapter 重建同一次
+native loop。allow 不是 Session 级“强制恢复”开关，而是绑定
+`ActionID + AttemptID + confirmation Event ID` 的
 一次性能力。Adapter 必须在外部执行前创建新 Attempt、写入确认 Event ID，并将旧 Attempt 以
 `outcome_unknown` 事实终结；若该新 Attempt 再次悬空，恢复器必须再次请求用户动作。
 
@@ -106,8 +111,10 @@ Harness Adapter 是 Agent Loop 与两个稳定能力边界之间的桥梁：
 
 - 根据 WorkSpec 中已解析的外部 Model 连接，以及 Session 固定的 system prompt 和 toolset 创建
   AgentGo runtime；Model 的注册和凭据保管不属于 Adapter；
-- 从 Harness State 恢复 AgentGo message，并在每次 message commit 后追加新 revision；
-- 使用 Agent Ledger 的 AgentGo Adapter 记录 Run、Model Attempt 和 Tool Attempt；
+- 通过 AgentGo `BeforeRun` / `AfterRun` 恢复和保存 `AgentSnapshot`；正常完成时提交最终 checkpoint，
+  失败或中断时保留 admission checkpoint 作为重放基线；
+- 使用 Agent Ledger 的 AgentGo Adapter 记录 Run、Turn、Model Attempt 和 Tool Attempt，并让
+  Model/Tool middleware 把已知 outcome 返回原生 Loop；
 - 通过 Sandbox Engine 组装 AgentGo tools；
 - 仅将完整 assistant message 投影为 Managed Event，不持久化超时产生的部分输出；
 - 维护活跃 Session 到 AgentGo runtime 的进程内映射，用于响应 `Interrupt`。

@@ -11,9 +11,10 @@ import (
 var ErrUnsafeRecovery = errors.New("automatic recovery is unsafe")
 
 type BlockingToolUse struct {
-	ID    string
-	Name  string
-	Input map[string]any
+	ID      string
+	Name    string
+	Input   map[string]any
+	InputID string
 }
 
 // RequiresActionError is a recoverable idle boundary, not a terminal Harness
@@ -59,6 +60,15 @@ type TurnInput struct {
 	ID             string
 	Text           string
 	ToolResolution *ToolResolution
+	RecoveryInput  *RecoveryInput
+}
+
+// RecoveryInput is an accepted ingress message redelivered by the Agentlet
+// host when a later tool-resolution event resumes its interrupted execution.
+// Harnesses may ignore it when they do not reconstruct native loop execution.
+type RecoveryInput struct {
+	ID   string
+	Text string
 }
 
 type ToolResolution struct {

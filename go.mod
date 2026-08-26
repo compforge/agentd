@@ -5,8 +5,8 @@ go 1.25.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.63.1
 	github.com/cloudwego/hertz v0.10.4
-	github.com/compforge/agent-ledger/go v0.0.0-20260824074809-8026d3e6efdd
-	github.com/compforge/agentgo v0.0.1
+	github.com/compforge/agent-ledger/go v0.0.0-20260826122411-ccd6784beb8c
+	github.com/compforge/agentgo v0.0.2-0.20260826112438-691b2c90c5bb
 	github.com/compforge/case-harness/go v0.0.0-20260824112126-8c3aabf6fa18
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/qiankunli/go-stdx v0.0.4-0.20260824051808-f7f6d7c53de2
@@ -61,7 +61,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/voocel/litellm v1.8.8 // indirect
+	github.com/voocel/litellm v1.8.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
