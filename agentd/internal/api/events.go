@@ -26,11 +26,36 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	if err != nil {
 		return err
 	}
+	retryCount, err := parseStainlessRetryCount(
+		request.Request.Header.Peek(stainlessRetryCountHeader),
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %v", service.ErrInvalid, err)
+	}
+	flags := summarizeIngress(ingress)
 
 	sessionID := input.SessionID
 	session, err := s.service.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
+	}
+	if retryCount > 0 {
+		reused, ok, err := s.latestRetriedUserMessage(ctx, sessionID, ingress)
+		if err != nil {
+			return err
+		}
+		if ok {
+			s.logger.InfoContext(ctx, "reused Session ingress Event for SDK retry",
+				"session_id", sessionID, "event_id", reused["id"],
+				"stainless_retry_count", retryCount)
+			if flags.hasInput {
+				s.executionNotifier.Notify()
+			}
+			request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{
+				Data: []managedevent.ManagedEvent{reused},
+			})
+			return nil
+		}
 	}
 	if session.ArchivedAt != nil {
 		return fmt.Errorf(
@@ -55,7 +80,6 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	if err := validateIngressSequence(ingress, blockingIDs); err != nil {
 		return err
 	}
-	flags := summarizeIngress(ingress)
 	if flags.hasToolResult {
 		environment, err := s.service.GetEnvironment(ctx, session.EnvironmentID)
 		if err != nil {
@@ -73,7 +97,8 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	}
 	s.logger.InfoContext(ctx, "accepted Session ingress Events",
 		"session_id", sessionID, "event_count", len(accepted),
-		"has_message", flags.hasMessage, "has_interrupt", flags.hasInterrupt)
+		"has_message", flags.hasMessage, "has_interrupt", flags.hasInterrupt,
+		"stainless_retry_count", retryCount)
 
 	if flags.hasInput {
 		s.executionNotifier.Notify()
@@ -101,6 +126,47 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	}
 	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
 	return nil
+}
+
+// latestRetriedUserMessage is a transitional retry heuristic. A positive
+// X-Stainless-Retry-Count says that the official Anthropic SDK retried a request,
+// but it does not identify which accepted request is being retried. For now,
+// agentd treats a matching most-recent single user.message as that request. Keep
+// this policy local to ingress and refine it when real traffic provides stronger
+// correlation requirements.
+//
+// +spec=`A positive X-Stainless-Retry-Count reuses the latest identical single user.message Event instead of appending duplicate durable input`
+// +ideal=`Replace latest-message matching with a stable client request identity when the public protocol supports one`
+func (s *Server) latestRetriedUserMessage(
+	ctx context.Context,
+	sessionID string,
+	ingress []view.IngressEvent,
+) (managedevent.ManagedEvent, bool, error) {
+	if len(ingress) != 1 || ingress[0].Type != "user.message" {
+		return nil, false, nil
+	}
+	events, err := s.events.List(ctx, sessionID)
+	if err != nil {
+		return nil, false, fmt.Errorf("read recent Session ingress Event: %w", err)
+	}
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index]["type"] != "user.message" {
+			continue
+		}
+		storedContent, err := json.Marshal(events[index]["content"])
+		if err != nil {
+			return nil, false, fmt.Errorf("encode recent user.message content: %w", err)
+		}
+		incomingContent, err := json.Marshal(ingress[0].Content)
+		if err != nil {
+			return nil, false, fmt.Errorf("encode retried user.message content: %w", err)
+		}
+		if string(storedContent) == string(incomingContent) {
+			return events[index], true, nil
+		}
+		return nil, false, nil
+	}
+	return nil, false, nil
 }
 
 type ingressFlags struct {

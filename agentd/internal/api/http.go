@@ -9,10 +9,7 @@ import (
 	agentledger "github.com/compforge/agent-ledger/go"
 )
 
-const (
-	requestIDHeader   = "request-id"
-	streamEventsRoute = "/v1/sessions/:session_id/events/stream"
-)
+const streamEventsRoute = "/v1/sessions/:session_id/events/stream"
 
 func (s *Server) observeHTTP(ctx context.Context, request *hertzapp.RequestContext) {
 	started := time.Now()
