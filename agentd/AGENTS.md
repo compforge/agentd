@@ -80,6 +80,8 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 4. Harness 与 Sandbox Engine 都是可替换执行依赖，不得把原生状态或物理位置泄漏进公开 API 和
    Control Plane。Quick Start 的共置拓扑不改变生产边界；认证、凭据、超时和关闭约束见
    `docs/kernel.md`、`docs/sandbox-engine.md` 及部署文档。
+5. 根目录 `VERSION` 使用 SemVer；任何代码改动都必须在同一变更中递增版本。发布 tag 使用
+   `v<VERSION>`，与发布提交中的版本保持一致。
 
 ## References
 
