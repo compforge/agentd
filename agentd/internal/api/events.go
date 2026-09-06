@@ -203,6 +203,10 @@ func (s *Server) appendIngressEvents(
 	sessionID string,
 	ingress []view.IngressEvent,
 ) ([]managedevent.ManagedEvent, error) {
+	return appendIngressEvents(ctx, s.events, sessionID, ingress)
+}
+
+func appendIngressEvents(ctx context.Context, events *managedevent.Log, sessionID string, ingress []view.IngressEvent) ([]managedevent.ManagedEvent, error) {
 	accepted := make([]managedevent.ManagedEvent, 0, len(ingress))
 	for _, item := range ingress {
 		value := managedevent.New(item.Type, nil)
@@ -223,7 +227,7 @@ func (s *Server) appendIngressEvents(
 		}
 		accepted = append(accepted, value)
 	}
-	if err := s.events.AppendIngressBatch(ctx, sessionID, accepted); err != nil {
+	if err := events.AppendIngressBatch(ctx, sessionID, accepted); err != nil {
 		return nil, fmt.Errorf("persist Session ingress Events: %w", err)
 	}
 	return accepted, nil

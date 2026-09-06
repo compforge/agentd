@@ -22,6 +22,7 @@ import (
 	hertzserver "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/network/standard"
 	agentledger "github.com/compforge/agent-ledger/go"
+	ledgergorm "github.com/compforge/agent-ledger/go/stores/gorm"
 	"github.com/compforge/agentd/agentd/internal/api"
 	"github.com/compforge/agentd/agentd/internal/model"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
@@ -39,15 +40,31 @@ import (
 func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	ledgerStore := agentledger.NewMemoryEventStore()
+	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	ledgerStore, err := ledgergorm.New(database, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledgerStore.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
 	events := managedevent.NewLog(ledgerStore)
 	worker := &fakeAgentlet{workerID: "worker-1", events: events}
 	workerServer := httptest.NewServer(worker)
 	defer workerServer.Close()
-
-	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
+	idempotencyStore, err := gormrepo.NewIdempotencyStore(database, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +117,7 @@ func TestManagedAgentSDKRunsThroughControlPlaneAndAssignedAgentlet(t *testing.T)
 		hertzserver.WithSenseClientDisconnection(true),
 	)
 	api.New(
-		controlService, events, agentletConnector, executionReconciler,
+		controlService, service.NewIdempotency(idempotencyStore, controlService), events, agentletConnector, executionReconciler,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		api.WithAPIKey("test"),
 	).Register(server.Engine)

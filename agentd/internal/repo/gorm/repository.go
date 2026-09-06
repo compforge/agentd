@@ -112,7 +112,7 @@ func NewGORM(db *gormio.DB) (*GORMRepository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("create control-plane repository: database is required")
 	}
-	if err := db.AutoMigrate(&modelRow{}, &agentRow{}, &agentVersionRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}); err != nil {
+	if err := db.AutoMigrate(&modelRow{}, &agentRow{}, &agentVersionRow{}, &environmentRow{}, &sessionRow{}, &workerRow{}, &resourceLockRow{}, &idempotencyRow{}); err != nil {
 		return nil, fmt.Errorf("migrate control-plane store: %w", err)
 	}
 	return &GORMRepository{db: db}, nil
