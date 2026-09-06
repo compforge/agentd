@@ -54,10 +54,39 @@ Worker 已用容量由当前绑定的 Session 数计算，不在 Worker 或 obse
 available = worker.capacity - count(sessions where worker_id = worker.id)
 ```
 
-控制面当前只需要三个持久化主体：`workers` 保存容量与观测事实，`sessions` 保存需求和绑定，
+调度与容量协调涉及三个持久化主体：`workers` 保存容量与观测事实，`sessions` 保存需求和绑定，
 `resource_locks` 保存多实例短租约。表之间不声明数据库外键，归属一致性由 Service 事务保证。
 Go 代码中，稳定对象定义在 `internal/model`，持久化契约定义在 `internal/repo/repository.go`，GORM
 表映射和查询放在 `internal/repo/gorm`；`internal/service` 只编排业务事务，不暴露 GORM model。
+
+## 资源请求与一致性
+
+API 接收资源请求与 Agentlet 执行相互解耦：输入持久化后才确认接收，提交后再通知协调器。
+请求重试的去重属于资源处理流程，不等同于模型调用或工具副作用的 exactly-once 保证。
+API 拥有协议校验与响应编码，service 协调资源事务及幂等机制，repo 提供持久化支持；幂等记录
+不是独立业务资源，不提供公开 CRUD API。
+
+Session 创建支持可选的 `Idempotency-Key`。未携带键时，每次请求创建独立 Session；携带键时，
+同一资源类型下的重复键复用首次成功结果，参数不一致则拒绝。首次请求在同一数据库事务内
+保存幂等记录、Session、initial events 和响应，数据库唯一约束裁决并发请求。
+
+资源原始记录足以重建首次响应时，应复用记录；无法重建时，才由 `idempotency_keys` 保存快照。
+Session 的状态、标题、metadata、usage 和时长会变化，当前资源不等于创建时的响应，因此保存
+首次响应码与正文。重复请求重放该快照，不受资源后续修改或归档影响，但仍生成新的诊断 request-id。
+Event 提交仅为单条 `user.message` 支持该 header。幂等键派生稳定的 Ledger Event 与 append 身份，
+请求摘要随原始事件保存；重复请求直接还原接受时的消息，而不是带有最新 processed 状态的读投影，
+因此不另存 HTTP 响应快照。同键不同内容或不同目标 Session 不可视为同一次提交。
+带键的其它 Event 类型和批量提交明确拒绝；未带键时保留 SDK retry-count 的单消息兼容处理，
+它不具备稳定请求身份的保证。其它资源接口不因已有幂等机制而自动获得该 header 的语义。
+
+事务失败则资源、输入和幂等记录一起回滚；提交结果不明时，调用方使用原键重试，由持久记录
+判定执行还是重放。重复请求可以补发唤醒，但不重新追加输入；周期扫描兜底丢失的通知。
+事务内不得调用 Agentlet 或模型服务，避免把外部执行混入数据库原子性承诺。
+幂等记录不自动过期：删除记录会放弃对应键的历史去重保证，不能当作普通缓存淘汰。
+
+响应快照的设计参考 [Rocket Rides Atomic](https://github.com/brandur/rocket-rides-atomic/blob/master/schema.sql)
+和 [Fiber](https://github.com/gofiber/fiber/blob/main/middleware/idempotency/idempotency.go)；
+agentd 的资源写入与幂等记录共享事务，不能只在业务提交后缓存 HTTP 响应。
 
 ## Observers
 

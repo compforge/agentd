@@ -6,7 +6,7 @@ import "time"
 // case-sensitive; RequestDigest detects accidental key reuse with other input.
 type IdempotencyIdentity struct {
 	IdempotencyKey string
-	ResourceType   string
+	ResourceType   ResourceType
 	RequestDigest  string
 }
 

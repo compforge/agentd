@@ -28,7 +28,7 @@ func NewIdempotency(store repo.IdempotencyStore, control *Service) *Idempotency 
 // An empty identity uses the same atomic command path without storing a receipt.
 // +spec=`Repeated keys within a resource type replay the original successful response without rerunning the command; mismatched content is rejected`
 // +why=`A durable receipt is insufficient if input can commit separately before the receipt exists`
-// +link=agentd/docs/idempotency.md
+// +link=agentd/docs/agentd.md#资源请求与一致性
 func (s *Idempotency) Run(ctx context.Context, identity model.IdempotencyIdentity, command func(context.Context, *Service, *managedevent.Log) (model.IdempotencyResponse, error)) (model.IdempotencyResponse, bool, error) {
 	if identity.IdempotencyKey != "" {
 		previous, err := s.store.GetIdempotencyKey(ctx, identity)
