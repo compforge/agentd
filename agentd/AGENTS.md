@@ -84,11 +84,10 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 ## References
 
 - `docs/kernel.md` — agentd 稳定定位、核心模型、API 边界与组件主流程
-- `docs/agentd.md` — Control Plane、Worker 弹性、调度、转发与 Control State
+- `docs/agentd.md` — Control Plane、资源请求一致性、Worker 弹性、调度与 Control State
 - `docs/agentlet.md` — Agentlet 执行、Checkpoint / Ledger 接入与恢复顺序
 - `docs/harness.md` — Harness 执行边界、适配契约、恢复语义与 AgentGo 实现
 - `docs/sandbox-engine.md` — Sandbox Engine 能力契约、资源生命周期与隔离要求
-- `docs/idempotency.md` — 资源请求去重、首次响应重放与原子提交边界
 - `../deploy/k8s/README.md` — Quick Start Helm 形态、Worker 模板与扩缩容流程
 - `../tests/README.md` — 系统级 E2E / perf 边界、触发方式与子套件索引
 - `https://platform.claude.com/docs/en/managed-agents/overview` — 上游 API 概念与行为基线

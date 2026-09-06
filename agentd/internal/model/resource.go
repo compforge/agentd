@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+type ResourceType string
+
+const (
+	ResourceTypeSession ResourceType = "session"
+	ResourceTypeEvent   ResourceType = "event"
+)
+
 type Agent struct {
 	ID          string
 	VersionID   string

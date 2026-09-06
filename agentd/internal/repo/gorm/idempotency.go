@@ -46,7 +46,7 @@ func NewIdempotencyStore(db *gorm.DB, timeout time.Duration) (*IdempotencyStore,
 // Transaction reuses Ledger's public store with the same transaction handle.
 // +spec=`A receipt, its Session and all ingress Events commit together or not at all`
 // +rule=`Never initialize Ledger schema or call an Agentlet inside the idempotency transaction`
-// +link=agentd/docs/idempotency.md
+// +link=agentd/docs/agentd.md#资源请求与一致性
 func (s *IdempotencyStore) Transaction(ctx context.Context, fn func(context.Context, repo.Repository, *managedevent.Log, repo.IdempotencyRepository) error) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -83,14 +83,14 @@ func (s *idempotencyRecords) GetIdempotencyKey(ctx context.Context, identity mod
 	}
 	return model.IdempotencyRecord{
 		ID:                  row.ID,
-		IdempotencyIdentity: model.IdempotencyIdentity{IdempotencyKey: row.IdempotencyKey, ResourceType: row.ResourceType, RequestDigest: row.RequestDigest},
+		IdempotencyIdentity: model.IdempotencyIdentity{IdempotencyKey: row.IdempotencyKey, ResourceType: model.ResourceType(row.ResourceType), RequestDigest: row.RequestDigest},
 		IdempotencyResponse: model.IdempotencyResponse{StatusCode: row.ResponseStatus, Body: row.ResponseBody},
 		CreatedAt:           row.CreatedAt,
 	}, nil
 }
 
 func (s *idempotencyRecords) CreateIdempotencyKey(ctx context.Context, identity model.IdempotencyIdentity) error {
-	row := idempotencyRow{ID: uuid.New(), IdempotencyKey: identity.IdempotencyKey, ResourceType: identity.ResourceType, RequestDigest: identity.RequestDigest, CreatedAt: time.Now().UTC()}
+	row := idempotencyRow{ID: uuid.New(), IdempotencyKey: identity.IdempotencyKey, ResourceType: string(identity.ResourceType), RequestDigest: identity.RequestDigest, CreatedAt: time.Now().UTC()}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		var my *mysql.MySQLError
 		var sq sqlite3.Error

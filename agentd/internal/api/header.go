@@ -9,6 +9,7 @@ import (
 const (
 	requestIDHeader           = "request-id"
 	stainlessRetryCountHeader = "X-Stainless-Retry-Count"
+	idempotencyKeyHeader      = "Idempotency-Key"
 )
 
 func parseStainlessRetryCount(raw []byte) (int, error) {

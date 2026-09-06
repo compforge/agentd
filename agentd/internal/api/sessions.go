@@ -37,7 +37,7 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 	if err != nil {
 		return err
 	}
-	identity, err := sessionIdempotencyIdentity(request.Request.Header.Peek("Idempotency-Key"), request.Request.Body())
+	identity, err := sessionIdempotencyIdentity(request.Request.Header.Peek(idempotencyKeyHeader), request.Request.Body())
 	if err != nil {
 		return err
 	}

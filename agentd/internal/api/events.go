@@ -26,6 +26,16 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 	if err != nil {
 		return err
 	}
+	if key := request.Request.Header.Peek(idempotencyKeyHeader); len(key) > 0 {
+		if len(ingress) != 1 || ingress[0].Type != "user.message" {
+			return fmt.Errorf("%w: %s on Events requires a single user.message", service.ErrUnsupported, idempotencyKeyHeader)
+		}
+		identity, err := requestIdempotencyIdentity(key, request.Request.Body(), model.ResourceTypeEvent, input.SessionID)
+		if err != nil {
+			return err
+		}
+		return s.sendIdempotentUserMessage(ctx, request, input.SessionID, identity, ingress[0].Content)
+	}
 	retryCount, err := parseStainlessRetryCount(
 		request.Request.Header.Peek(stainlessRetryCountHeader),
 	)
@@ -125,6 +135,32 @@ func (s *Server) sendEvents(ctx context.Context, request *hertzapp.RequestContex
 		}
 	}
 	request.JSON(consts.StatusOK, view.Page[managedevent.ManagedEvent]{Data: accepted})
+	return nil
+}
+
+func (s *Server) sendIdempotentUserMessage(ctx context.Context, request *hertzapp.RequestContext, sessionID string, identity model.IdempotencyIdentity, content any) error {
+	var replayed bool
+	// Use the same transaction boundary without an idempotency_keys row: the
+	// original Ledger Event can reconstruct the complete acceptance response.
+	response, _, err := s.idempotency.Run(ctx, model.IdempotencyIdentity{}, func(txCtx context.Context, control *service.Service, events *managedevent.Log) (model.IdempotencyResponse, error) {
+		accepted, reused, err := control.AcceptUserMessage(txCtx, events, sessionID, identity, content)
+		if err != nil {
+			return model.IdempotencyResponse{}, err
+		}
+		replayed = reused
+		body, err := json.Marshal(view.Page[managedevent.ManagedEvent]{Data: []managedevent.ManagedEvent{accepted}})
+		return model.IdempotencyResponse{StatusCode: consts.StatusOK, Body: body}, err
+	})
+	if err != nil {
+		return err
+	}
+	if replayed {
+		s.logger.DebugContext(ctx, "replayed user.message acceptance", "session_id", sessionID)
+	} else {
+		s.logger.InfoContext(ctx, "accepted user.message", "session_id", sessionID)
+	}
+	s.executionNotifier.Notify()
+	request.Data(response.StatusCode, "application/json", response.Body)
 	return nil
 }
 
