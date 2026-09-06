@@ -41,6 +41,10 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	idempotencyStore, err := gormrepo.NewIdempotencyStore(storage.Database, config.storageTimeout)
+	if err != nil {
+		return err
+	}
 	recordGC, err := controlgc.NewRecordGC(repository, controlgc.RecordConfig{
 		Interval: config.workerRecordGCInterval, RequestTimeout: config.workerRecordGCTimeout,
 		Retention: config.workerRecordRetention, BatchSize: config.workerRecordGCBatchSize,
@@ -121,7 +125,7 @@ func Run(logger *slog.Logger) error {
 		hertzserver.WithSenseClientDisconnection(true),
 	)
 	api.New(
-		controlService, events, agentletConnector, sessionReconciler, logger,
+		controlService, control.NewIdempotency(idempotencyStore, controlService), events, agentletConnector, sessionReconciler, logger,
 		api.WithEventPollInterval(config.eventPollInterval),
 		api.WithAPIKey(config.apiKey),
 	).Register(httpServer.Engine)

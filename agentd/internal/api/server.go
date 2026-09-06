@@ -17,6 +17,7 @@ import (
 
 type Server struct {
 	service              *service.Service
+	idempotency          *service.Idempotency
 	events               *managedevent.Log
 	connector            *connector.Client
 	executionNotifier    ExecutionNotifier
@@ -44,6 +45,7 @@ func WithAPIKey(apiKey string) Option {
 
 func New(
 	controlService *service.Service,
+	idempotency *service.Idempotency,
 	events *managedevent.Log,
 	agentletConnector *connector.Client,
 	executionNotifier ExecutionNotifier,
@@ -51,7 +53,7 @@ func New(
 	options ...Option,
 ) *Server {
 	server := &Server{
-		service: controlService, events: events, connector: agentletConnector,
+		service: controlService, idempotency: idempotency, events: events, connector: agentletConnector,
 		executionNotifier: executionNotifier, logger: logger,
 		eventPollInterval:    500 * time.Millisecond,
 		slowRequestThreshold: time.Second,

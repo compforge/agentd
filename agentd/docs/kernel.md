@@ -127,6 +127,10 @@ Session 的 title 与 metadata 可以独立更新，不改变已锁定的 AgentV
 ingress 并保留 Ledger 历史；placement 仍由 Session Reconciler 在安全边界释放，archive 不直接操作
 Agentlet 或 Sandbox。
 
+Session 创建可通过 `Idempotency-Key` 去重：Session、initial events 与首次响应快照原子提交，
+重复请求重放首次响应而非当前资源状态。该机制属于 API 资源处理，不等同于 Harness 执行的
+exactly-once 保证；边界见 `idempotency.md`。
+
 Session 的公开 `usage` 是 Ledger 执行事实的读投影，不是 Control State 中持续累加的可变字段。模型 token
 用量累计 `model_call` 终态 Event 中已观测到的 usage；失败调用已产生的 token 仍计入，未完成、未报告
 usage 的 Attempt 以及形状相似的 Tool payload 不计入。Ledger 尚未提供或无法无损映射到公开协议的数据

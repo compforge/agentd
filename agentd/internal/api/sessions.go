@@ -13,6 +13,7 @@ import (
 	"github.com/compforge/agentd/agentd/internal/api/view"
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/service"
+	managedevent "github.com/compforge/agentd/internal/event"
 )
 
 // createSession validates every initial Event before creating the Session, then
@@ -36,29 +37,48 @@ func (s *Server) createSession(ctx context.Context, request *hertzapp.RequestCon
 	if err != nil {
 		return err
 	}
-	created, err := s.service.CreateSession(ctx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
+	identity, err := sessionIdempotencyIdentity(request.Request.Header.Peek("Idempotency-Key"), request.Request.Body())
 	if err != nil {
 		return err
 	}
-	s.logger.InfoContext(ctx, "created Session", "session_id", created.ID,
-		"agent_id", created.AgentID, "environment_id", created.EnvironmentID)
-	if len(initialEvents) > 0 {
-		if _, err := s.appendIngressEvents(ctx, created.ID, initialEvents); err != nil {
-			return fmt.Errorf("persist initial Session Events: %w", err)
+	var sessionID string
+	response, replayed, err := s.idempotency.Run(ctx, identity, func(txCtx context.Context, control *service.Service, events *managedevent.Log) (model.IdempotencyResponse, error) {
+		created, err := control.CreateSession(txCtx, agentID, version, input.EnvironmentID, input.Title, input.Metadata)
+		if err != nil {
+			return model.IdempotencyResponse{}, err
 		}
-		s.logger.InfoContext(ctx, "accepted initial Session Events",
-			"session_id", created.ID, "event_count", len(initialEvents))
+		sessionID = created.ID
+		if len(initialEvents) > 0 {
+			if _, err := appendIngressEvents(txCtx, events, created.ID, initialEvents); err != nil {
+				return model.IdempotencyResponse{}, err
+			}
+		}
+		agent, err := control.GetAgentVersion(txCtx, created.AgentVersionID)
+		if err != nil {
+			return model.IdempotencyResponse{}, err
+		}
+		value, err := sessionResponse(txCtx, events, created, agent)
+		if err != nil {
+			return model.IdempotencyResponse{}, err
+		}
+		body, err := json.Marshal(value)
+		return model.IdempotencyResponse{StatusCode: consts.StatusOK, Body: body}, err
+	})
+	if err != nil {
+		return err
+	}
+	if replayed {
+		s.logger.DebugContext(ctx, "replayed Session creation response")
+	} else {
+		s.logger.InfoContext(ctx, "created Session", "session_id", sessionID,
+			"agent_id", agentID, "environment_id", input.EnvironmentID, "initial_event_count", len(initialEvents))
+	}
+	// Wake only after commit. Replaying may repair a lost wake, never resubmit
+	// input; the reconciler also discovers committed demand by periodic scan.
+	if len(initialEvents) > 0 {
 		s.executionNotifier.Notify()
 	}
-	agent, err := s.service.GetAgentVersion(ctx, created.AgentVersionID)
-	if err != nil {
-		return err
-	}
-	response, err := s.sessionResponse(ctx, created, agent)
-	if err != nil {
-		return err
-	}
-	request.JSON(consts.StatusOK, response)
+	request.Data(response.StatusCode, "application/json", response.Body)
 	return nil
 }
 
@@ -260,7 +280,11 @@ func parseAgentReference(raw json.RawMessage) (string, int64, error) {
 }
 
 func (s *Server) sessionResponse(ctx context.Context, value model.Session, agent model.Agent) (view.SessionResponse, error) {
-	usage, err := s.events.SessionUsage(ctx, value.ID)
+	return sessionResponse(ctx, s.events, value, agent)
+}
+
+func sessionResponse(ctx context.Context, events *managedevent.Log, value model.Session, agent model.Agent) (view.SessionResponse, error) {
+	usage, err := events.SessionUsage(ctx, value.ID)
 	if err != nil {
 		return view.SessionResponse{}, err
 	}

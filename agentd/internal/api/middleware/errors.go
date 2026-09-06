@@ -40,6 +40,8 @@ func classifyError(err error) (int, string) {
 		return consts.StatusBadRequest, "unsupported_feature"
 	case errors.Is(err, service.ErrConflict):
 		return consts.StatusConflict, "conflict_error"
+	case errors.Is(err, service.ErrIdempotencyConflict):
+		return consts.StatusConflict, "conflict_error"
 	case errors.Is(err, service.ErrInvalid):
 		return consts.StatusBadRequest, "invalid_request_error"
 	default:
