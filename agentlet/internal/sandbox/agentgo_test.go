@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"testing"
 	"time"
@@ -88,5 +89,50 @@ func (e *recordingEngine) Execute(
 ) (engine.CommandResult, error) {
 	e.executedKey = sandboxKey
 	e.command = command
-	return engine.CommandResult{Output: "ok"}, nil
+	code := 0
+	return engine.CommandResult{Output: "ok", ProcessKind: "exited", ExitCode: &code, Cause: "natural"}, nil
+}
+
+type resultEngine struct {
+	recordingEngine
+	result engine.CommandResult
+	err    error
+}
+
+func (e *resultEngine) Execute(context.Context, engine.SandboxKey, engine.Command) (engine.CommandResult, error) {
+	return e.result, e.err
+}
+
+func TestCommandToolsPreserveTerminalFailures(t *testing.T) {
+	for _, name := range []string{"bash", "glob", "grep"} {
+		t.Run(name, func(t *testing.T) {
+			sandbox := &resultEngine{result: engine.CommandResult{Cause: "preparation_failed", Error: "workspace unavailable"}}
+			tools, err := PrepareAgentGoToolset(context.Background(), sandbox, "session", time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range tools {
+				if tool.Name() != name {
+					continue
+				}
+				raw, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"pwd","pattern":"test"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result engine.CommandResult
+				if err := json.Unmarshal(raw, &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.ExitCode != nil || result.Cause != "preparation_failed" || result.Error != "workspace unavailable" {
+					t.Fatalf("failure lost: %s", raw)
+				}
+				sandbox.err = engine.ErrExecutionUnknown
+				if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"pwd","pattern":"test"}`)); !errors.Is(err, engine.ErrExecutionUnknown) {
+					t.Fatalf("unknown outcome lost: %v", err)
+				}
+				return
+			}
+			t.Fatal("tool missing")
+		})
+	}
 }

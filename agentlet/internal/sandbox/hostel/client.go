@@ -1,7 +1,6 @@
 package hostel
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -113,63 +112,14 @@ func (c *Client) Run(ctx context.Context, bedID string, command engine.Command) 
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return engine.CommandResult{}, fmt.Errorf("run hostel command: %w", err)
+		return engine.CommandResult{}, fmt.Errorf("%w: send hostel command: %w", engine.ErrExecutionUnknown, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return engine.CommandResult{}, responseError("run hostel command", response)
 	}
 
-	var result engine.CommandResult
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(nil, 4<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var event struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			ExitCode *int   `json:"exit_code"`
-			Error    string `json:"error"`
-			Result   *struct {
-				Process struct {
-					Kind     string `json:"kind"`
-					ExitCode *int   `json:"exit_code"`
-					Error    string `json:"error"`
-				} `json:"process"`
-				Cause string `json:"termination_cause"`
-			} `json:"result"`
-		}
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return engine.CommandResult{}, fmt.Errorf("decode hostel command event: %w", err)
-		}
-		switch event.Type {
-		case "stdout", "stderr":
-			result.Output += event.Text
-		case "execution_end":
-			if event.Result != nil {
-				result.Cause = event.Result.Cause
-				if event.Result.Process.ExitCode != nil {
-					result.ExitCode = *event.Result.Process.ExitCode
-				}
-				if event.Result.Process.Error != "" {
-					result.Error = event.Result.Process.Error
-				}
-			}
-		case "execution_complete":
-			if event.ExitCode != nil {
-				result.ExitCode = *event.ExitCode
-				result.Cause = "exited"
-			}
-			result.Error = event.Error
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return engine.CommandResult{}, fmt.Errorf("read hostel command stream: %w", err)
-	}
-	return result, nil
+	return readCommandResult(response.Body)
 }
 
 func (c *Client) Stat(ctx context.Context, bedID, filePath string) (engine.FileInfo, error) {
