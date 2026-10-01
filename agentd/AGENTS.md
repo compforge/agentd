@@ -43,6 +43,7 @@ agentd 是一个 Go 实现的 Managed Agent Server。它不实现 Agent 智能�
 │   │   │   └── scheduler/     # 无 I/O 的 Session → Worker placement 策略
 │   │   └── worker/
 │   │       ├── pool.go        # Worker 容量创建/回收的唯一控制环与可续租 lease
+│   │       ├── cluster/        # 有时效的资源/调度诊断，接收 Pod watch 与本地动作 hook
 │   │       ├── observer/      # 消费 Pod Informer cache 并持久化 Worker observation
 │   │       ├── reconciler/    # Worker row → Pod 与预热容量计划
 │   │       ├── gc/            # Pool 内 Pod 回收计划与独立终态记录回收

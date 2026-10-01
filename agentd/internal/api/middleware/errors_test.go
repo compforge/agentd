@@ -27,6 +27,8 @@ func TestHandleErrorsMapsErrorChainToPublicEnvelope(t *testing.T) {
 		{name: "authentication", err: errAuthentication, status: 401, errorType: "authentication_error"},
 		{name: "not found", err: repo.ErrNotFound, status: 404, errorType: "not_found_error"},
 		{name: "unavailable", err: service.ErrUnavailable, status: 503, errorType: "overloaded_error"},
+		{name: "resource pressure", err: fmt.Errorf("%w: %w", service.ErrUnavailable, service.ErrClusterNoCapacity), status: 503, errorType: "overloaded_error"},
+		{name: "scheduling blocked", err: fmt.Errorf("%w: %w", service.ErrUnavailable, service.ErrWorkerUnschedulable), status: 503, errorType: "overloaded_error"},
 		{name: "no assignment", err: service.ErrNoAssignment, status: 409, errorType: "invalid_request_error"},
 		{name: "unsupported", err: service.ErrUnsupported, status: 400, errorType: "unsupported_feature"},
 		{name: "conflict", err: service.ErrConflict, status: 409, errorType: "conflict_error"},

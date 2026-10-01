@@ -35,6 +35,9 @@ func (c *Client) ListAgentletPods(ctx context.Context) ([]PodSnapshot, error) {
 	}
 	snapshots := make([]PodSnapshot, 0, len(pods.Items))
 	for i := range pods.Items {
+		if c.podHooks != nil {
+			c.podHooks.OnPodUpdated(ctx, &pods.Items[i])
+		}
 		snapshots = append(snapshots, snapshotFromPod(&pods.Items[i]))
 	}
 	sortPodSnapshots(snapshots)
@@ -82,6 +85,9 @@ func (c *Client) EnsureWorkerPod(
 	pod.Labels[ManagedLabel] = "true"
 	pod.Labels[WorkerIDLabel] = workerID
 	created, err := pods.Create(ctx, pod, metav1.CreateOptions{})
+	if c.podHooks != nil {
+		c.podHooks.OnPodCreated(ctx, pod, err)
+	}
 	if apierrors.IsAlreadyExists(err) {
 		existing, getErr := pods.Get(ctx, name, metav1.GetOptions{})
 		if getErr != nil {
@@ -113,9 +119,13 @@ func validateWorkerPodOwnership(pod *corev1.Pod, workerID string) error {
 }
 
 func podUnschedulable(pod *corev1.Pod) bool {
+	if pod.Spec.NodeName != "" || pod.DeletionTimestamp != nil ||
+		pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return false
+	}
 	for _, condition := range pod.Status.Conditions {
 		if condition.Type == corev1.PodScheduled {
-			return condition.Status == corev1.ConditionFalse && condition.Reason == corev1.PodReasonUnschedulable
+			return condition.Status == corev1.ConditionFalse
 		}
 	}
 	return false

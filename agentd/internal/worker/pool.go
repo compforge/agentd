@@ -12,6 +12,7 @@ import (
 	"github.com/compforge/agentd/agentd/internal/model"
 	"github.com/compforge/agentd/agentd/internal/repo"
 	gormrepo "github.com/compforge/agentd/agentd/internal/repo/gorm"
+	"github.com/compforge/agentd/agentd/internal/worker/cluster"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
 	controlk8s "github.com/compforge/agentd/agentd/internal/worker/k8s"
 	"github.com/compforge/agentd/agentd/internal/worker/observer"
@@ -26,6 +27,7 @@ const (
 )
 
 type Config struct {
+	PodHooks           cluster.PodHooks
 	Source             string
 	Namespace          string
 	Selector           string
@@ -76,7 +78,7 @@ func New(
 	}
 	kubernetesClient, err := controlk8s.NewInCluster(controlk8s.Config{
 		Namespace: config.Namespace, LabelSelector: config.Selector,
-		RequestTimeout: config.ObserverTimeout, QPS: 5, Burst: 10,
+		RequestTimeout: config.ObserverTimeout, QPS: 5, Burst: 10, PodHooks: config.PodHooks,
 	})
 	if err != nil {
 		return nil, err

@@ -6,11 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/compforge/agentd/agentd/internal/worker/cluster"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
 type Config struct {
+	PodHooks       cluster.PodHooks
 	Namespace      string
 	LabelSelector  string
 	RequestTimeout time.Duration
@@ -19,6 +21,7 @@ type Config struct {
 }
 
 type Client struct {
+	podHooks      cluster.PodHooks
 	client        kubernetes.Interface
 	namespace     string
 	labelSelector string
@@ -56,5 +59,5 @@ func New(client kubernetes.Interface, config Config) (*Client, error) {
 	if strings.TrimSpace(config.LabelSelector) != "" {
 		selector += "," + config.LabelSelector
 	}
-	return &Client{client: client, namespace: config.Namespace, labelSelector: selector}, nil
+	return &Client{client: client, namespace: config.Namespace, labelSelector: selector, podHooks: config.PodHooks}, nil
 }

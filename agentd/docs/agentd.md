@@ -97,8 +97,8 @@ Worker 和 Session 有独立 Observer。两者只采集事实，不做 placement
 
 agentd 创建的 Worker Pod 必须同时带有 `agentd.compforge.dev/managed=true` 和
 `agentd.compforge.dev/worker-id=<worker UUID>`。`agentd/internal/worker/k8s` 用带 label selector 的 Pod
-Informer 维护本地 cache；Add、Update、Delete 事件只向 Worker Observer 发送可合并通知，Observer 每轮
-从 cache 重建全量快照并把事实写入 Worker。低频 cache 扫描负责重试失败写入和兜底收敛。Agentlet
+Informer 维护本地 cache；Add、Update 同时把调度事实交给 Cluster Observer，Add、Update、Delete
+向 Worker Observer 发送可合并通知，Worker Observer 每轮从 cache 重建全量快照并把事实写入 Worker。低频 cache 扫描负责重试失败写入和兜底收敛。Agentlet
 不主动注册或发送 heartbeat，也不存在外部 Worker 写入 API。
 
 Worker identity 不等于 Pod UID。Pod 名、UID、IP 和 Ready 都是 `observer_status` 中的外部事实。
@@ -110,6 +110,26 @@ Scheduler 只消费 observation 足够新、`exists=true`、`ready=true` 且具�
 Observer status 与 lifecycle phase 正交：前者描述 Kubernetes 里的外部事实，后者描述 agentd 正在
 采取的动作。Informer cache 只提供 `PodSnapshot`，Worker Observer 仍是事实的唯一写入者；Worker
 Pool 创建前的 Pending/Unschedulable 背压检查则直接读取 Kubernetes，不使用可能滞后的 cache。
+
+### Cluster Observer
+
+Cluster Observer 集中保存当前 Worker 池近期遇到的资源压力与调度阻塞，作为控制面诊断信号。
+它从受管 Pod 的 namespace 级 informer、已有的实时 Pod LIST，以及创建 Pod 的本地 hook 接收事实；
+不依赖 Node watch 或 cluster role，也不参与 placement 和容量规划。
+
+配额拒绝与调度压力分别保存并自动过期。一次 Pod 创建成功只能清除 admission 配额信号，不能证明
+其它 Pending Pod 已获得资源。明确的资源不足可细化为无容量，其它调度约束可细化为不可调度；
+普通 Pending、RBAC 拒绝、网络错误不推断为资源不足。warning 保留 Pod、调度原因和信息，同一原因
+重复观察会刷新时效并抑制重复日志。缓存扫描不刷新信号，避免 watch 断开后无限延续陈旧事实。
+
+agentd 接受消息后异步准备执行节点，因此诊断发生在解析执行目标时：只有 Worker 仍在 creating、
+新鲜 observation 确认 Pod 缺失或不可调度时，Service 才用 ClusterStatusReader 细化不可用错误。
+错误仍保留可重试的 unavailable 语义，Session 和已接收消息继续等待后台收敛。已调度后的启动故障、
+活动 Worker 故障或陈旧 observation 不使用其它 Pod 的压力作为原因。公开 API 保持既有错误分类，
+不暴露 Kubernetes 对象和调度明细。
+
+这些信号是进程内、有时效的辅助证据，不是集群资源账本。多个控制面副本可能短暂看到不同信号；
+没有信号不代表资源充足。Worker/Session 的持久化事实和既有控制环仍决定后续动作。
 
 ### Session Observer
 
