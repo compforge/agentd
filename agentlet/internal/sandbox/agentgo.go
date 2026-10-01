@@ -151,7 +151,10 @@ func newGlobTool(sandboxEngine engine.Engine, sandboxKey engine.SandboxKey, time
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(map[string]any{"files": nonEmptyLines(result.Output), "exit_code": result.ExitCode})
+		return json.Marshal(struct {
+			engine.CommandResult
+			Files []string `json:"files"`
+		}{CommandResult: result, Files: nonEmptyLines(result.Output)})
 	})
 }
 
@@ -196,7 +199,10 @@ func newGrepTool(sandboxEngine engine.Engine, sandboxKey engine.SandboxKey, time
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(map[string]any{"matches": nonEmptyLines(result.Output), "exit_code": result.ExitCode})
+		return json.Marshal(struct {
+			engine.CommandResult
+			Matches []string `json:"matches"`
+		}{CommandResult: result, Matches: nonEmptyLines(result.Output)})
 	})
 }
 

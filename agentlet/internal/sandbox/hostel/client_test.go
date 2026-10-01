@@ -43,7 +43,7 @@ func TestRemoteEngineExecutesInSessionBed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Output != "hello" || result.ExitCode != 0 || result.Cause != "exited" {
+	if result.Output != "hello" || (result.ExitCode == nil || *result.ExitCode != 0) || result.Cause != "exited" {
 		t.Fatalf("unexpected command result: %#v", result)
 	}
 }

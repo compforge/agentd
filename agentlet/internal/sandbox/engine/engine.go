@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"time"
 )
@@ -33,11 +34,22 @@ type Command struct {
 	Timeout time.Duration
 }
 
+// ErrExecutionUnknown means the command may have run, but its terminal result
+// could not be established. Callers must not assume it is safe to replay.
+var ErrExecutionUnknown = errors.New("command execution result unknown")
+
+// CommandResult separates a process outcome from the reason execution stopped.
+// ExitCode is present only for an exited process; a signal or preparation
+// failure must never acquire a synthetic successful exit code. A nil Go error
+// means a terminal result was received, not that the command succeeded.
 type CommandResult struct {
-	Output   string `json:"output"`
-	ExitCode int    `json:"exit_code"`
-	Cause    string `json:"termination_cause,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Output      string `json:"output"`
+	ProcessKind string `json:"process_kind,omitempty"`
+	ExitCode    *int   `json:"exit_code,omitempty"`
+	Signal      *int   `json:"signal,omitempty"`
+	CoreDumped  bool   `json:"core_dumped,omitempty"`
+	Cause       string `json:"termination_cause,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type FileInfo struct {
