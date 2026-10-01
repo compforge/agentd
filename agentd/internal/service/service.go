@@ -15,6 +15,7 @@ import (
 )
 
 type Service struct {
+	clusterStatus      ClusterStatusReader
 	repository         repo.Repository
 	scheduler          *scheduler.Scheduler
 	observationTimeout time.Duration
@@ -25,6 +26,7 @@ func New(
 	repository repo.Repository,
 	observationTimeout time.Duration,
 	workerCapacity int,
+	options ...Option,
 ) (*Service, error) {
 	if repository == nil {
 		return nil, fmt.Errorf("create control plane: repository is required")
@@ -35,10 +37,14 @@ func New(
 	if workerCapacity < 0 {
 		return nil, fmt.Errorf("create control plane: Worker capacity must not be negative")
 	}
-	return &Service{
+	application := &Service{
 		repository: repository, scheduler: scheduler.New(observationTimeout),
 		observationTimeout: observationTimeout, workerCapacity: workerCapacity,
-	}, nil
+	}
+	for _, option := range options {
+		option(application)
+	}
+	return application, nil
 }
 
 func (a *Service) ObserveWorker(ctx context.Context, worker model.Worker) (model.Worker, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/compforge/agentd/agentd/internal/worker/cluster"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	coreinformers "k8s.io/client-go/informers/core/v1"
@@ -11,9 +12,10 @@ import (
 )
 
 // PodInformer maintains a local cache of managed Agentlet Pods. Event
-// callbacks only signal that the cache changed; consumers rebuild their view
-// from ListAgentletPods so bursts can be safely coalesced.
+// callbacks feed cluster diagnostic hooks and signal cache changes. Consumers
+// rebuild their view from ListAgentletPods so bursts can be safely coalesced.
 type PodInformer struct {
+	podHooks cluster.PodHooks
 	informer cache.SharedIndexInformer
 }
 
@@ -27,7 +29,7 @@ func (c *Client) NewAgentletPodInformer() *PodInformer {
 			options.LabelSelector = c.labelSelector
 		},
 	)
-	return &PodInformer{informer: informer}
+	return &PodInformer{informer: informer, podHooks: c.podHooks}
 }
 
 // Start registers a non-blocking cache-change callback and waits for the
@@ -37,11 +39,16 @@ func (i *PodInformer) Start(ctx context.Context, notify func()) error {
 	if notify == nil {
 		return fmt.Errorf("start Agentlet Pod informer: notify callback is required")
 	}
-	signal := func() { notify() }
+	observe := func(obj any) {
+		if pod, ok := obj.(*corev1.Pod); ok && i.podHooks != nil {
+			i.podHooks.OnPodUpdated(ctx, pod)
+		}
+		notify()
+	}
 	if _, err := i.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(any) { signal() },
-		UpdateFunc: func(any, any) { signal() },
-		DeleteFunc: func(any) { signal() },
+		AddFunc:    observe,
+		UpdateFunc: func(_ any, obj any) { observe(obj) },
+		DeleteFunc: func(any) { notify() },
 	}); err != nil {
 		return fmt.Errorf("register Agentlet Pod informer handler: %w", err)
 	}

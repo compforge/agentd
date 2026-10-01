@@ -29,9 +29,10 @@ func (a *Service) CurrentExecution(ctx context.Context, sessionID string) (Execu
 	if err != nil {
 		return ExecutionTarget{}, fmt.Errorf("load placed Worker %q: %w", session.Placement.WorkerID, err)
 	}
-	status, ready := a.readyWorker(worker, time.Now().UTC())
+	now := time.Now().UTC()
+	status, ready := a.readyWorker(worker, now)
 	if !ready {
-		return ExecutionTarget{}, fmt.Errorf("%w: Worker %q has no fresh ready endpoint", ErrUnavailable, worker.ID)
+		return ExecutionTarget{}, a.unavailableWorker(worker, status, now)
 	}
 	agent, err := a.repository.GetAgentVersion(ctx, session.AgentVersionID)
 	if err != nil {

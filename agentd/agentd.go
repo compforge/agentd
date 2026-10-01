@@ -16,6 +16,7 @@ import (
 	sessionobserver "github.com/compforge/agentd/agentd/internal/session/observer"
 	sessionreconciler "github.com/compforge/agentd/agentd/internal/session/reconciler"
 	"github.com/compforge/agentd/agentd/internal/worker"
+	"github.com/compforge/agentd/agentd/internal/worker/cluster"
 	controlgc "github.com/compforge/agentd/agentd/internal/worker/gc"
 	managedevent "github.com/compforge/agentd/internal/event"
 	"github.com/compforge/agentd/internal/persistence"
@@ -53,8 +54,10 @@ func Run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	clusterObserver := cluster.NewObserver(logger)
 	workerPool, err := worker.New(worker.Config{
-		Source: config.workerSource, Namespace: config.workerNamespace, Selector: config.workerSelector,
+		PodHooks: clusterObserver,
+		Source:   config.workerSource, Namespace: config.workerNamespace, Selector: config.workerSelector,
 		Port: config.workerPort, Capacity: config.workerCapacity,
 		MinCount: config.workerMinCount, MinIdle: config.workerMinIdle,
 		IdleTTL: config.workerIdleTTL, CreateBatchSize: config.workerCreateBatchSize,
@@ -70,7 +73,7 @@ func Run(logger *slog.Logger) error {
 	if workerPool != nil {
 		workerCapacity = config.workerCapacity
 	}
-	controlService, err := control.New(repository, config.observationTimeout, workerCapacity)
+	controlService, err := control.New(repository, config.observationTimeout, workerCapacity, control.WithClusterStatus(clusterObserver))
 	if err != nil {
 		return err
 	}
